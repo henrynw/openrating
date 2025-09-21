@@ -3,9 +3,8 @@ services:
     name: openrating-api
     env: node
     rootDir: service/ts
-    buildCommand: npm install && npm run build
+    buildCommand: npm install && npm run build && npm run db:migrate
     startCommand: npm run start
-    postDeployCommand: npm run db:migrate
     envVars:
       - key: PORT
         value: "8080"
