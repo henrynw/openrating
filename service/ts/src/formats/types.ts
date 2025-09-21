@@ -1,4 +1,4 @@
-import type { Discipline, MatchInput, Sport } from '../engine/types';
+import type { Discipline, MatchInput, Sport } from '../engine/types.js';
 
 export type NormalizationErrorCode = 'unsupported_format' | 'validation_failed';
 

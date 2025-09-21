@@ -3,11 +3,11 @@ import { z } from 'zod';
 import dotenv from 'dotenv';
 
 // ---- engine imports ----
-import { updateMatch } from './engine/rating';
-import { normalizeMatchSubmission } from './formats';
-import { getStore } from './store';
-import type { LadderKey } from './store';
-import { normalizeRegion, normalizeTier } from './store/helpers';
+import { updateMatch } from './engine/rating.js';
+import { normalizeMatchSubmission } from './formats/index.js';
+import { getStore } from './store/index.js';
+import type { LadderKey } from './store/index.js';
+import { normalizeRegion, normalizeTier } from './store/helpers.js';
 
 dotenv.config();
 

@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
-import { P } from '../engine/params';
-import type { MatchInput, PlayerState, UpdateResult } from '../engine/types';
+import { P } from '../engine/params.js';
+import type { MatchInput, PlayerState, UpdateResult } from '../engine/types.js';
 import type {
   EnsurePlayersResult,
   LadderKey,
@@ -8,8 +8,8 @@ import type {
   PlayerRecord,
   RatingStore,
   RecordMatchParams,
-} from './types';
-import { buildLadderId } from './helpers';
+} from './types.js';
+import { buildLadderId } from './helpers.js';
 
 interface MemoryPlayerRecord extends PlayerRecord {
   ratings: Map<string, PlayerState>;

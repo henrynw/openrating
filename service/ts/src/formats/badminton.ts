@@ -1,12 +1,12 @@
-import { movWeight } from '../engine/mov';
-import { P } from '../engine/params';
-import type { MatchInput, WinnerSide } from '../engine/types';
+import { movWeight } from '../engine/mov.js';
+import { P } from '../engine/params.js';
+import type { MatchInput, WinnerSide } from '../engine/types.js';
 import type {
   MatchSubmission,
   NormalizationFailure,
   NormalizationResult,
   RegisteredFormat,
-} from './types';
+} from './types.js';
 
 const ensureSortedGames = (games: MatchSubmission['games']) =>
   [...games].sort((a, b) => a.game_no - b.game_no);

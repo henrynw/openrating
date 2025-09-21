@@ -1,8 +1,8 @@
-import type { RatingStore } from './types';
-import { MemoryStore } from './memory';
-import { PostgresStore } from './postgres';
+import type { RatingStore } from './types.js';
+import { MemoryStore } from './memory.js';
+import { PostgresStore } from './postgres.js';
 
-export * from './types';
+export * from './types.js';
 
 let store: RatingStore | null = null;
 

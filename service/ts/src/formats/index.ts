@@ -1,5 +1,5 @@
-import type { MatchSubmission, NormalizationResult } from './types';
-import { badmintonFormats } from './badminton';
+import type { MatchSubmission, NormalizationResult } from './types.js';
+import { badmintonFormats } from './badminton.js';
 
 const registry = [...badmintonFormats];
 

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { getPool } from './client';
+import { getPool } from './client.js';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'drizzle');
 const MIGRATIONS_TABLE = '__openrating_migrations';

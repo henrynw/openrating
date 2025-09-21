@@ -1,8 +1,8 @@
 import { randomUUID } from 'crypto';
 import { and, eq, inArray } from 'drizzle-orm';
-import type { PlayerState } from '../engine/types';
-import { P } from '../engine/params';
-import { getDb } from '../db/client';
+import type { PlayerState } from '../engine/types.js';
+import { P } from '../engine/params.js';
+import { getDb } from '../db/client.js';
 import {
   matchGames,
   matchSidePlayers,
@@ -17,7 +17,7 @@ import {
   regions,
   sports,
   venues,
-} from '../db/schema';
+} from '../db/schema.js';
 import type {
   EnsurePlayersResult,
   LadderKey,
@@ -25,8 +25,8 @@ import type {
   PlayerRecord,
   RatingStore,
   RecordMatchParams,
-} from './types';
-import { buildLadderId, isDefaultRegion, toDbRegionId } from './helpers';
+} from './types.js';
+import { buildLadderId, isDefaultRegion, toDbRegionId } from './helpers.js';
 
 const now = () => new Date();
 

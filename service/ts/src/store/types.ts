@@ -1,4 +1,4 @@
-import type { MatchInput, PlayerState, UpdateResult } from '../engine/types';
+import type { MatchInput, PlayerState, UpdateResult } from '../engine/types.js';
 
 export interface LadderKey {
   organizationId: string;

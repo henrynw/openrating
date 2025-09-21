@@ -1,6 +1,6 @@
-import { P } from './params';
-import { movWeight } from './mov';
-import type { MatchInput, PlayerState, UpdateResult } from './types';
+import { P } from './params.js';
+import { movWeight } from './mov.js';
+import type { MatchInput, PlayerState, UpdateResult } from './types.js';
 
 // Numerical approximation (Abramowitz & Stegun 7.1.26) for environments lacking Math.erf.
 const erf = (x:number) => {

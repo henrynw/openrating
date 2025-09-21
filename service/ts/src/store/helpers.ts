@@ -1,4 +1,4 @@
-import type { LadderKey } from './types';
+import type { LadderKey } from './types.js';
 
 const NULL_TIER = 'UNSPECIFIED';
 const NULL_REGION = 'GLOBAL';
