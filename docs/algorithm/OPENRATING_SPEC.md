@@ -17,46 +17,46 @@
 ---
 
 ## 2. Notation
-- Players \(i, j\) with ratings \( \mu_i, \sigma_i \).
-- Team rating \( R_A = \sum_{i \in A} \mu_i + \gamma_A \) (synergy \( \gamma \) only for doubles/mixed).
-- Win probability \( p_A = \Phi\left( \frac{R_A - R_B}{\sqrt{2}\,\beta} \right) \), where \( \Phi \) is the normal CDF and \(\beta\) is sport-tunable.
-- Match outcome \( y \in \{0,1\} \) (1 if side A wins), surprise \( s = y - p_A \).
+- Players $i, j$ with ratings $(\mu_i, \sigma_i)$.
+- Team rating $R_A = \sum_{i \in A} \mu_i + \gamma_A$ (synergy $\gamma$ only for doubles/mixed).
+- Win probability $p_A = \Phi\left( \frac{R_A - R_B}{\sqrt{2}\,\beta} \right)$, where $\Phi$ is the normal CDF and $\beta$ is sport-tunable.
+- Match outcome $y \in \{0,1\}$ (1 if side A wins), surprise $s = y - p_A$.
 
 ---
 
 ## 3. Update rule (per match)
 **Team delta**
-\[
+$$
 \Delta_{team} = M(p_A,y) \cdot K \cdot s \cdot W_{mov} \cdot W_{tier}
-\]
+$$
 
 **Distribute to players**
-- Singles: winner +\( \Delta_{team} \), loser \(-\Delta_{team}\).
+- Singles: winner $+\Delta_{team}$, loser $-\Delta_{team}$.
 - Doubles: split equally within a side (can later weight by rallies/points if available).
 
 **Uncertainty shrink**
-\[
+$$
 \sigma' = \sqrt{\sigma^2(1-\alpha) + \alpha \cdot \sigma_{\min}^2}
 \quad\text{with}\quad \alpha = \alpha_0 \cdot |s| \cdot W_{mov} \cdot W_{tier}
-\]
+$$
 
-**Learning rate \(K\)**
-\[
+**Learning rate $K$**
+$$
 K = \text{clip}\left(K_0 \cdot \sqrt{\tfrac{\overline{\sigma^2_A} + \overline{\sigma^2_B}}{2\sigma_{\text{ref}}^2}} \cdot \text{RookieMultiplier},\ K_{\min}, K_{\max}\right)
-\]
+$$
 
 ---
 
 ## 4. Margin-of-Victory (MOV) and tiers
-- **MOV weight \(W_{mov}\)**: sport-profile function mapping scores to \([w_{\min}, w_{\max}]\).  
+- **MOV weight $W_{mov}$**: sport-profile function mapping scores to $[w_{\min}, w_{\max}]$.  
   - Rally games (badminton/squash): use capped per-game point spreads → average → scale.
   - Set sports (tennis/padel): use set differential with small amplitude and tie-break dampening.
-- **Tier weight \(W_{tier}\)**: sanctioned > league > social > exhibition.
+- **Tier weight $W_{tier}$**: sanctioned > league > social > exhibition.
 
 ---
 
-## 5. Mismatch asymmetry \(M(p_A,y)\)
-- If heavy favorite (e.g., \(p_A > 0.97\)):  
+## 5. Mismatch asymmetry $M(p_A,y)$
+- If heavy favorite (e.g., $p_A > 0.97$):  
   - win: multiply by small factor (e.g., 0.1)  
   - loss: multiply by larger factor (e.g., 2.0)
 - Symmetric for the underdog case.
@@ -66,8 +66,8 @@ K = \text{clip}\left(K_0 \cdot \sqrt{\tfrac{\overline{\sigma^2_A} + \overline{\s
 ---
 
 ## 6. Doubles/mixed synergy (optional)
-- Pair synergy \( \gamma_{(a,b)} \in [\gamma_{\min}, \gamma_{\max}] \) per discipline.
-- Small learning rate \(K_{\text{syn}}\); update synergy in direction of match surprise.
+- Pair synergy $\gamma_{(a,b)} \in [\gamma_{\min}, \gamma_{\max}]$ per discipline.
+- Small learning rate $K_{\text{syn}}$; update synergy in direction of match surprise.
 - Stored and decays slowly when pair is inactive.
 
 ---
@@ -75,19 +75,19 @@ K = \text{clip}\left(K_0 \cdot \sqrt{\tfrac{\overline{\sigma^2_A} + \overline{\s
 ## 7. Multi-sport support (profiles)
 A **Sport Profile** defines:
 - `winnerIsA(games, meta)` → boolean  
-- `movWeight(games, meta)` → \([w_{\min}, w_{\max}]\)  
-- `tune` → overrides for \(\beta, K_0\)  
+- `movWeight(games, meta)` → $[w_{\min}, w_{\max}]$  
+- `tune` → overrides for $\beta, K_0$  
 - Valid disciplines and team sizes
 
-**Badminton**: rally to 21, MOV via capped point spread, \(\beta \approx 200\).  
-**Tennis**: set differential, tie-break dampening, \(\beta \approx 230\), \(K_0\) slightly lower.  
+**Badminton**: rally to 21, MOV via capped point spread, $\beta \approx 200$.  
+**Tennis**: set differential, tie-break dampening, $\beta \approx 230$, $K_0$ slightly lower.  
 (Profiles live in code at `service/ts/src/sports/`.)
 
 ---
 
 ## 8. Initialization & cold-start
-- New player: \( \mu = \mu_0\) (e.g., 1500), \( \sigma = \sigma_0\) (e.g., 350), **rookie boost** for first N matches.
-- New pair synergy: \( \gamma = 0 \).
+- New player: $\mu = \mu_0$ (e.g., 1500), $\sigma = \sigma_0$ (e.g., 350), **rookie boost** for first N matches.
+- New pair synergy: $\gamma = 0$.
 
 ---
 
@@ -103,18 +103,18 @@ A **Sport Profile** defines:
 - **Immutable event log** with `start_time` and `ingest_time`.
 - **Snapshots** of rating state (daily/weekly).
 - On back-insert:
-  - Recompute from latest snapshot ≤ `start_time`, **only affected subgraph**, with horizon \(H\) (e.g., 180 days) and epsilon stop \( \varepsilon \) (e.g., 1 point).
+  - Recompute from latest snapshot ≤ `start_time`, **only affected subgraph**, with horizon $H$ (e.g., 180 days) and epsilon stop $\varepsilon$ (e.g., 1 point).
   - Expose both **Live** (append-only) and **Historical** (point-in-time) ratings.
 
 ---
 
 ## 11. Parameters (v1 defaults)
-- \( \mu_0 = 1500\), \( \sigma_0 = 350\), \( \sigma_{\min} = 70\), \( \sigma_{\max} = 400\)  
-- \( \beta = 200\) (badminton), \(K_0 = 32\), \(K_{\min}=8\), \(K_{\max}=48\)  
-- Rookie: \(N=10\), multiplier \(1.4\)  
-- MOV: \([0.7, 1.3]\), per-game cap 11 (badminton)  
-- Mismatch pivot \(0.97\), favorite win multiplier 0.1, upset loss multiplier 2.0  
-- Synergy: \(K_{\text{syn}}=8\), \(\gamma \in [-40, 40]\)
+- $\mu_0 = 1500$, $\sigma_0 = 350$, $\sigma_{\min} = 70$, $\sigma_{\max} = 400$  
+- $\beta = 200$ (badminton), $K_0 = 32$, $K_{\min}=8$, $K_{\max}=48$  
+- Rookie: $N=10$, multiplier $1.4$  
+- MOV: $[0.7, 1.3]$, per-game cap 11 (badminton)  
+- Mismatch pivot $0.97$, favorite win multiplier 0.1, upset loss multiplier 2.0  
+- Synergy: $K_{\text{syn}}=8$, $\gamma \in [-40, 40]$
 
 ---
 
