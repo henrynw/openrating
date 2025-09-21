@@ -35,14 +35,20 @@ $$
 - Doubles: split equally within a side (can later weight by rallies/points if available).
 
 **Uncertainty shrink**
+
 $$
 \sigma' = \sqrt{\sigma^2(1-\alpha) + \alpha \cdot \sigma_{\min}^2}
-\quad\text{with}\quad \alpha = \alpha_0 \cdot |s| \cdot W_{mov} \cdot W_{tier}
+\qquad \text{with} \qquad \alpha = \alpha_0 \cdot |s| \cdot W_{mov} \cdot W_{tier}
 $$
 
 **Learning rate $K$**
+
 $$
-K = \text{clip}\left(K_0 \cdot \sqrt{\tfrac{\overline{\sigma^2_A} + \overline{\sigma^2_B}}{2\sigma_{\text{ref}}^2}} \cdot \text{RookieMultiplier},\ K_{\min}, K_{\max}\right)
+K = \operatorname{clip}\left(
+  K_0 \cdot \sqrt{\frac{\overline{\sigma_A^2} + \overline{\sigma_B^2}}{2\sigma_{\text{ref}}^2}} \cdot \text{RookieMultiplier},
+  K_{\min},
+  K_{\max}
+\right)
 $$
 
 ---
