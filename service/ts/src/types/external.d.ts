@@ -23,8 +23,14 @@ declare module 'drizzle-orm/node-postgres' {
 }
 
 declare module 'pg' {
+  export interface PoolClient {
+    query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
+    release: () => void;
+  }
   export class Pool {
     constructor(config: { connectionString: string });
+    connect(): Promise<PoolClient>;
+    query: PoolClient['query'];
     end(): Promise<void>;
   }
 }

@@ -21,8 +21,8 @@ async function main() {
     await client.query(ensureTableSQL);
 
     const applied = new Set<string>();
-    const result = await client.query<{ name: string }>(`SELECT name FROM ${MIGRATIONS_TABLE} ORDER BY name`);
-    for (const row of result.rows) applied.add(row.name);
+    const result = await client.query(`SELECT name FROM ${MIGRATIONS_TABLE} ORDER BY name`);
+    for (const row of result.rows as Array<{ name: string }>) applied.add(row.name);
 
     const migrations = readdirSync(MIGRATIONS_DIR)
       .filter((file) => file.endsWith('.sql'))
