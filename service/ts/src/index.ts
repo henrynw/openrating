@@ -4,22 +4,17 @@ import dotenv from 'dotenv';
 
 // ---- engine imports ----
 import { updateMatch } from './engine/rating';
-import type { PlayerState } from './engine/types';
 import { normalizeMatchSubmission } from './formats';
+import { getStore } from './store';
+import type { LadderKey } from './store';
+import { normalizeRegion, normalizeTier } from './store/helpers';
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
 
-// ---- in-memory "DB" for now (swap with Aurora later) ----
-const memory: Record<string, PlayerState> = {};
-const getOrInit = (id: string): PlayerState => {
-  if (!memory[id]) {
-    memory[id] = { playerId: id, mu: 1500, sigma: 350, matchesCount: 0 };
-  }
-  return memory[id];
-};
+const store = getStore();
 
 // ---- health ----
 app.get('/health', (_req, res) => res.status(200).send({ ok: true }));
@@ -36,15 +31,40 @@ const PlayerUpsert = z.object({
   region_id: z.string().optional(),
 });
 
-app.post('/v1/players', (req, res) => {
+app.post('/v1/players', async (req, res) => {
   const parsed = PlayerUpsert.safeParse(req.body);
   if (!parsed.success)
     return res
       .status(400)
       .send({ error: 'validation_error', details: parsed.error.flatten() });
 
-  // For now we just echo. Later: persist player & seed rating row(s)
-  return res.send({ player_id: 'p_demo', ...parsed.data });
+  try {
+    const created = await store.createPlayer({
+      organizationId: parsed.data.organization_id,
+      externalRef: parsed.data.external_ref,
+      givenName: parsed.data.given_name,
+      familyName: parsed.data.family_name,
+      sex: parsed.data.sex,
+      birthYear: parsed.data.birth_year,
+      countryCode: parsed.data.country_code,
+      regionId: parsed.data.region_id,
+    });
+
+    return res.send({
+      player_id: created.playerId,
+      organization_id: created.organizationId,
+      given_name: created.givenName,
+      family_name: created.familyName,
+      sex: created.sex,
+      birth_year: created.birthYear,
+      country_code: created.countryCode,
+      region_id: created.regionId,
+      external_ref: created.externalRef,
+    });
+  } catch (err) {
+    console.error('player_create_error', err);
+    return res.status(500).send({ error: 'internal_error' });
+  }
 });
 
 // ---- matches ----
@@ -66,7 +86,7 @@ const MatchSubmit = z.object({
   ),
 });
 
-app.post('/v1/matches', (req, res) => {
+app.post('/v1/matches', async (req, res) => {
   const parsed = MatchSubmit.safeParse(req.body);
   if (!parsed.success)
     return res
@@ -90,26 +110,111 @@ app.post('/v1/matches', (req, res) => {
     });
   }
 
-  // Run the rating update (in-memory for now)
-  const result = updateMatch(normalization.match, getOrInit);
+  const ladderKey: LadderKey = {
+    organizationId: parsed.data.organization_id,
+    sport: normalization.match.sport,
+    discipline: normalization.match.discipline,
+    format: normalization.match.format,
+    tier: normalizeTier(parsed.data.tier),
+    regionId: normalizeRegion(parsed.data.venue_region_id),
+  };
 
-  return res.send({
-    match_id: 'm_demo',
-    ratings: result.perPlayer.map((p) => ({
-      player_id: p.playerId,
-      mu_before: p.muBefore,
-      mu_after: p.muAfter,
-      delta: p.delta,
-      sigma_after: p.sigmaAfter,
-      win_probability_pre: p.winProbPre,
-    })),
-  });
+  const uniquePlayerIds = Array.from(
+    new Set([
+      ...normalization.match.sides.A.players,
+      ...normalization.match.sides.B.players,
+    ])
+  );
+
+  try {
+    const { ladderId, players } = await store.ensurePlayers(uniquePlayerIds, ladderKey);
+
+    const result = updateMatch(normalization.match, (id) => {
+      const state = players.get(id);
+      if (!state) throw new Error(`missing player state for ${id}`);
+      return state;
+    });
+
+    const { matchId } = await store.recordMatch({
+      ladderId,
+      ladderKey,
+      match: normalization.match,
+      result,
+      playerStates: players,
+      submissionMeta: {
+        providerId: parsed.data.provider_id,
+        organizationId: parsed.data.organization_id,
+        startTime: parsed.data.start_time,
+        rawPayload: req.body,
+      },
+    });
+
+    return res.send({
+      match_id: matchId,
+      ratings: result.perPlayer.map((p) => ({
+        player_id: p.playerId,
+        mu_before: p.muBefore,
+        mu_after: p.muAfter,
+        delta: p.delta,
+        sigma_after: p.sigmaAfter,
+        win_probability_pre: p.winProbPre,
+      })),
+    });
+  } catch (err) {
+    console.error('match_update_error', err);
+    return res.status(500).send({ error: 'internal_error' });
+  }
 });
 
-app.get('/v1/ratings/:player_id', (req, res) => {
-  const p = memory[req.params.player_id];
-  if (!p) return res.status(404).send({ error: 'not_found' });
-  res.send({ player_id: p.playerId, mu: p.mu, sigma: p.sigma, matches: p.matchesCount });
+const RatingQuery = z.object({
+  organization_id: z.string(),
+  sport: z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']).optional(),
+  discipline: z.enum(['SINGLES', 'DOUBLES', 'MIXED']).optional(),
+  format: z.string().optional(),
+  tier: z.string().optional(),
+  region_id: z.string().optional(),
+});
+
+app.get('/v1/ratings/:player_id', async (req, res) => {
+  const queryParse = RatingQuery.safeParse({
+    organization_id: req.query.organization_id,
+    sport: req.query.sport,
+    discipline: req.query.discipline,
+    format: req.query.format,
+    tier: req.query.tier,
+    region_id: req.query.region_id,
+  });
+
+  if (!queryParse.success) {
+    return res.status(400).send({
+      error: 'validation_error',
+      details: queryParse.error.flatten(),
+    });
+  }
+
+  const ladderKey: LadderKey = {
+    organizationId: queryParse.data.organization_id,
+    sport: (queryParse.data.sport ?? 'BADMINTON') as LadderKey['sport'],
+    discipline: (queryParse.data.discipline ?? 'SINGLES') as LadderKey['discipline'],
+    format: queryParse.data.format ?? 'BO3_21RALLY',
+    tier: normalizeTier(queryParse.data.tier),
+    regionId: normalizeRegion(queryParse.data.region_id),
+  };
+
+  try {
+    const rating = await store.getPlayerRating(req.params.player_id, ladderKey);
+    if (!rating) return res.status(404).send({ error: 'not_found' });
+
+    return res.send({
+      player_id: rating.playerId,
+      mu: rating.mu,
+      sigma: rating.sigma,
+      matches: rating.matchesCount,
+    });
+  } catch (err) {
+    console.error('ratings_lookup_error', err);
+    return res.status(500).send({ error: 'internal_error' });
+  }
 });
 
 // ---- start server ----
