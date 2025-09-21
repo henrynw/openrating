@@ -6,6 +6,7 @@ import {
   jsonb,
   doublePrecision,
   primaryKey,
+  serial,
 } from 'drizzle-orm/pg-core';
 
 export const organizations = pgTable('organizations', {
@@ -123,7 +124,7 @@ export const matches = pgTable('matches', {
 });
 
 export const matchSides = pgTable('match_sides', {
-  id: integer('id').generatedAlwaysAsIdentity().primaryKey(),
+  id: serial('id').primaryKey(),
   matchId: text('match_id').references(() => matches.matchId, {
     onDelete: 'cascade',
   }).notNull(),
@@ -132,7 +133,7 @@ export const matchSides = pgTable('match_sides', {
 });
 
 export const matchSidePlayers = pgTable('match_side_players', {
-  id: integer('id').generatedAlwaysAsIdentity().primaryKey(),
+  id: serial('id').primaryKey(),
   matchSideId: integer('match_side_id').references(() => matchSides.id, {
     onDelete: 'cascade',
   }).notNull(),
@@ -143,7 +144,7 @@ export const matchSidePlayers = pgTable('match_side_players', {
 });
 
 export const matchGames = pgTable('match_games', {
-  id: integer('id').generatedAlwaysAsIdentity().primaryKey(),
+  id: serial('id').primaryKey(),
   matchId: text('match_id').references(() => matches.matchId, {
     onDelete: 'cascade',
   }).notNull(),
@@ -168,7 +169,7 @@ export const playerRatings = pgTable('player_ratings', {
 }));
 
 export const playerRatingHistory = pgTable('player_rating_history', {
-  id: integer('id').generatedAlwaysAsIdentity().primaryKey(),
+  id: serial('id').primaryKey(),
   playerId: text('player_id').references(() => players.playerId, {
     onDelete: 'cascade',
   }).notNull(),
