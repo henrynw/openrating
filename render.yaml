@@ -10,8 +10,7 @@ services:
       - key: PORT
         value: "8080"
       - key: DATABASE_URL
-        fromService:
-          type: postgres
+        fromDatabase:
           name: openrating-db
           property: connectionString
     healthCheckPath: /health
