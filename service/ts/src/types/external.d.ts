@@ -4,6 +4,16 @@ declare module 'drizzle-orm' {
   export const inArray: (...args: any[]) => any;
 }
 
+declare module 'express-oauth2-jwt-bearer' {
+  import type { RequestHandler } from 'express';
+  export interface AuthOptions {
+    audience?: string;
+    issuerBaseURL?: string;
+    algorithms?: string[];
+  }
+  export function auth(options: AuthOptions): RequestHandler;
+}
+
 declare module 'drizzle-orm/pg-core' {
   export const pgTable: any;
   export const text: any;

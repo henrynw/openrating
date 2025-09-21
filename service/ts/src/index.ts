@@ -8,6 +8,7 @@ import { normalizeMatchSubmission } from './formats/index.js';
 import { getStore } from './store/index.js';
 import type { LadderKey } from './store/index.js';
 import { normalizeRegion, normalizeTier } from './store/helpers.js';
+import { AuthorizationError, enforceMatchWrite, requireAuth, requireScope } from './auth.js';
 
 dotenv.config();
 
@@ -87,7 +88,7 @@ const MatchSubmit = z.object({
   ),
 });
 
-app.post('/v1/matches', async (req, res) => {
+app.post('/v1/matches', requireAuth, requireScope('matches:write'), async (req, res) => {
   const parsed = MatchSubmit.safeParse(req.body);
   if (!parsed.success)
     return res
@@ -128,6 +129,19 @@ app.post('/v1/matches', async (req, res) => {
   );
 
   try {
+    try {
+      await enforceMatchWrite(req, {
+        organizationId: parsed.data.organization_id,
+        sport: normalization.match.sport,
+        regionId: ladderKey.regionId,
+      });
+    } catch (err) {
+      if (err instanceof AuthorizationError) {
+        return res.status(err.status).send({ error: err.code, message: err.message });
+      }
+      throw err;
+    }
+
     const { ladderId, players } = await store.ensurePlayers(uniquePlayerIds, ladderKey);
 
     const result = updateMatch(normalization.match, (id) => {

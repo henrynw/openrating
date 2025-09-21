@@ -18,7 +18,8 @@
     "zod": "^3.23.8",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.30.5",
-    "pg": "^8.11.5"
+    "pg": "^8.11.5",
+    "express-oauth2-jwt-bearer": "^1.7.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

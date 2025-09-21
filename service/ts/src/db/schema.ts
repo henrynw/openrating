@@ -23,6 +23,25 @@ export const providers = pgTable('providers', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const subjects = pgTable('subjects', {
+  subjectId: text('subject_id').primaryKey(),
+  authProvider: text('auth_provider').notNull(),
+  displayName: text('display_name'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const subjectGrants = pgTable('subject_grants', {
+  id: serial('id').primaryKey(),
+  subjectId: text('subject_id').references(() => subjects.subjectId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  organizationId: text('organization_id').notNull(),
+  sport: text('sport'),
+  regionId: text('region_id'),
+  permission: text('permission').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const sports = pgTable('sports', {
   sportId: text('sport_id').primaryKey(),
   name: text('name').notNull(),

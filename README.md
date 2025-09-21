@@ -17,6 +17,11 @@ npm install
 cat > .env <<'EOF'
 DATABASE_URL=postgres://openrating:openrating@localhost:5432/openrating
 PORT=8080
+# Auth (optional – leave unset to run with auth disabled)
+# AUTH0_DOMAIN=your-tenant.us.auth0.com
+# AUTH0_AUDIENCE=https://api.openrating.app
+# AUTH_PROVIDER=AUTH0
+# AUTH_DISABLE=1
 EOF
 
 # 3. Apply database migrations
@@ -44,6 +49,16 @@ Provide `aws_region`, `container_image`, and `db_password` (or wire Secrets Mana
 4. Visit the generated URL; `/health` should respond with `{ ok: true }`.
 
 > Tip: edit `render.yaml` if you need a different plan, region, or environment settings.
+
+### Auth0 integration
+- Define an API in Auth0 with identifier `https://api.openrating.app` (or your own audience).
+- Create machine-to-machine apps for providers and assign scopes like `matches:write`.
+- Add these environment variables to the service (Render dashboard or `.env`):
+  - `AUTH0_DOMAIN=your-tenant.us.auth0.com`
+  - `AUTH0_AUDIENCE=https://api.openrating.app`
+  - `AUTH_PROVIDER=AUTH0`
+  - Leave `AUTH_DISABLE` unset in production; set `AUTH_DISABLE=1` locally to bypass auth.
+- Seed `subjects` and `subject_grants` tables with the org/sport permissions your callers need.  The API auto-creates a `subjects` row the first time a new Auth0 `sub` appears.
 
 ## Project layout
 ```
