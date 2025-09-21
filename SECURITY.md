@@ -1,0 +1,1 @@
+Email security@openrating.org for private vulnerability disclosure.

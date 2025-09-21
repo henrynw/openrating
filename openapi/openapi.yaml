@@ -1,0 +1,94 @@
+openapi: 3.0.3
+info:
+  title: OpenRating API
+  version: 1.0.0
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      responses:
+        '200':
+          description: OK
+  /v1/players:
+    post:
+      summary: Create or upsert a player
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerUpsert'
+      responses:
+        '200':
+          description: Player created or updated
+  /v1/matches:
+    post:
+      summary: Submit a match result and update ratings
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchSubmit'
+      responses:
+        '200':
+          description: Match processed with rating deltas
+components:
+  schemas:
+    PlayerUpsert:
+      type: object
+      required: [organization_id, given_name, family_name]
+      properties:
+        organization_id: { type: string }
+        external_ref: { type: string }
+        given_name: { type: string }
+        family_name: { type: string }
+        sex: { type: string, enum: [M, F, X] }
+        birth_year: { type: integer }
+        country_code: { type: string }
+        region_id: { type: string }
+    MatchSubmit:
+      type: object
+      required: [provider_id, organization_id, discipline, format, start_time, sides, games]
+      properties:
+        provider_id: { type: string }
+        organization_id: { type: string }
+        discipline: { type: string, enum: [SINGLES, DOUBLES, MIXED] }
+        format: { type: string, example: BO3_21RALLY }
+        start_time: { type: string, format: date-time }
+        venue_region_id: { type: string }
+        tier: { type: string, enum: [SANCTIONED, LEAGUE, SOCIAL, EXHIBITION] }
+        sides:
+          type: object
+          properties:
+            A:
+              type: object
+              properties:
+                players:
+                  type: array
+                  minItems: 1
+                  maxItems: 2
+                  items: { type: string }
+            B:
+              type: object
+              properties:
+                players:
+                  type: array
+                  minItems: 1
+                  maxItems: 2
+                  items: { type: string }
+        games:
+          type: array
+          items:
+            type: object
+            properties:
+              game_no: { type: integer }
+              a: { type: integer }
+              b: { type: integer }
