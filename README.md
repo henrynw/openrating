@@ -37,6 +37,14 @@ terraform apply
 ```
 Provide `aws_region`, `container_image`, and `db_password` (or wire Secrets Manager).
 
+### Deploy on Render (blueprint)
+1. [Create a Render account](https://render.com) and connect this repo.
+2. Accept the detected `render.yaml` blueprint — it provisions a Node web service (`openrating-api`) and a managed Postgres instance (`openrating-db`).
+3. Render runs `npm install`, `npm run build`, executes migrations (`npm run db:migrate`), then starts the API.
+4. Visit the generated URL; `/health` should respond with `{ ok: true }`.
+
+> Tip: edit `render.yaml` if you need a different plan, region, or environment settings.
+
 ## Project layout
 ```
 openapi/        # OpenAPI spec (API-first)

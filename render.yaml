@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: openrating-api
+    env: node
+    rootDir: service/ts
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    postDeployCommand: npm run db:migrate
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: DATABASE_URL
+        fromService:
+          type: postgres
+          name: openrating-db
+          property: connectionString
+    healthCheckPath: /health
+    plan: starter
+
+databases:
+  - name: openrating-db
+    plan: free
