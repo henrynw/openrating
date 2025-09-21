@@ -48,6 +48,8 @@ export interface RecordMatchParams {
     organizationId: string;
     startTime: string;
     rawPayload: unknown;
+    venueId?: string | null;
+    regionId?: string | null;
   };
 }
 

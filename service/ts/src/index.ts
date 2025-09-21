@@ -75,6 +75,7 @@ const MatchSubmit = z.object({
   discipline: z.enum(['SINGLES', 'DOUBLES', 'MIXED']),
   format: z.string(),
   start_time: z.string(),
+  venue_id: z.string().optional(),
   venue_region_id: z.string().optional(),
   tier: z.enum(['SANCTIONED', 'LEAGUE', 'SOCIAL', 'EXHIBITION']).optional(),
   sides: z.object({
@@ -146,6 +147,8 @@ app.post('/v1/matches', async (req, res) => {
         organizationId: parsed.data.organization_id,
         startTime: parsed.data.start_time,
         rawPayload: req.body,
+        venueId: parsed.data.venue_id ?? null,
+        regionId: parsed.data.venue_region_id ?? null,
       },
     });
 

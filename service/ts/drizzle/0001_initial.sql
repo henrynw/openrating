@@ -1,45 +1,95 @@
+CREATE TABLE IF NOT EXISTS organizations (
+  organization_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS providers (
+  provider_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sports (
+  sport_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS regions (
+  region_id TEXT PRIMARY KEY,
+  organization_id TEXT REFERENCES organizations(organization_id) ON DELETE CASCADE,
+  parent_region_id TEXT REFERENCES regions(region_id) ON DELETE SET NULL,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  country_code TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS venues (
+  venue_id TEXT PRIMARY KEY,
+  organization_id TEXT REFERENCES organizations(organization_id) ON DELETE CASCADE,
+  region_id TEXT REFERENCES regions(region_id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  address TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS players (
   player_id TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL,
+  organization_id TEXT NOT NULL REFERENCES organizations(organization_id) ON DELETE CASCADE,
   external_ref TEXT,
   given_name TEXT,
   family_name TEXT,
   sex TEXT,
   birth_year INTEGER,
   country_code TEXT,
-  region_id TEXT,
+  region_id TEXT REFERENCES regions(region_id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS rating_ladders (
   ladder_id TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL,
-  sport TEXT NOT NULL,
+  organization_id TEXT NOT NULL REFERENCES organizations(organization_id) ON DELETE CASCADE,
+  sport TEXT NOT NULL REFERENCES sports(sport_id) ON DELETE RESTRICT,
   discipline TEXT NOT NULL,
   format TEXT NOT NULL,
   tier TEXT NOT NULL DEFAULT 'UNSPECIFIED',
-  region_id TEXT NOT NULL DEFAULT 'GLOBAL',
+  region_id TEXT REFERENCES regions(region_id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS rating_ladders_org_format_idx
-  ON rating_ladders (organization_id, sport, discipline, format, tier, region_id);
+  ON rating_ladders (organization_id, sport, discipline, format, tier, COALESCE(region_id, 'GLOBAL'));
 
 CREATE TABLE IF NOT EXISTS matches (
   match_id TEXT PRIMARY KEY,
   ladder_id TEXT NOT NULL REFERENCES rating_ladders(ladder_id) ON DELETE CASCADE,
-  provider_id TEXT NOT NULL,
-  organization_id TEXT NOT NULL,
-  sport TEXT NOT NULL,
+  provider_id TEXT NOT NULL REFERENCES providers(provider_id) ON DELETE RESTRICT,
+  organization_id TEXT NOT NULL REFERENCES organizations(organization_id) ON DELETE CASCADE,
+  sport TEXT NOT NULL REFERENCES sports(sport_id) ON DELETE RESTRICT,
   discipline TEXT NOT NULL,
   format TEXT NOT NULL,
   tier TEXT NOT NULL,
+  venue_id TEXT REFERENCES venues(venue_id) ON DELETE SET NULL,
+  region_id TEXT REFERENCES regions(region_id) ON DELETE SET NULL,
   start_time TIMESTAMPTZ NOT NULL,
   raw_payload JSONB NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS matches_org_sport_idx
+  ON matches (organization_id, sport, discipline, tier);
+
+CREATE INDEX IF NOT EXISTS matches_start_time_idx
+  ON matches (start_time DESC);
 
 CREATE TABLE IF NOT EXISTS match_sides (
   id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

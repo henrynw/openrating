@@ -8,10 +8,15 @@ import {
   matchSidePlayers,
   matchSides,
   matches,
+  organizations,
   playerRatings,
   playerRatingHistory,
   players,
+  providers,
   ratingLadders,
+  regions,
+  sports,
+  venues,
 } from '../db/schema';
 import type {
   EnsurePlayersResult,
@@ -21,7 +26,7 @@ import type {
   RatingStore,
   RecordMatchParams,
 } from './types';
-import { buildLadderId } from './helpers';
+import { buildLadderId, isDefaultRegion, toDbRegionId } from './helpers';
 
 const now = () => new Date();
 
@@ -35,19 +40,86 @@ const ensurePlayerShell = (id: string, organizationId: string) => ({
 export class PostgresStore implements RatingStore {
   constructor(private readonly db = getDb()) {}
 
+  private async ensureOrganization(id: string, tx = this.db) {
+    await tx
+      .insert(organizations)
+      .values({
+        organizationId: id,
+        name: id,
+        createdAt: now(),
+        updatedAt: now(),
+      })
+      .onConflictDoNothing({ target: organizations.organizationId });
+  }
+
+  private async ensureSport(id: string, tx = this.db) {
+    await tx
+      .insert(sports)
+      .values({
+        sportId: id,
+        name: id,
+        createdAt: now(),
+        updatedAt: now(),
+      })
+      .onConflictDoNothing({ target: sports.sportId });
+  }
+
+  private async ensureProvider(id: string, tx = this.db) {
+    await tx
+      .insert(providers)
+      .values({
+        providerId: id,
+        name: id,
+        createdAt: now(),
+        updatedAt: now(),
+      })
+      .onConflictDoNothing({ target: providers.providerId });
+  }
+
+  private async ensureRegion(regionId: string | null | undefined, organizationId: string, tx = this.db) {
+    if (!regionId || isDefaultRegion(regionId)) return null;
+    await tx
+      .insert(regions)
+      .values({
+        regionId,
+        organizationId,
+        parentRegionId: null,
+        type: 'CUSTOM',
+        name: regionId,
+        countryCode: null,
+        createdAt: now(),
+        updatedAt: now(),
+      })
+      .onConflictDoNothing({ target: regions.regionId });
+    return regionId;
+  }
+
+  private async ensureVenue(
+    venueId: string | null | undefined,
+    organizationId: string,
+    regionId: string | null,
+    tx = this.db
+  ) {
+    if (!venueId) return null;
+    await tx
+      .insert(venues)
+      .values({
+        venueId,
+        organizationId,
+        regionId,
+        name: venueId,
+        address: null,
+        createdAt: now(),
+        updatedAt: now(),
+      })
+      .onConflictDoNothing({ target: venues.venueId });
+    return venueId;
+  }
+
   async createPlayer(input: PlayerCreateInput): Promise<PlayerRecord> {
     const playerId = randomUUID();
-    const record = {
-      playerId,
-      organizationId: input.organizationId,
-      externalRef: input.externalRef,
-      givenName: input.givenName,
-      familyName: input.familyName,
-      sex: input.sex,
-      birthYear: input.birthYear,
-      countryCode: input.countryCode,
-      regionId: input.regionId,
-    } satisfies PlayerRecord;
+    await this.ensureOrganization(input.organizationId);
+    const regionId = await this.ensureRegion(input.regionId ?? null, input.organizationId);
 
     await this.db.insert(players).values({
       playerId,
@@ -58,16 +130,30 @@ export class PostgresStore implements RatingStore {
       sex: input.sex,
       birthYear: input.birthYear,
       countryCode: input.countryCode,
-      regionId: input.regionId,
+      regionId,
       createdAt: now(),
       updatedAt: now(),
     });
 
-    return record;
+    return {
+      playerId,
+      organizationId: input.organizationId,
+      givenName: input.givenName,
+      familyName: input.familyName,
+      sex: input.sex,
+      birthYear: input.birthYear,
+      countryCode: input.countryCode,
+      regionId: regionId ?? undefined,
+      externalRef: input.externalRef,
+    } satisfies PlayerRecord;
   }
 
   private async ensureLadder(key: LadderKey) {
     const ladderId = buildLadderId(key);
+
+    await this.ensureOrganization(key.organizationId);
+    await this.ensureSport(key.sport);
+    const regionId = await this.ensureRegion(key.regionId, key.organizationId);
 
     await this.db
       .insert(ratingLadders)
@@ -78,7 +164,7 @@ export class PostgresStore implements RatingStore {
         discipline: key.discipline,
         format: key.format,
         tier: key.tier,
-        regionId: key.regionId,
+        regionId: toDbRegionId(key.regionId) ?? regionId,
         createdAt: now(),
         updatedAt: now(),
       })
@@ -91,13 +177,22 @@ export class PostgresStore implements RatingStore {
     const ladderId = await this.ensureLadder(ladderKey);
     if (ids.length === 0) return { ladderId, players: new Map() };
 
+    await this.ensureOrganization(ladderKey.organizationId);
+
     await this.db
       .insert(players)
-      .values(ids.map((id) => ({
-        ...ensurePlayerShell(id, ladderKey.organizationId),
-        createdAt: now(),
-        updatedAt: now(),
-      })))
+      .values(
+        ids.map((id) => ({
+          ...ensurePlayerShell(id, ladderKey.organizationId),
+          sex: null,
+          birthYear: null,
+          countryCode: null,
+          regionId: null,
+          externalRef: null,
+          createdAt: now(),
+          updatedAt: now(),
+        }))
+      )
       .onConflictDoNothing({ target: players.playerId });
 
     await this.db
@@ -149,6 +244,21 @@ export class PostgresStore implements RatingStore {
     const matchId = randomUUID();
     const movWeight = params.match.movWeight ?? null;
 
+    await this.ensureProvider(params.submissionMeta.providerId);
+    await this.ensureOrganization(params.submissionMeta.organizationId);
+    await this.ensureSport(params.match.sport);
+
+    const ladderRegionId = await this.ensureRegion(params.ladderKey.regionId, params.ladderKey.organizationId);
+    const submissionRegionId = await this.ensureRegion(
+      params.submissionMeta.regionId ?? null,
+      params.submissionMeta.organizationId
+    );
+    const venueId = await this.ensureVenue(
+      params.submissionMeta.venueId ?? null,
+      params.submissionMeta.organizationId,
+      submissionRegionId ?? ladderRegionId ?? null
+    );
+
     await this.db.transaction(async (tx: any) => {
       await tx.insert(matches).values({
         matchId,
@@ -159,6 +269,8 @@ export class PostgresStore implements RatingStore {
         discipline: params.match.discipline,
         format: params.match.format,
         tier: params.match.tier ?? 'UNSPECIFIED',
+        venueId,
+        regionId: submissionRegionId ?? ladderRegionId ?? null,
         startTime: new Date(params.submissionMeta.startTime),
         rawPayload: params.submissionMeta.rawPayload as object,
         createdAt: now(),
