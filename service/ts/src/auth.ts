@@ -1,6 +1,6 @@
 import type { Request, RequestHandler } from 'express';
 import { auth } from 'express-oauth2-jwt-bearer';
-import { ensureSubject, grantMatches, loadGrants } from './store/grants.js';
+import { ensureSubject, hasOrgPermission, loadGrants } from './store/grants.js';
 
 const audience = process.env.AUTH0_AUDIENCE;
 const domain = process.env.AUTH0_DOMAIN;
@@ -20,12 +20,16 @@ export const requireAuth = jwtMiddleware;
 
 export const requireScope = (scope: string): RequestHandler => (req, res, next) => {
   if (AUTH_DISABLED) return next();
-  const payload = (req as any).auth?.payload as Record<string, any> | undefined;
-  const scopes = (payload?.scope ?? '').toString().split(' ').filter(Boolean);
-  if (!scopes.includes(scope)) {
+  if (!hasScope(req, scope)) {
     return res.status(403).send({ error: 'insufficient_scope', required: scope });
   }
   return next();
+};
+
+export const hasScope = (req: Request, scope: string) => {
+  if (AUTH_DISABLED) return true;
+  const scopes = getScopes(req);
+  return scopes.includes(scope);
 };
 
 export class AuthorizationError extends Error {
@@ -33,9 +37,64 @@ export class AuthorizationError extends Error {
   code = 'forbidden';
 }
 
-export async function enforceMatchWrite(req: Request, params: { organizationId: string; sport: string; regionId: string }) {
+export async function authorizeOrgAccess(
+  req: Request,
+  organizationId: string,
+  options: {
+    permissions: string[];
+    sport?: string | null;
+    regionId?: string | null;
+    errorCode?: string;
+    errorMessage?: string;
+  }
+) {
   if (AUTH_DISABLED) return;
-  const payload = (req as any).auth?.payload as Record<string, any> | undefined;
+  const ctx = await getSubjectContext(req);
+  if (
+    !hasOrgPermission(ctx.grants, organizationId, options.permissions, {
+      sport: options.sport ?? null,
+      regionId: options.regionId ?? null,
+    })
+  ) {
+    const err = new AuthorizationError(options.errorMessage ?? 'Insufficient grants');
+    err.code = options.errorCode ?? 'insufficient_grants';
+    throw err;
+  }
+}
+
+export async function enforceMatchWrite(req: Request, params: { organizationId: string; sport: string; regionId: string }) {
+  await authorizeOrgAccess(req, params.organizationId, {
+    permissions: ['matches:write'],
+    sport: params.sport,
+    regionId: params.regionId,
+    errorCode: 'matches_write_denied',
+    errorMessage: 'Insufficient grants for matches:write',
+  });
+}
+
+type SubjectContext = {
+  subject: string;
+  scopes: string[];
+  grants: Awaited<ReturnType<typeof loadGrants>>;
+};
+
+const SUBJECT_CONTEXT_KEY = Symbol('subjectContext');
+
+const getPayload = (req: Request) => (req as any).auth?.payload as Record<string, any> | undefined;
+
+const getScopes = (req: Request) => {
+  const payload = getPayload(req);
+  return (payload?.scope ?? '').toString().split(' ').filter(Boolean);
+};
+
+const getSubjectContext = async (req: Request): Promise<SubjectContext> => {
+  if (AUTH_DISABLED) {
+    return { subject: 'disabled', scopes: [], grants: [] };
+  }
+  const cached = (req as any)[SUBJECT_CONTEXT_KEY] as SubjectContext | undefined;
+  if (cached) return cached;
+
+  const payload = getPayload(req);
   const subject = payload?.sub as string | undefined;
   if (!subject) {
     const err = new AuthorizationError('Missing subject in access token');
@@ -47,10 +106,11 @@ export async function enforceMatchWrite(req: Request, params: { organizationId: 
 
   await ensureSubject(subject, displayName);
   const grants = await loadGrants(subject);
-
-  if (!grantMatches(grants, params.organizationId, params.sport, params.regionId)) {
-    const err = new AuthorizationError('Insufficient grants for matches:write');
-    err.code = 'matches_write_denied';
-    throw err;
-  }
-}
+  const ctx: SubjectContext = {
+    subject,
+    scopes: getScopes(req),
+    grants,
+  };
+  (req as any)[SUBJECT_CONTEXT_KEY] = ctx;
+  return ctx;
+};

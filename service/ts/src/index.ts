@@ -9,7 +9,7 @@ import { getStore } from './store/index.js';
 import type { LadderKey } from './store/index.js';
 import { PlayerLookupError } from './store/index.js';
 import { normalizeRegion, normalizeTier } from './store/helpers.js';
-import { AuthorizationError, enforceMatchWrite, requireAuth, requireScope } from './auth.js';
+import { AuthorizationError, authorizeOrgAccess, enforceMatchWrite, hasScope, requireAuth, requireScope } from './auth.js';
 
 dotenv.config();
 
@@ -74,6 +74,57 @@ app.post('/v1/players', async (req, res) => {
     });
   } catch (err) {
     console.error('player_create_error', err);
+    return res.status(500).send({ error: 'internal_error' });
+  }
+});
+
+const PlayerListQuery = z.object({
+  organization_id: z.string(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().optional(),
+  q: z.string().optional(),
+});
+
+app.get('/v1/players', requireAuth, async (req, res) => {
+  const parsed = PlayerListQuery.safeParse(req.query);
+  if (!parsed.success)
+    return res
+      .status(400)
+      .send({ error: 'validation_error', details: parsed.error.flatten() });
+
+  const { organization_id, limit, cursor, q } = parsed.data;
+
+  try {
+    await authorizeOrgAccess(req, organization_id, {
+      permissions: ['players:read', 'matches:write'],
+      errorCode: 'players_read_denied',
+      errorMessage: 'Insufficient grants for players:read',
+    });
+
+    const result = await store.listPlayers({ organizationId: organization_id, limit, cursor, q });
+
+    return res.send({
+      players: result.items.map((player) => ({
+        player_id: player.playerId,
+        organization_id: player.organizationId,
+        display_name: player.displayName,
+        short_name: player.shortName,
+        native_name: player.nativeName,
+        given_name: player.givenName,
+        family_name: player.familyName,
+        sex: player.sex,
+        birth_year: player.birthYear,
+        country_code: player.countryCode,
+        region_id: player.regionId,
+        external_ref: player.externalRef,
+      })),
+      next_cursor: result.nextCursor ?? null,
+    });
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return res.status(err.status).send({ error: err.code, message: err.message });
+    }
+    console.error('players_list_error', err);
     return res.status(500).send({ error: 'internal_error' });
   }
 });
@@ -197,6 +248,79 @@ app.post('/v1/matches', requireAuth, requireScope('matches:write'), async (req, 
       });
     }
     console.error('match_update_error', err);
+    return res.status(500).send({ error: 'internal_error' });
+  }
+});
+
+const MatchListQuery = z.object({
+  organization_id: z.string(),
+  sport: z.string().optional(),
+  player_id: z.string().optional(),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  start_after: z.string().datetime().optional(),
+  start_before: z.string().datetime().optional(),
+});
+
+app.get('/v1/matches', requireAuth, async (req, res) => {
+  const parsed = MatchListQuery.safeParse(req.query);
+  if (!parsed.success)
+    return res
+      .status(400)
+      .send({ error: 'validation_error', details: parsed.error.flatten() });
+
+  const { organization_id, sport, player_id, cursor, limit, start_after, start_before } = parsed.data;
+
+  if (!(
+    hasScope(req, 'matches:write') ||
+    hasScope(req, 'matches:read') ||
+    hasScope(req, 'ratings:read')
+  )) {
+    return res.status(403).send({ error: 'insufficient_scope', required: 'matches:read|matches:write|ratings:read' });
+  }
+
+  try {
+    await authorizeOrgAccess(req, organization_id, {
+      permissions: ['matches:write', 'matches:read', 'ratings:read'],
+      sport: sport ?? null,
+      errorCode: 'matches_read_denied',
+      errorMessage: 'Insufficient grants to read matches',
+    });
+
+    const result = await store.listMatches({
+      organizationId: organization_id,
+      sport: sport ?? undefined,
+      playerId: player_id ?? undefined,
+      cursor,
+      limit,
+      startAfter: start_after ?? undefined,
+      startBefore: start_before ?? undefined,
+    });
+
+    return res.send({
+      matches: result.items.map((match) => ({
+        match_id: match.matchId,
+        organization_id: match.organizationId,
+        sport: match.sport,
+        discipline: match.discipline,
+        format: match.format,
+        tier: match.tier,
+        start_time: match.startTime,
+        venue_id: match.venueId,
+        region_id: match.regionId,
+        sides: match.sides.reduce((acc, side) => {
+          acc[side.side] = { players: side.players };
+          return acc;
+        }, {} as Record<'A' | 'B', { players: string[] }>),
+        games: match.games.map((game) => ({ game_no: game.gameNo, a: game.a, b: game.b })),
+      })),
+      next_cursor: result.nextCursor ?? null,
+    });
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return res.status(err.status).send({ error: err.code, message: err.message });
+    }
+    console.error('matches_list_error', err);
     return res.status(500).send({ error: 'internal_error' });
   }
 });

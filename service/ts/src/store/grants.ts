@@ -70,3 +70,18 @@ export function grantRatingsRead(grants: SubjectGrant[], organizationId: string,
     (grant.regionId === null || grant.regionId === regionId)
   );
 }
+
+export function hasOrgPermission(
+  grants: SubjectGrant[],
+  organizationId: string,
+  permissions: string[],
+  options: { sport?: string | null; regionId?: string | null } = {}
+) {
+  const { sport = null, regionId = null } = options;
+  return grants.some((grant) =>
+    permissions.includes(grant.permission) &&
+    grant.organizationId === organizationId &&
+    (sport === null || grant.sport === null || grant.sport === sport) &&
+    (regionId === null || grant.regionId === null || grant.regionId === regionId)
+  );
+}

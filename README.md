@@ -78,6 +78,12 @@ npm run grants -- list --subject bwf-provider
 
 The CLI reads credentials from environment variables so provider secrets stay out of git.
 
+### Listing data
+- `GET /v1/players`: paginated list filtered by `organization_id`, optional `q`, `limit`, and `cursor`. Returns `next_cursor` for continue tokens.
+- `GET /v1/matches`: paginated list filtered by `organization_id` with optional `sport`, `player_id`, `start_after`, `start_before`, `cursor`, and `limit`.
+
+Players must be registered in advance—match submissions referencing unknown or cross-organization player IDs return `invalid_players`.
+
 
 ### Player lifecycle
 - Register players via `POST /v1/players` before submitting matches. The response returns the `player_id` you must use in match payloads.

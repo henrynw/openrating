@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
-import { and, eq, inArray } from 'drizzle-orm';
-import type { PlayerState } from '../engine/types.js';
+import { and, eq, inArray, or, lt, lte, sql, desc } from 'drizzle-orm';
+import type { PlayerState, MatchInput } from '../engine/types.js';
 import { P } from '../engine/params.js';
 import { getDb } from '../db/client.js';
 import {
@@ -26,10 +26,42 @@ import type {
   RatingStore,
   RecordMatchParams,
 } from './types.js';
-import { PlayerLookupError } from './types.js';
+import {
+  PlayerLookupError,
+  PlayerListQuery,
+  PlayerListResult,
+  MatchListQuery,
+  MatchListResult,
+  MatchSummary,
+  MatchGameSummary,
+  MatchSideSummary,
+} from './types.js';
 import { buildLadderId, isDefaultRegion, toDbRegionId } from './helpers.js';
+import { hasOrgPermission } from './grants.js';
 
 const now = () => new Date();
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
+
+const clampLimit = (limit?: number) => {
+  if (!limit || limit < 1) return DEFAULT_PAGE_SIZE;
+  return Math.min(limit, MAX_PAGE_SIZE);
+};
+
+const combineFilters = (filters: any[]) => {
+  if (!filters.length) return undefined;
+  return filters.reduce((acc: any, filter: any) => (acc ? and(acc, filter) : filter), undefined as any);
+};
+
+const buildMatchCursor = (startTime: Date, matchId: string) => `${startTime.toISOString()}|${matchId}`;
+
+const parseMatchCursor = (cursor: string) => {
+  const [ts, id] = cursor.split('|');
+  if (!ts || !id) return null;
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return null;
+  return { startTime: date, matchId: id };
+};
 
 export class PostgresStore implements RatingStore {
   constructor(private readonly db = getDb()) {}
@@ -380,5 +412,224 @@ export class PostgresStore implements RatingStore {
       matchesCount: row.matchesCount,
       regionId: row.regionId ?? undefined,
     };
+  }
+
+  async listPlayers(query: PlayerListQuery): Promise<PlayerListResult> {
+    const limit = clampLimit(query.limit);
+    const filters: any[] = [eq(players.organizationId, query.organizationId)];
+
+    if (query.cursor) {
+      filters.push(sql`${players.playerId} > ${query.cursor}`);
+    }
+
+    if (query.q) {
+      filters.push(sql`${players.displayName} ILIKE ${`%${query.q}%`}`);
+    }
+
+    const condition = combineFilters(filters);
+
+    const rows = (await this.db
+      .select({
+        playerId: players.playerId,
+        organizationId: players.organizationId,
+        displayName: players.displayName,
+        shortName: players.shortName,
+        nativeName: players.nativeName,
+        givenName: players.givenName,
+        familyName: players.familyName,
+        sex: players.sex,
+        birthYear: players.birthYear,
+        countryCode: players.countryCode,
+        regionId: players.regionId,
+        externalRef: players.externalRef,
+      })
+      .from(players)
+      .where(condition)
+      .orderBy(players.playerId)
+      .limit(limit + 1)) as Array<{
+        playerId: string;
+        organizationId: string;
+        displayName: string;
+        shortName: string | null;
+        nativeName: string | null;
+        givenName: string | null;
+        familyName: string | null;
+        sex: string | null;
+        birthYear: number | null;
+        countryCode: string | null;
+        regionId: string | null;
+        externalRef: string | null;
+      }>;
+
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const nextCursor = hasMore && page.length ? page[page.length - 1].playerId : undefined;
+
+    const items: PlayerRecord[] = page.map((row) => ({
+      playerId: row.playerId,
+      organizationId: row.organizationId,
+      displayName: row.displayName,
+      shortName: row.shortName ?? undefined,
+      nativeName: row.nativeName ?? undefined,
+      givenName: row.givenName ?? undefined,
+      familyName: row.familyName ?? undefined,
+      sex: (row.sex ?? undefined) as 'M' | 'F' | 'X' | undefined,
+      birthYear: row.birthYear ?? undefined,
+      countryCode: row.countryCode ?? undefined,
+      regionId: row.regionId ?? undefined,
+      externalRef: row.externalRef ?? undefined,
+    }));
+
+    return { items, nextCursor };
+  }
+
+  async listMatches(query: MatchListQuery): Promise<MatchListResult> {
+    const limit = clampLimit(query.limit);
+    const filters: any[] = [eq(matches.organizationId, query.organizationId)];
+
+    if (query.sport) {
+      filters.push(eq(matches.sport, query.sport));
+    }
+
+    if (query.startAfter) {
+      const after = new Date(query.startAfter);
+      if (!Number.isNaN(after.getTime())) {
+        filters.push(sql`${matches.startTime} >= ${after}`);
+      }
+    }
+
+    if (query.startBefore) {
+      const before = new Date(query.startBefore);
+      if (!Number.isNaN(before.getTime())) {
+        filters.push(sql`${matches.startTime} <= ${before}`);
+      }
+    }
+
+    if (query.cursor) {
+      const parsed = parseMatchCursor(query.cursor);
+      if (parsed) {
+        filters.push(
+          or(
+            lt(matches.startTime, parsed.startTime),
+            and(eq(matches.startTime, parsed.startTime), lt(matches.matchId, parsed.matchId))
+          )
+        );
+      }
+    }
+
+    if (query.playerId) {
+      filters.push(
+        sql`EXISTS (SELECT 1 FROM ${matchSidePlayers} msp JOIN ${matchSides} ms ON ms.id = msp.match_side_id WHERE ms.match_id = ${matches.matchId} AND msp.player_id = ${query.playerId})`
+      );
+    }
+
+    const condition = combineFilters(filters);
+
+    const rows = (await this.db
+      .select({
+        matchId: matches.matchId,
+        organizationId: matches.organizationId,
+        sport: matches.sport,
+        discipline: matches.discipline,
+        format: matches.format,
+        tier: matches.tier,
+        startTime: matches.startTime,
+        venueId: matches.venueId,
+        regionId: matches.regionId,
+      })
+      .from(matches)
+      .where(condition)
+      .orderBy(desc(matches.startTime), desc(matches.matchId))
+      .limit(limit + 1)) as Array<{
+        matchId: string;
+        organizationId: string;
+        sport: string;
+        discipline: string;
+        format: string;
+        tier: string | null;
+        startTime: Date;
+        venueId: string | null;
+        regionId: string | null;
+      }>;
+
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const nextCursor = hasMore && page.length ? buildMatchCursor(page[page.length - 1].startTime, page[page.length - 1].matchId) : undefined;
+
+    if (!page.length) {
+      return { items: [], nextCursor: undefined };
+    }
+
+    const matchIds = page.map((row) => row.matchId);
+
+    const sideRows = (await this.db
+      .select({
+        matchId: matchSides.matchId,
+        side: matchSides.side,
+        playerId: matchSidePlayers.playerId,
+      })
+      .from(matchSides)
+      .innerJoin(matchSidePlayers, eq(matchSidePlayers.matchSideId, matchSides.id))
+      .where(inArray(matchSides.matchId, matchIds))) as Array<{
+        matchId: string;
+        side: string;
+        playerId: string;
+      }>;
+
+    const gameRows = (await this.db
+      .select({
+        matchId: matchGames.matchId,
+        gameNo: matchGames.gameNo,
+        scoreA: matchGames.scoreA,
+        scoreB: matchGames.scoreB,
+      })
+      .from(matchGames)
+      .where(inArray(matchGames.matchId, matchIds))
+      .orderBy(matchGames.matchId, matchGames.gameNo)) as Array<{
+        matchId: string;
+        gameNo: number;
+        scoreA: number;
+        scoreB: number;
+      }>;
+
+    const sidesMap = new Map<string, Map<string, string[]>>();
+    for (const row of sideRows) {
+      const sideMap = sidesMap.get(row.matchId) ?? new Map<string, string[]>();
+      const playersList = sideMap.get(row.side) ?? [];
+      playersList.push(row.playerId);
+      sideMap.set(row.side, playersList);
+      sidesMap.set(row.matchId, sideMap);
+    }
+
+    const gamesMap = new Map<string, MatchGameSummary[]>();
+    for (const row of gameRows) {
+      const list = gamesMap.get(row.matchId) ?? [];
+      list.push({ gameNo: row.gameNo, a: row.scoreA, b: row.scoreB });
+      gamesMap.set(row.matchId, list);
+    }
+
+    const items: MatchSummary[] = page.map((row) => {
+      const sideMap = sidesMap.get(row.matchId) ?? new Map<string, string[]>();
+      const sides: MatchSideSummary[] = ['A', 'B'].map((side) => ({
+        side: side as 'A' | 'B',
+        players: sideMap.get(side) ?? [],
+      }));
+      const gameList = gamesMap.get(row.matchId) ?? [];
+      return {
+        matchId: row.matchId,
+        organizationId: row.organizationId,
+        sport: row.sport as MatchInput['sport'],
+        discipline: row.discipline as MatchInput['discipline'],
+        format: row.format,
+        tier: row.tier ?? undefined,
+        startTime: row.startTime.toISOString(),
+        venueId: row.venueId ?? null,
+        regionId: row.regionId ?? null,
+        sides,
+        games: gameList,
+      };
+    });
+
+    return { items, nextCursor };
   }
 }

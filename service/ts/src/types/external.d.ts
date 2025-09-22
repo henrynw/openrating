@@ -2,6 +2,13 @@ declare module 'drizzle-orm' {
   export const and: (...args: any[]) => any;
   export const eq: (...args: any[]) => any;
   export const inArray: (...args: any[]) => any;
+  export const or: (...args: any[]) => any;
+  export const lt: (...args: any[]) => any;
+  export const lte: (...args: any[]) => any;
+  export const gt: (...args: any[]) => any;
+  export const gte: (...args: any[]) => any;
+  export const desc: (...args: any[]) => any;
+  export const sql: any;
 }
 
 declare module 'express-oauth2-jwt-bearer' {
