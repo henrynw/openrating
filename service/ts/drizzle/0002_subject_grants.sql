@@ -12,9 +12,11 @@ CREATE TABLE IF NOT EXISTS subject_grants (
   sport TEXT,
   region_id TEXT,
   permission TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-  UNIQUE(subject_id, organization_id, COALESCE(sport, ''), COALESCE(region_id, ''), permission)
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS subject_grants_unique_idx
+  ON subject_grants (subject_id, organization_id, COALESCE(sport, ''), COALESCE(region_id, ''), permission);
 
 CREATE INDEX IF NOT EXISTS subject_grants_subject_idx
   ON subject_grants (subject_id);
