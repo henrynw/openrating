@@ -11,9 +11,12 @@ export interface LadderKey {
 
 export interface PlayerCreateInput {
   organizationId: string;
+  displayName: string;
+  shortName?: string;
+  nativeName?: string;
   externalRef?: string;
-  givenName: string;
-  familyName: string;
+  givenName?: string;
+  familyName?: string;
   sex?: 'M' | 'F' | 'X';
   birthYear?: number;
   countryCode?: string;
@@ -23,8 +26,11 @@ export interface PlayerCreateInput {
 export interface PlayerRecord {
   playerId: string;
   organizationId: string;
-  givenName: string;
-  familyName: string;
+  displayName: string;
+  shortName?: string;
+  nativeName?: string;
+  givenName?: string;
+  familyName?: string;
   sex?: 'M' | 'F' | 'X';
   birthYear?: number;
   countryCode?: string;

@@ -29,6 +29,9 @@ export class MemoryStore implements RatingStore {
     const record: MemoryPlayerRecord = {
       playerId,
       organizationId: input.organizationId,
+      displayName: input.displayName,
+      shortName: input.shortName,
+      nativeName: input.nativeName,
       givenName: input.givenName,
       familyName: input.familyName,
       sex: input.sex,

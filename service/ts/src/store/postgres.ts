@@ -118,6 +118,9 @@ export class PostgresStore implements RatingStore {
     await this.db.insert(players).values({
       playerId,
       organizationId: input.organizationId,
+      displayName: input.displayName,
+      shortName: input.shortName,
+      nativeName: input.nativeName,
       externalRef: input.externalRef,
       givenName: input.givenName,
       familyName: input.familyName,
@@ -132,6 +135,9 @@ export class PostgresStore implements RatingStore {
     return {
       playerId,
       organizationId: input.organizationId,
+      displayName: input.displayName,
+      shortName: input.shortName,
+      nativeName: input.nativeName,
       givenName: input.givenName,
       familyName: input.familyName,
       sex: input.sex,

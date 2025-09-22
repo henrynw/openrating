@@ -24,9 +24,12 @@ app.get('/health', (_req, res) => res.status(200).send({ ok: true }));
 // ---- players ----
 const PlayerUpsert = z.object({
   organization_id: z.string(),
+  display_name: z.string().min(1),
+  short_name: z.string().optional(),
+  native_name: z.string().optional(),
   external_ref: z.string().optional(),
-  given_name: z.string(),
-  family_name: z.string(),
+  given_name: z.string().optional(),
+  family_name: z.string().optional(),
   sex: z.enum(['M', 'F', 'X']).optional(),
   birth_year: z.number().int().optional(),
   country_code: z.string().optional(),
@@ -43,6 +46,9 @@ app.post('/v1/players', async (req, res) => {
   try {
     const created = await store.createPlayer({
       organizationId: parsed.data.organization_id,
+      displayName: parsed.data.display_name,
+      shortName: parsed.data.short_name,
+      nativeName: parsed.data.native_name,
       externalRef: parsed.data.external_ref,
       givenName: parsed.data.given_name,
       familyName: parsed.data.family_name,
@@ -55,6 +61,9 @@ app.post('/v1/players', async (req, res) => {
     return res.send({
       player_id: created.playerId,
       organization_id: created.organizationId,
+      display_name: created.displayName,
+      short_name: created.shortName,
+      native_name: created.nativeName,
       given_name: created.givenName,
       family_name: created.familyName,
       sex: created.sex,

@@ -83,6 +83,9 @@ export const players = pgTable('players', {
   organizationId: text('organization_id').references(() => organizations.organizationId, {
     onDelete: 'cascade',
   }).notNull(),
+  displayName: text('display_name').notNull(),
+  shortName: text('short_name'),
+  nativeName: text('native_name'),
   externalRef: text('external_ref'),
   givenName: text('given_name'),
   familyName: text('family_name'),
