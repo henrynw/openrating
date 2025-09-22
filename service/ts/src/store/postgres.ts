@@ -26,16 +26,10 @@ import type {
   RatingStore,
   RecordMatchParams,
 } from './types.js';
+import { PlayerLookupError } from './types.js';
 import { buildLadderId, isDefaultRegion, toDbRegionId } from './helpers.js';
 
 const now = () => new Date();
-
-const ensurePlayerShell = (id: string, organizationId: string) => ({
-  playerId: id,
-  organizationId,
-  givenName: 'Unknown',
-  familyName: 'Player',
-});
 
 export class PostgresStore implements RatingStore {
   constructor(private readonly db = getDb()) {}
@@ -179,21 +173,29 @@ export class PostgresStore implements RatingStore {
 
     await this.ensureOrganization(ladderKey.organizationId);
 
-    await this.db
-      .insert(players)
-      .values(
-        ids.map((id) => ({
-          ...ensurePlayerShell(id, ladderKey.organizationId),
-          sex: null,
-          birthYear: null,
-          countryCode: null,
-          regionId: null,
-          externalRef: null,
-          createdAt: now(),
-          updatedAt: now(),
-        }))
-      )
-      .onConflictDoNothing({ target: players.playerId });
+    const playerRows = (await this.db
+      .select({
+        playerId: players.playerId,
+        organizationId: players.organizationId,
+      })
+      .from(players)
+      .where(inArray(players.playerId, ids))) as Array<{ playerId: string; organizationId: string }>;
+
+    const found = new Set(playerRows.map((row) => row.playerId));
+    const missing = ids.filter((id) => !found.has(id));
+    if (missing.length) {
+      throw new PlayerLookupError(`Players not found: ${missing.join(', ')}`, { missing });
+    }
+
+    const wrongOrg = playerRows
+      .filter((row) => row.organizationId !== ladderKey.organizationId)
+      .map((row) => row.playerId);
+    if (wrongOrg.length) {
+      throw new PlayerLookupError(
+        `Players not registered to organization ${ladderKey.organizationId}: ${wrongOrg.join(', ')}`,
+        { wrongOrganization: wrongOrg }
+      );
+    }
 
     await this.db
       .insert(playerRatings)

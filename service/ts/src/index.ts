@@ -7,6 +7,7 @@ import { updateMatch } from './engine/rating.js';
 import { normalizeMatchSubmission } from './formats/index.js';
 import { getStore } from './store/index.js';
 import type { LadderKey } from './store/index.js';
+import { PlayerLookupError } from './store/index.js';
 import { normalizeRegion, normalizeTier } from './store/helpers.js';
 import { AuthorizationError, enforceMatchWrite, requireAuth, requireScope } from './auth.js';
 
@@ -178,6 +179,14 @@ app.post('/v1/matches', requireAuth, requireScope('matches:write'), async (req, 
       })),
     });
   } catch (err) {
+    if (err instanceof PlayerLookupError) {
+      return res.status(400).send({
+        error: 'invalid_players',
+        message: err.message,
+        missing: err.context.missing,
+        wrong_organization: err.context.wrongOrganization,
+      });
+    }
     console.error('match_update_error', err);
     return res.status(500).send({ error: 'internal_error' });
   }

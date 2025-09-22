@@ -78,6 +78,12 @@ npm run grants -- list --subject bwf-provider
 
 The CLI reads credentials from environment variables so provider secrets stay out of git.
 
+
+### Player lifecycle
+- Register players via `POST /v1/players` before submitting matches. The response returns the `player_id` you must use in match payloads.
+- Each player belongs to a single organization; posting a match with a player from another organization results in `invalid_players`.
+- The API no longer auto-creates placeholder players—unknown IDs will be rejected.
+
 ## Project layout
 ```
 openapi/        # OpenAPI spec (API-first)

@@ -9,6 +9,7 @@ import type {
   RatingStore,
   RecordMatchParams,
 } from './types.js';
+import { PlayerLookupError } from './types.js';
 import { buildLadderId } from './helpers.js';
 
 interface MemoryPlayerRecord extends PlayerRecord {
@@ -45,17 +46,18 @@ export class MemoryStore implements RatingStore {
     const ladderId = buildLadderId(ladderKey);
     const playersMap = new Map<string, PlayerState>();
 
+    const missing: string[] = [];
+    const wrongOrg: string[] = [];
+
     for (const id of ids) {
-      let player = this.players.get(id);
+      const player = this.players.get(id);
       if (!player) {
-        player = {
-          playerId: id,
-          organizationId: ladderKey.organizationId,
-          givenName: 'Unknown',
-          familyName: 'Unknown',
-          ratings: new Map(),
-        } as MemoryPlayerRecord;
-        this.players.set(id, player);
+        missing.push(id);
+        continue;
+      }
+      if (player.organizationId !== ladderKey.organizationId) {
+        wrongOrg.push(id);
+        continue;
       }
 
       let rating = player.ratings.get(ladderId);
@@ -69,6 +71,15 @@ export class MemoryStore implements RatingStore {
         player.ratings.set(ladderId, rating);
       }
       playersMap.set(id, rating);
+    }
+
+    if (missing.length || wrongOrg.length) {
+      throw new PlayerLookupError(
+        missing.length
+          ? `Players not found: ${missing.join(', ')}`
+          : `Players not registered to organization ${ladderKey.organizationId}: ${wrongOrg.join(', ')}`,
+        { missing: missing.length ? missing : undefined, wrongOrganization: wrongOrg.length ? wrongOrg : undefined }
+      );
     }
 
     return { ladderId, players: playersMap };

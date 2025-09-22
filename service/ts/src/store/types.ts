@@ -59,3 +59,16 @@ export interface RatingStore {
   recordMatch(params: RecordMatchParams): Promise<{ matchId: string }>;
   getPlayerRating(playerId: string, ladderKey: LadderKey): Promise<PlayerState | null>;
 }
+
+export class PlayerLookupError extends Error {
+  constructor(
+    message: string,
+    public readonly context: {
+      missing?: string[];
+      wrongOrganization?: string[];
+    } = {}
+  ) {
+    super(message);
+    this.name = 'PlayerLookupError';
+  }
+}
