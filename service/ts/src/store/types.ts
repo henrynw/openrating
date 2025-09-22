@@ -64,6 +64,7 @@ export interface MatchGameSummary {
 export interface MatchSummary {
   matchId: string;
   organizationId: string;
+  organizationSlug?: string | null;
   sport: MatchInput['sport'];
   discipline: MatchInput['discipline'];
   format: string;
@@ -89,6 +90,33 @@ export interface MatchListResult {
   items: MatchSummary[];
   nextCursor?: string;
 }
+
+export interface OrganizationCreateInput {
+  name: string;
+  slug?: string;
+  description?: string;
+}
+
+export interface OrganizationRecord {
+  organizationId: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  createdAt?: string;
+}
+
+export interface OrganizationListQuery {
+  cursor?: string;
+  limit?: number;
+  q?: string;
+}
+
+export interface OrganizationListResult {
+  items: OrganizationRecord[];
+  nextCursor?: string;
+}
+
+export type OrganizationIdentifier = { id?: string; slug?: string };
 
 export interface EnsurePlayersResult {
   ladderId: string;
@@ -118,6 +146,10 @@ export interface RatingStore {
   getPlayerRating(playerId: string, ladderKey: LadderKey): Promise<PlayerState | null>;
   listPlayers(query: PlayerListQuery): Promise<PlayerListResult>;
   listMatches(query: MatchListQuery): Promise<MatchListResult>;
+  createOrganization(input: OrganizationCreateInput): Promise<OrganizationRecord>;
+  listOrganizations(query: OrganizationListQuery): Promise<OrganizationListResult>;
+  getOrganizationBySlug(slug: string): Promise<OrganizationRecord | null>;
+  getOrganizationById(id: string): Promise<OrganizationRecord | null>;
 }
 
 export class PlayerLookupError extends Error {
@@ -130,5 +162,12 @@ export class PlayerLookupError extends Error {
   ) {
     super(message);
     this.name = 'PlayerLookupError';
+  }
+}
+
+export class OrganizationLookupError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OrganizationLookupError';
   }
 }

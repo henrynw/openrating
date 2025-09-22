@@ -35,9 +35,13 @@ import {
   MatchSummary,
   MatchGameSummary,
   MatchSideSummary,
+  OrganizationCreateInput,
+  OrganizationListQuery,
+  OrganizationListResult,
+  OrganizationRecord,
+  OrganizationLookupError,
 } from './types.js';
 import { buildLadderId, isDefaultRegion, toDbRegionId } from './helpers.js';
-import { hasOrgPermission } from './grants.js';
 
 const now = () => new Date();
 const DEFAULT_PAGE_SIZE = 50;
@@ -63,19 +67,66 @@ const parseMatchCursor = (cursor: string) => {
   return { startTime: date, matchId: id };
 };
 
+const slugify = (value: string) =>
+  value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '') || randomUUID();
+
 export class PostgresStore implements RatingStore {
   constructor(private readonly db = getDb()) {}
 
-  private async ensureOrganization(id: string, tx = this.db) {
-    await tx
-      .insert(organizations)
-      .values({
-        organizationId: id,
-        name: id,
-        createdAt: now(),
-        updatedAt: now(),
+  private async getOrganizationRowById(id: string) {
+    const rows = await this.db
+      .select({
+        organizationId: organizations.organizationId,
+        name: organizations.name,
+        slug: organizations.slug,
+        description: organizations.description,
+        createdAt: organizations.createdAt,
       })
-      .onConflictDoNothing({ target: organizations.organizationId });
+      .from(organizations)
+      .where(eq(organizations.organizationId, id))
+      .limit(1);
+    return rows.at(0) ?? null;
+  }
+
+  private async getOrganizationRowBySlug(slug: string) {
+    const rows = await this.db
+      .select({
+        organizationId: organizations.organizationId,
+        name: organizations.name,
+        slug: organizations.slug,
+        description: organizations.description,
+        createdAt: organizations.createdAt,
+      })
+      .from(organizations)
+      .where(eq(organizations.slug, slug))
+      .limit(1);
+    return rows.at(0) ?? null;
+  }
+
+  private toOrganizationRecord(row: {
+    organizationId: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    createdAt: Date | null;
+  }): OrganizationRecord {
+    return {
+      organizationId: row.organizationId,
+      name: row.name,
+      slug: row.slug,
+      description: row.description,
+      createdAt: row.createdAt?.toISOString(),
+    };
+  }
+
+  private async assertOrganizationExists(id: string) {
+    const org = await this.getOrganizationRowById(id);
+    if (!org) throw new OrganizationLookupError(`Organization not found: ${id}`);
+    return org;
   }
 
   private async ensureSport(id: string, tx = this.db) {
@@ -104,6 +155,7 @@ export class PostgresStore implements RatingStore {
 
   private async ensureRegion(regionId: string | null | undefined, organizationId: string, tx = this.db) {
     if (!regionId || isDefaultRegion(regionId)) return null;
+    await this.assertOrganizationExists(organizationId);
     await tx
       .insert(regions)
       .values({
@@ -127,6 +179,7 @@ export class PostgresStore implements RatingStore {
     tx = this.db
   ) {
     if (!venueId) return null;
+    await this.assertOrganizationExists(organizationId);
     await tx
       .insert(venues)
       .values({
@@ -142,9 +195,93 @@ export class PostgresStore implements RatingStore {
     return venueId;
   }
 
+  async createOrganization(input: OrganizationCreateInput): Promise<OrganizationRecord> {
+    const organizationId = randomUUID();
+    const slug = (input.slug ?? slugify(input.name)).toLowerCase();
+
+    try {
+      const [row] = await this.db
+        .insert(organizations)
+        .values({
+          organizationId,
+          name: input.name,
+          slug,
+          description: input.description ?? null,
+          createdAt: now(),
+          updatedAt: now(),
+        })
+        .returning({
+          organizationId: organizations.organizationId,
+          name: organizations.name,
+          slug: organizations.slug,
+          description: organizations.description,
+          createdAt: organizations.createdAt,
+        });
+      return this.toOrganizationRecord(row);
+    } catch (err: any) {
+      if (err && typeof err === 'object' && 'code' in err && err.code === '23505') {
+        throw new OrganizationLookupError(`Slug already in use: ${slug}`);
+      }
+      throw err;
+    }
+  }
+
+  async listOrganizations(query: OrganizationListQuery): Promise<OrganizationListResult> {
+    const limit = clampLimit(query.limit);
+    const filters: any[] = [];
+
+    if (query.cursor) {
+      filters.push(sql`${organizations.slug} > ${query.cursor}`);
+    }
+
+    if (query.q) {
+      filters.push(sql`${organizations.name} ILIKE ${`%${query.q}%`}`);
+    }
+
+    const condition = combineFilters(filters);
+
+    const rows = (await this.db
+      .select({
+        organizationId: organizations.organizationId,
+        name: organizations.name,
+        slug: organizations.slug,
+        description: organizations.description,
+        createdAt: organizations.createdAt,
+      })
+      .from(organizations)
+      .where(condition)
+      .orderBy(organizations.slug)
+      .limit(limit + 1)) as Array<{
+      organizationId: string;
+      name: string;
+      slug: string;
+      description: string | null;
+      createdAt: Date | null;
+    }>;
+
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const nextCursor = hasMore && page.length ? page[page.length - 1].slug : undefined;
+
+    return {
+      items: page.map((row) => this.toOrganizationRecord(row)),
+      nextCursor,
+    };
+  }
+
+  async getOrganizationBySlug(slug: string): Promise<OrganizationRecord | null> {
+    const row = await this.getOrganizationRowBySlug(slug);
+    return row ? this.toOrganizationRecord(row) : null;
+  }
+
+  async getOrganizationById(id: string): Promise<OrganizationRecord | null> {
+    const row = await this.getOrganizationRowById(id);
+    return row ? this.toOrganizationRecord(row) : null;
+  }
+
   async createPlayer(input: PlayerCreateInput): Promise<PlayerRecord> {
     const playerId = randomUUID();
-    await this.ensureOrganization(input.organizationId);
+    await this.assertOrganizationExists(input.organizationId);
     const regionId = await this.ensureRegion(input.regionId ?? null, input.organizationId);
 
     await this.db.insert(players).values({
@@ -183,7 +320,7 @@ export class PostgresStore implements RatingStore {
   private async ensureLadder(key: LadderKey) {
     const ladderId = buildLadderId(key);
 
-    await this.ensureOrganization(key.organizationId);
+    await this.assertOrganizationExists(key.organizationId);
     await this.ensureSport(key.sport);
     const regionId = await this.ensureRegion(key.regionId, key.organizationId);
 
@@ -209,7 +346,7 @@ export class PostgresStore implements RatingStore {
     const ladderId = await this.ensureLadder(ladderKey);
     if (ids.length === 0) return { ladderId, players: new Map() };
 
-    await this.ensureOrganization(ladderKey.organizationId);
+    await this.assertOrganizationExists(ladderKey.organizationId);
 
     const playerRows = (await this.db
       .select({
@@ -285,7 +422,7 @@ export class PostgresStore implements RatingStore {
     const movWeight = params.match.movWeight ?? null;
 
     await this.ensureProvider(params.submissionMeta.providerId);
-    await this.ensureOrganization(params.submissionMeta.organizationId);
+    await this.assertOrganizationExists(params.submissionMeta.organizationId);
     await this.ensureSport(params.match.sport);
 
     const ladderRegionId = await this.ensureRegion(params.ladderKey.regionId, params.ladderKey.organizationId);
@@ -416,6 +553,7 @@ export class PostgresStore implements RatingStore {
 
   async listPlayers(query: PlayerListQuery): Promise<PlayerListResult> {
     const limit = clampLimit(query.limit);
+    await this.assertOrganizationExists(query.organizationId);
     const filters: any[] = [eq(players.organizationId, query.organizationId)];
 
     if (query.cursor) {
@@ -428,7 +566,7 @@ export class PostgresStore implements RatingStore {
 
     const condition = combineFilters(filters);
 
-    const rows = (await this.db
+    let playerQuery = this.db
       .select({
         playerId: players.playerId,
         organizationId: players.organizationId,
@@ -444,12 +582,17 @@ export class PostgresStore implements RatingStore {
         externalRef: players.externalRef,
       })
       .from(players)
-      .where(condition)
       .orderBy(players.playerId)
-      .limit(limit + 1)) as Array<{
-        playerId: string;
-        organizationId: string;
-        displayName: string;
+      .limit(limit + 1);
+
+    if (condition) {
+      playerQuery = playerQuery.where(condition);
+    }
+
+    const rows = (await playerQuery) as Array<{
+      playerId: string;
+      organizationId: string;
+      displayName: string;
         shortName: string | null;
         nativeName: string | null;
         givenName: string | null;
@@ -485,6 +628,7 @@ export class PostgresStore implements RatingStore {
 
   async listMatches(query: MatchListQuery): Promise<MatchListResult> {
     const limit = clampLimit(query.limit);
+    await this.assertOrganizationExists(query.organizationId);
     const filters: any[] = [eq(matches.organizationId, query.organizationId)];
 
     if (query.sport) {
@@ -525,7 +669,7 @@ export class PostgresStore implements RatingStore {
 
     const condition = combineFilters(filters);
 
-    const rows = (await this.db
+    let matchQuery = this.db
       .select({
         matchId: matches.matchId,
         organizationId: matches.organizationId,
@@ -538,10 +682,15 @@ export class PostgresStore implements RatingStore {
         regionId: matches.regionId,
       })
       .from(matches)
-      .where(condition)
       .orderBy(desc(matches.startTime), desc(matches.matchId))
-      .limit(limit + 1)) as Array<{
-        matchId: string;
+      .limit(limit + 1);
+
+    if (condition) {
+      matchQuery = matchQuery.where(condition);
+    }
+
+    const rows = (await matchQuery) as Array<{
+      matchId: string;
         organizationId: string;
         sport: string;
         discipline: string;

@@ -11,6 +11,45 @@ paths:
       responses:
         '200':
           description: OK
+  /v1/organizations:
+    post:
+      summary: Create an organization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrganizationCreate'
+      responses:
+        '201':
+          description: Organization created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationResponse'
+    get:
+      summary: List organizations
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+        - in: query
+          name: cursor
+          schema: { type: string }
+        - in: query
+          name: q
+          schema: { type: string }
+      responses:
+        '200':
+          description: Paginated list of organizations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationListResponse'
+
   /v1/players:
     post:
       summary: Create a player
@@ -33,7 +72,12 @@ paths:
         - in: query
           name: organization_id
           schema: { type: string }
-          required: true
+          required: false
+          description: 'UUID of the organization (optional if organization_slug provided)'
+        - in: query
+          name: organization_slug
+          schema: { type: string }
+          description: 'Slug identifier for the organization'
         - in: query
           name: limit
           schema:
@@ -80,7 +124,12 @@ paths:
         - in: query
           name: organization_id
           schema: { type: string }
-          required: true
+          required: false
+          description: 'UUID of the organization (optional if organization_slug provided)'
+        - in: query
+          name: organization_slug
+          schema: { type: string }
+          description: 'Slug identifier for the organization'
         - in: query
           name: sport
           schema: { type: string }
@@ -113,9 +162,10 @@ components:
   schemas:
     PlayerUpsert:
       type: object
-      required: [organization_id, display_name]
+      required: [display_name]
       properties:
-        organization_id: { type: string }
+        organization_id: { type: string, description: 'UUID of the organization' }
+        organization_slug: { type: string, description: 'Slug identifier (alternative to organization_id)' }
         display_name: { type: string }
         short_name: { type: string }
         native_name: { type: string }
@@ -131,6 +181,7 @@ components:
       properties:
         player_id: { type: string }
         organization_id: { type: string }
+        organization_slug: { type: string, nullable: true }
         display_name: { type: string }
         short_name: { type: string, nullable: true }
         native_name: { type: string, nullable: true }
@@ -151,10 +202,11 @@ components:
         next_cursor: { type: string, nullable: true }
     MatchSubmit:
       type: object
-      required: [provider_id, organization_id, discipline, format, start_time, sides, games]
+      required: [provider_id, discipline, format, start_time, sides, games]
       properties:
         provider_id: { type: string }
-        organization_id: { type: string }
+        organization_id: { type: string, description: 'UUID of the organization' }
+        organization_slug: { type: string, description: 'Slug identifier (alternative to organization_id)' }
         discipline: { type: string, enum: [SINGLES, DOUBLES, MIXED] }
         format: { type: string, example: BO3_21RALLY }
         start_time: { type: string, format: date-time }
@@ -191,6 +243,8 @@ components:
       type: object
       properties:
         match_id: { type: string }
+        organization_id: { type: string }
+        organization_slug: { type: string, nullable: true }
         ratings:
           type: array
           items:
@@ -210,11 +264,35 @@ components:
           items:
             $ref: '#/components/schemas/MatchSummary'
         next_cursor: { type: string, nullable: true }
+    OrganizationCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        slug: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+    OrganizationResponse:
+      type: object
+      properties:
+        organization_id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string, nullable: true }
+        created_at: { type: string, format: date-time, nullable: true }
+    OrganizationListResponse:
+      type: object
+      properties:
+        organizations:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrganizationResponse'
+        next_cursor: { type: string, nullable: true }
     MatchSummary:
       type: object
       properties:
         match_id: { type: string }
         organization_id: { type: string }
+        organization_slug: { type: string, nullable: true }
         sport: { $ref: '#/components/schemas/MatchSubmit/properties/sport' }
         discipline: { $ref: '#/components/schemas/MatchSubmit/properties/discipline' }
         format: { type: string }

@@ -14,8 +14,12 @@ import type {
   MatchListResult,
   MatchSummary,
   MatchGameSummary,
+  OrganizationCreateInput,
+  OrganizationListQuery,
+  OrganizationListResult,
+  OrganizationRecord,
 } from './types.js';
-import { PlayerLookupError } from './types.js';
+import { PlayerLookupError, OrganizationLookupError } from './types.js';
 import { buildLadderId } from './helpers.js';
 
 interface MemoryPlayerRecord extends PlayerRecord {
@@ -29,6 +33,13 @@ const clampLimit = (limit?: number) => {
   if (!limit || limit < 1) return DEFAULT_PAGE_SIZE;
   return Math.min(limit, MAX_PAGE_SIZE);
 };
+
+const slugify = (value: string) =>
+  value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '') || randomUUID();
 
 const buildMatchCursor = (startTime: Date, matchId: string) => `${startTime.toISOString()}|${matchId}`;
 
@@ -80,6 +91,8 @@ const paginatePlayers = (
 };
 
 export class MemoryStore implements RatingStore {
+  private organizations = new Map<string, OrganizationRecord>();
+  private organizationsBySlug = new Map<string, string>();
   private players = new Map<string, MemoryPlayerRecord>();
   private matches: Array<{
     matchId: string;
@@ -97,6 +110,7 @@ export class MemoryStore implements RatingStore {
 
   async createPlayer(input: PlayerCreateInput): Promise<PlayerRecord> {
     const playerId = randomUUID();
+    this.assertOrganizationExists(input.organizationId);
     const record: MemoryPlayerRecord = {
       playerId,
       organizationId: input.organizationId,
@@ -118,6 +132,7 @@ export class MemoryStore implements RatingStore {
 
   async ensurePlayers(ids: string[], ladderKey: LadderKey): Promise<EnsurePlayersResult> {
     const ladderId = buildLadderId(ladderKey);
+    this.assertOrganizationExists(ladderKey.organizationId);
     const playersMap = new Map<string, PlayerState>();
 
     const missing: string[] = [];
@@ -161,6 +176,7 @@ export class MemoryStore implements RatingStore {
 
   async recordMatch(params: RecordMatchParams): Promise<{ matchId: string }> {
     const matchId = randomUUID();
+    this.assertOrganizationExists(params.ladderKey.organizationId);
     this.matches.push({
       matchId,
       match: params.match,
@@ -186,6 +202,7 @@ export class MemoryStore implements RatingStore {
 
   async listPlayers(query: PlayerListQuery): Promise<PlayerListResult> {
     const limit = clampLimit(query.limit);
+    this.assertOrganizationExists(query.organizationId);
     let players = Array.from(this.players.values()).filter((player) => player.organizationId === query.organizationId);
 
     if (query.q) {
@@ -203,6 +220,7 @@ export class MemoryStore implements RatingStore {
 
   async listMatches(query: MatchListQuery): Promise<MatchListResult> {
     const limit = clampLimit(query.limit);
+    this.assertOrganizationExists(query.organizationId);
     let matches = this.matches.filter((entry) => entry.organizationId === query.organizationId);
 
     if (query.sport) {
@@ -269,5 +287,59 @@ export class MemoryStore implements RatingStore {
     }));
 
     return { items, nextCursor };
+  }
+
+  async createOrganization(input: OrganizationCreateInput): Promise<OrganizationRecord> {
+    const organizationId = randomUUID();
+    const slug = (input.slug ?? slugify(input.name)).toLowerCase();
+    if (this.organizationsBySlug.has(slug)) {
+      throw new OrganizationLookupError(`Slug already in use: ${slug}`);
+    }
+    const record: OrganizationRecord = {
+      organizationId,
+      name: input.name,
+      slug,
+      description: input.description ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    this.organizations.set(organizationId, record);
+    this.organizationsBySlug.set(slug, organizationId);
+    return record;
+  }
+
+  async listOrganizations(query: OrganizationListQuery): Promise<OrganizationListResult> {
+    const limit = clampLimit(query.limit);
+    let orgs = Array.from(this.organizations.values());
+    if (query.q) {
+      const lower = query.q.toLowerCase();
+      orgs = orgs.filter((org) => org.name.toLowerCase().includes(lower) || org.slug.includes(lower));
+    }
+    orgs.sort((a, b) => a.slug.localeCompare(b.slug));
+    let startIndex = 0;
+    if (query.cursor) {
+      startIndex = orgs.findIndex((org) => org.slug > query.cursor!);
+      if (startIndex === -1) return { items: [], nextCursor: undefined };
+    }
+    const slice = orgs.slice(startIndex, startIndex + limit);
+    const nextCursor = orgs.length > startIndex + slice.length && slice.length
+      ? slice[slice.length - 1].slug
+      : undefined;
+    return { items: slice, nextCursor };
+  }
+
+  async getOrganizationBySlug(slug: string): Promise<OrganizationRecord | null> {
+    const id = this.organizationsBySlug.get(slug);
+    if (!id) return null;
+    return this.organizations.get(id) ?? null;
+  }
+
+  async getOrganizationById(id: string): Promise<OrganizationRecord | null> {
+    return this.organizations.get(id) ?? null;
+  }
+
+  private assertOrganizationExists(id: string) {
+    if (!this.organizations.has(id)) {
+      throw new OrganizationLookupError(`Organization not found: ${id}`);
+    }
   }
 }

@@ -2,17 +2,20 @@
 import 'dotenv/config';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import { eq } from 'drizzle-orm';
 import { ensureSubject, loadGrants } from '../src/store/grants.js';
 import { getDb, getPool } from '../src/db/client.js';
-import { subjectGrants } from '../src/db/schema.js';
+import { subjectGrants, organizations } from '../src/db/schema.js';
 
 const DEFAULT_REGION = 'GLOBAL';
 
 type CommandHandler = (argv: any) => Promise<void>;
 
+const isUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
 const addHandler: CommandHandler = async (argv) => {
   const subjectId = argv.subject as string;
-  const organizationId = argv.org as string;
+  let organizationId = argv.org as string;
   const permission = argv.permission as string;
   const sport = (argv.sport as string | undefined) ?? null;
   const region = (argv.region as string | undefined) ?? DEFAULT_REGION;
@@ -21,6 +24,20 @@ const addHandler: CommandHandler = async (argv) => {
   await ensureSubject(subjectId, displayName);
 
   const db = getDb();
+  if (!isUuid(organizationId)) {
+    const slug = organizationId.toLowerCase();
+    const rows = await db
+      .select({ organizationId: organizations.organizationId })
+      .from(organizations)
+      .where(eq(organizations.slug, slug))
+      .limit(1);
+    const row = rows.at(0);
+    if (!row) {
+      throw new Error(`Organization slug not found: ${slug}`);
+    }
+    organizationId = row.organizationId;
+  }
+
   await db
     .insert(subjectGrants)
     .values({
@@ -67,7 +84,7 @@ async function main() {
           .option('region', { type: 'string', default: DEFAULT_REGION, desc: 'Region ID (default GLOBAL)' })
           .option('permission', {
             type: 'string',
-            choices: ['matches:write', 'matches:read', 'ratings:read', 'players:read'],
+            choices: ['matches:write', 'matches:read', 'ratings:read', 'players:read', 'organizations:write', 'organizations:read'],
             demandOption: true,
             desc: 'Permission to grant',
           }),

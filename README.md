@@ -79,13 +79,17 @@ npm run grants -- list --subject bwf-provider
 The CLI reads credentials from environment variables so provider secrets stay out of git.
 
 ### Listing data
-- `GET /v1/players`: paginated list filtered by `organization_id`, optional `q`, `limit`, and `cursor`. Returns `next_cursor` for continue tokens.
-- `GET /v1/matches`: paginated list filtered by `organization_id` with optional `sport`, `player_id`, `start_after`, `start_before`, `cursor`, and `limit`.
+- `POST /v1/organizations`: create a new organization (returns the canonical UUID).
+- `GET /v1/organizations`: search/paginate organizations by name or slug.
+- `GET /v1/players`: paginated list filtered by `organization_id` or `organization_slug`, optional `q`, `limit`, and `cursor`. Returns `next_cursor` for continue tokens.
+- `GET /v1/matches`: paginated list filtered by `organization_id` or `organization_slug` with optional `sport`, `player_id`, `start_after`, `start_before`, `cursor`, and `limit`.
 
 Players must be registered in advance—match submissions referencing unknown or cross-organization player IDs return `invalid_players`.
 
 
 ### Player lifecycle
+- Create organizations first via `POST /v1/organizations` to receive the canonical `organization_id` (UUID). Use `GET /v1/organizations` to search by name/slug.
+- All match and player requests now accept either `organization_id` or `organization_slug`; the API resolves slugs to IDs internally.
 - Register players via `POST /v1/players` before submitting matches. The response returns the `player_id` you must use in match payloads.
 - Each player belongs to a single organization; posting a match with a player from another organization results in `invalid_players`.
 - The API no longer auto-creates placeholder players—unknown IDs will be rejected.
