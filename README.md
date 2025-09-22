@@ -60,6 +60,24 @@ Provide `aws_region`, `container_image`, and `db_password` (or wire Secrets Mana
   - Leave `AUTH_DISABLE` unset in production; set `AUTH_DISABLE=1` locally to bypass auth.
 - Seed `subjects` and `subject_grants` tables with the org/sport permissions your callers need.  The API auto-creates a `subjects` row the first time a new Auth0 `sub` appears.
 
+### Grant management CLI
+```bash
+cd service/ts
+# Add/ensure a grant (example for BWF)
+npm run grants -- add \
+  --subject bwf-provider \
+  --name "BWF Provider" \
+  --org BWF \
+  --sport BADMINTON \
+  --region GLOBAL \
+  --permission matches:write
+
+# List grants
+npm run grants -- list --subject bwf-provider
+```
+
+The CLI reads credentials from environment variables so provider secrets stay out of git.
+
 ## Project layout
 ```
 openapi/        # OpenAPI spec (API-first)
