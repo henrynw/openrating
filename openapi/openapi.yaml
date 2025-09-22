@@ -13,7 +13,7 @@ paths:
           description: OK
   /v1/players:
     post:
-      summary: Create or upsert a player
+      summary: Create a player
       requestBody:
         required: true
         content:
@@ -22,7 +22,37 @@ paths:
               $ref: '#/components/schemas/PlayerUpsert'
       responses:
         '200':
-          description: Player created or updated
+          description: Player created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerResponse'
+    get:
+      summary: List players for an organization
+      parameters:
+        - in: query
+          name: organization_id
+          schema: { type: string }
+          required: true
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+        - in: query
+          name: cursor
+          schema: { type: string }
+        - in: query
+          name: q
+          schema: { type: string }
+      responses:
+        '200':
+          description: Paginated list of players
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerListResponse'
   /v1/matches:
     post:
       summary: Submit a match result and update ratings
@@ -40,13 +70,55 @@ paths:
       responses:
         '200':
           description: Match processed with rating deltas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchSubmitResponse'
+    get:
+      summary: List matches for an organization
+      parameters:
+        - in: query
+          name: organization_id
+          schema: { type: string }
+          required: true
+        - in: query
+          name: sport
+          schema: { type: string }
+        - in: query
+          name: player_id
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+        - in: query
+          name: cursor
+          schema: { type: string }
+        - in: query
+          name: start_after
+          schema: { type: string, format: date-time }
+        - in: query
+          name: start_before
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Paginated list of matches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchListResponse'
 components:
   schemas:
     PlayerUpsert:
       type: object
-      required: [organization_id, given_name, family_name]
+      required: [organization_id, display_name]
       properties:
         organization_id: { type: string }
+        display_name: { type: string }
+        short_name: { type: string }
+        native_name: { type: string }
         external_ref: { type: string }
         given_name: { type: string }
         family_name: { type: string }
@@ -54,6 +126,29 @@ components:
         birth_year: { type: integer }
         country_code: { type: string }
         region_id: { type: string }
+    PlayerResponse:
+      type: object
+      properties:
+        player_id: { type: string }
+        organization_id: { type: string }
+        display_name: { type: string }
+        short_name: { type: string, nullable: true }
+        native_name: { type: string, nullable: true }
+        given_name: { type: string, nullable: true }
+        family_name: { type: string, nullable: true }
+        sex: { type: string, enum: [M, F, X], nullable: true }
+        birth_year: { type: integer, nullable: true }
+        country_code: { type: string, nullable: true }
+        region_id: { type: string, nullable: true }
+        external_ref: { type: string, nullable: true }
+    PlayerListResponse:
+      type: object
+      properties:
+        players:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlayerResponse'
+        next_cursor: { type: string, nullable: true }
     MatchSubmit:
       type: object
       required: [provider_id, organization_id, discipline, format, start_time, sides, games]
@@ -84,6 +179,57 @@ components:
                   minItems: 1
                   maxItems: 2
                   items: { type: string }
+        games:
+          type: array
+          items:
+            type: object
+            properties:
+              game_no: { type: integer }
+              a: { type: integer }
+              b: { type: integer }
+    MatchSubmitResponse:
+      type: object
+      properties:
+        match_id: { type: string }
+        ratings:
+          type: array
+          items:
+            type: object
+            properties:
+              player_id: { type: string }
+              mu_before: { type: number }
+              mu_after: { type: number }
+              delta: { type: number }
+              sigma_after: { type: number }
+              win_probability_pre: { type: number }
+    MatchListResponse:
+      type: object
+      properties:
+        matches:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchSummary'
+        next_cursor: { type: string, nullable: true }
+    MatchSummary:
+      type: object
+      properties:
+        match_id: { type: string }
+        organization_id: { type: string }
+        sport: { $ref: '#/components/schemas/MatchSubmit/properties/sport' }
+        discipline: { $ref: '#/components/schemas/MatchSubmit/properties/discipline' }
+        format: { type: string }
+        tier: { type: string, nullable: true }
+        start_time: { type: string, format: date-time }
+        venue_id: { type: string, nullable: true }
+        region_id: { type: string, nullable: true }
+        sides:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              players:
+                type: array
+                items: { type: string }
         games:
           type: array
           items:
