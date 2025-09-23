@@ -7,12 +7,14 @@ servers:
 paths:
   /health:
     get:
+      tags: [Health]
       summary: Liveness probe
       responses:
         '200':
           description: OK
   /v1/organizations:
     post:
+      tags: [Organizations]
       summary: Create an organization
       requestBody:
         required: true
@@ -28,6 +30,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/OrganizationResponse'
     get:
+      tags: [Organizations]
       summary: List organizations
       parameters:
         - in: query
@@ -52,6 +55,7 @@ paths:
 
   /v1/organizations/{organization_id}:
     patch:
+      tags: [Organizations]
       summary: Update an organization
       parameters:
         - in: path
@@ -78,6 +82,7 @@ paths:
 
   /v1/players:
     post:
+      tags: [Players]
       summary: Create a player
       requestBody:
         required: true
@@ -93,6 +98,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/PlayerResponse'
     get:
+      tags: [Players]
       summary: List players for an organization
       parameters:
         - in: query
@@ -125,6 +131,7 @@ paths:
                 $ref: '#/components/schemas/PlayerListResponse'
   /v1/players/{player_id}:
     patch:
+      tags: [Players]
       summary: Update a player
       parameters:
         - in: path
@@ -149,6 +156,7 @@ paths:
 
   /v1/matches:
     post:
+      tags: [Matches]
       summary: Submit a match result and update ratings
       parameters:
         - in: header
@@ -169,6 +177,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/MatchSubmitResponse'
     get:
+      tags: [Matches]
       summary: List matches for an organization
       parameters:
         - in: query
@@ -211,6 +220,7 @@ paths:
 
   /v1/matches/{match_id}:
     patch:
+      tags: [Matches]
       summary: Update match metadata
       parameters:
         - in: path
