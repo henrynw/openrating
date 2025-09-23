@@ -593,7 +593,7 @@ app.patch('/v1/matches/:match_id', requireAuth, requireScope('matches:write'), a
     if (parsed.data.venue_id !== undefined) updateInput.venueId = parsed.data.venue_id;
     if (parsed.data.venue_region_id !== undefined) {
       updateInput.regionId = parsed.data.venue_region_id === null
-        ? normalizeRegion(null)
+        ? null
         : normalizeRegion(parsed.data.venue_region_id);
     }
 

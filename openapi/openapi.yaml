@@ -204,10 +204,10 @@ paths:
       responses:
         '200':
           description: Paginated list of matches
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/MatchListResponse'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchListResponse'
 
   /v1/matches/{match_id}:
     patch:
