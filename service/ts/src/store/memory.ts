@@ -5,6 +5,7 @@ import type {
   EnsurePlayersResult,
   LadderKey,
   PlayerCreateInput,
+  PlayerUpdateInput,
   PlayerRecord,
   RatingStore,
   RecordMatchParams,
@@ -14,12 +15,14 @@ import type {
   MatchListResult,
   MatchSummary,
   MatchGameSummary,
+  MatchUpdateInput,
   OrganizationCreateInput,
+  OrganizationUpdateInput,
   OrganizationListQuery,
   OrganizationListResult,
   OrganizationRecord,
 } from './types.js';
-import { PlayerLookupError, OrganizationLookupError } from './types.js';
+import { PlayerLookupError, OrganizationLookupError, MatchLookupError } from './types.js';
 import { buildLadderId } from './helpers.js';
 
 interface MemoryPlayerRecord extends PlayerRecord {
@@ -130,6 +133,32 @@ export class MemoryStore implements RatingStore {
     return record;
   }
 
+  async updatePlayer(playerId: string, organizationId: string, input: PlayerUpdateInput): Promise<PlayerRecord> {
+    const player = this.players.get(playerId);
+    if (!player) {
+      throw new PlayerLookupError(`Player not found: ${playerId}`, { missing: [playerId] });
+    }
+    if (player.organizationId !== organizationId) {
+      throw new PlayerLookupError(
+        `Player not registered to organization ${organizationId}: ${playerId}`,
+        { wrongOrganization: [playerId] }
+      );
+    }
+
+    if (input.displayName !== undefined) player.displayName = input.displayName;
+    if (input.shortName !== undefined) player.shortName = input.shortName ?? undefined;
+    if (input.nativeName !== undefined) player.nativeName = input.nativeName ?? undefined;
+    if (input.externalRef !== undefined) player.externalRef = input.externalRef ?? undefined;
+    if (input.givenName !== undefined) player.givenName = input.givenName ?? undefined;
+    if (input.familyName !== undefined) player.familyName = input.familyName ?? undefined;
+    if (input.sex !== undefined) player.sex = (input.sex ?? undefined) as MemoryPlayerRecord['sex'];
+    if (input.birthYear !== undefined) player.birthYear = input.birthYear ?? undefined;
+    if (input.countryCode !== undefined) player.countryCode = input.countryCode ?? undefined;
+    if (input.regionId !== undefined) player.regionId = input.regionId ?? undefined;
+
+    return toPlayerRecord(player);
+  }
+
   async ensurePlayers(ids: string[], ladderKey: LadderKey): Promise<EnsurePlayersResult> {
     const ladderId = buildLadderId(ladderKey);
     this.assertOrganizationExists(ladderKey.organizationId);
@@ -191,6 +220,49 @@ export class MemoryStore implements RatingStore {
       regionId: params.submissionMeta.regionId ?? null,
     });
     return { matchId };
+  }
+
+  async updateMatch(matchId: string, organizationId: string, input: MatchUpdateInput): Promise<MatchSummary> {
+    const match = this.matches.find((entry) => entry.matchId === matchId);
+    if (!match) {
+      throw new MatchLookupError(`Match not found: ${matchId}`);
+    }
+    if (match.organizationId !== organizationId) {
+      throw new MatchLookupError(`Match does not belong to organization ${organizationId}`);
+    }
+
+    if (input.startTime !== undefined) {
+      const date = new Date(input.startTime);
+      if (Number.isNaN(date.getTime())) {
+        throw new MatchLookupError('Invalid start time provided');
+      }
+      match.startTime = date;
+    }
+
+    if (input.venueId !== undefined) {
+      match.venueId = input.venueId ?? null;
+    }
+
+    if (input.regionId !== undefined) {
+      match.regionId = input.regionId ?? null;
+    }
+
+    return {
+      matchId: match.matchId,
+      organizationId: match.organizationId,
+      sport: match.sport,
+      discipline: match.discipline,
+      format: match.format,
+      tier: match.tier,
+      startTime: match.startTime.toISOString(),
+      venueId: match.venueId ?? null,
+      regionId: match.regionId ?? null,
+      sides: ['A', 'B'].map((side) => ({
+        side: side as 'A' | 'B',
+        players: match.match.sides[side as 'A' | 'B'].players,
+      })),
+      games: match.match.games.map((g) => ({ gameNo: g.game_no, a: g.a, b: g.b })),
+    } satisfies MatchSummary;
   }
 
   async getPlayerRating(playerId: string, ladderKey: LadderKey): Promise<PlayerState | null> {
@@ -305,6 +377,39 @@ export class MemoryStore implements RatingStore {
     this.organizations.set(organizationId, record);
     this.organizationsBySlug.set(slug, organizationId);
     return record;
+  }
+
+  async updateOrganization(organizationId: string, input: OrganizationUpdateInput): Promise<OrganizationRecord> {
+    const record = this.organizations.get(organizationId);
+    if (!record) {
+      throw new OrganizationLookupError(`Organization not found: ${organizationId}`);
+    }
+
+    let currentSlug = record.slug;
+
+    if (input.slug !== undefined) {
+      const nextSlug = input.slug.toLowerCase();
+      if (nextSlug !== currentSlug) {
+        if (this.organizationsBySlug.has(nextSlug)) {
+          throw new OrganizationLookupError(`Slug already in use: ${nextSlug}`);
+        }
+        this.organizationsBySlug.delete(currentSlug);
+        this.organizationsBySlug.set(nextSlug, organizationId);
+        currentSlug = nextSlug;
+      }
+    }
+
+    if (input.name !== undefined) {
+      record.name = input.name;
+    }
+    if (input.description !== undefined) {
+      record.description = input.description;
+    }
+    if (input.slug !== undefined) {
+      record.slug = currentSlug;
+    }
+
+    return { ...record, slug: currentSlug } satisfies OrganizationRecord;
   }
 
   async listOrganizations(query: OrganizationListQuery): Promise<OrganizationListResult> {

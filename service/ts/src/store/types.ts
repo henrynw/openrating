@@ -23,6 +23,19 @@ export interface PlayerCreateInput {
   regionId?: string;
 }
 
+export interface PlayerUpdateInput {
+  displayName?: string;
+  shortName?: string | null;
+  nativeName?: string | null;
+  externalRef?: string | null;
+  givenName?: string | null;
+  familyName?: string | null;
+  sex?: 'M' | 'F' | 'X' | null;
+  birthYear?: number | null;
+  countryCode?: string | null;
+  regionId?: string | null;
+}
+
 export interface PlayerRecord {
   playerId: string;
   organizationId: string;
@@ -91,10 +104,22 @@ export interface MatchListResult {
   nextCursor?: string;
 }
 
+export interface MatchUpdateInput {
+  startTime?: string;
+  venueId?: string | null;
+  regionId?: string | null;
+}
+
 export interface OrganizationCreateInput {
   name: string;
   slug?: string;
   description?: string;
+}
+
+export interface OrganizationUpdateInput {
+  name?: string;
+  slug?: string;
+  description?: string | null;
 }
 
 export interface OrganizationRecord {
@@ -141,12 +166,15 @@ export interface RecordMatchParams {
 
 export interface RatingStore {
   createPlayer(input: PlayerCreateInput): Promise<PlayerRecord>;
+  updatePlayer(playerId: string, organizationId: string, input: PlayerUpdateInput): Promise<PlayerRecord>;
   ensurePlayers(ids: string[], ladderKey: LadderKey): Promise<EnsurePlayersResult>;
   recordMatch(params: RecordMatchParams): Promise<{ matchId: string }>;
+  updateMatch(matchId: string, organizationId: string, input: MatchUpdateInput): Promise<MatchSummary>;
   getPlayerRating(playerId: string, ladderKey: LadderKey): Promise<PlayerState | null>;
   listPlayers(query: PlayerListQuery): Promise<PlayerListResult>;
   listMatches(query: MatchListQuery): Promise<MatchListResult>;
   createOrganization(input: OrganizationCreateInput): Promise<OrganizationRecord>;
+  updateOrganization(organizationId: string, input: OrganizationUpdateInput): Promise<OrganizationRecord>;
   listOrganizations(query: OrganizationListQuery): Promise<OrganizationListResult>;
   getOrganizationBySlug(slug: string): Promise<OrganizationRecord | null>;
   getOrganizationById(id: string): Promise<OrganizationRecord | null>;
@@ -169,5 +197,12 @@ export class OrganizationLookupError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'OrganizationLookupError';
+  }
+}
+
+export class MatchLookupError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MatchLookupError';
   }
 }

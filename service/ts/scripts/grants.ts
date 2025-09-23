@@ -84,7 +84,7 @@ async function main() {
           .option('region', { type: 'string', default: DEFAULT_REGION, desc: 'Region ID (default GLOBAL)' })
           .option('permission', {
             type: 'string',
-            choices: ['matches:write', 'matches:read', 'ratings:read', 'players:read', 'organizations:write', 'organizations:read'],
+            choices: ['matches:write', 'matches:read', 'ratings:read', 'players:read', 'players:write', 'organizations:write', 'organizations:read'],
             demandOption: true,
             desc: 'Permission to grant',
           }),

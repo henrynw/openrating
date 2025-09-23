@@ -6,8 +6,8 @@ import dotenv from 'dotenv';
 import { updateMatch } from './engine/rating.js';
 import { normalizeMatchSubmission } from './formats/index.js';
 import { getStore } from './store/index.js';
-import type { LadderKey } from './store/index.js';
-import { PlayerLookupError, OrganizationLookupError } from './store/index.js';
+import type { LadderKey, OrganizationUpdateInput, PlayerUpdateInput, MatchUpdateInput } from './store/index.js';
+import { PlayerLookupError, OrganizationLookupError, MatchLookupError } from './store/index.js';
 import { normalizeRegion, normalizeTier } from './store/helpers.js';
 import { AuthorizationError, authorizeOrgAccess, enforceMatchWrite, hasScope, requireAuth, requireScope } from './auth.js';
 
@@ -53,6 +53,17 @@ const OrganizationListQuery = z.object({
   cursor: z.string().optional(),
   q: z.string().optional(),
 });
+
+const OrganizationUpdate = z
+  .object({
+    name: z.string().min(1).optional(),
+    slug: z.string().min(1).optional(),
+    description: z.string().nullable().optional(),
+  })
+  .refine((data) => data.name !== undefined || data.slug !== undefined || data.description !== undefined, {
+    message: 'At least one field is required',
+    path: ['name'],
+  });
 
 app.post('/v1/organizations', requireAuth, requireScope('organizations:write'), async (req, res) => {
   const parsed = OrganizationCreate.safeParse(req.body);
@@ -105,6 +116,54 @@ app.get('/v1/organizations', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('organizations_list_error', err);
+    return res.status(500).send({ error: 'internal_error' });
+  }
+});
+
+app.patch('/v1/organizations/:organization_id', requireAuth, requireScope('organizations:write'), async (req, res) => {
+  const parsed = OrganizationUpdate.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+  }
+
+  const organizationId = req.params.organization_id;
+
+  try {
+    const existing = await store.getOrganizationById(organizationId);
+    if (!existing) {
+      return res.status(404).send({ error: 'organization_not_found', message: 'Organization not found' });
+    }
+
+    await authorizeOrgAccess(req, organizationId, {
+      permissions: ['organizations:write'],
+      errorCode: 'organizations_update_denied',
+      errorMessage: 'Insufficient grants for organizations:write',
+    });
+
+    const updateInput: OrganizationUpdateInput = {};
+    if (parsed.data.name !== undefined) updateInput.name = parsed.data.name;
+    if (parsed.data.slug !== undefined) updateInput.slug = parsed.data.slug;
+    if (parsed.data.description !== undefined) updateInput.description = parsed.data.description;
+
+    const updated = await store.updateOrganization(organizationId, updateInput);
+
+    return res.send({
+      organization_id: updated.organizationId,
+      name: updated.name,
+      slug: updated.slug,
+      description: updated.description ?? null,
+    });
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      return res.status(err.status).send({ error: err.code, message: err.message });
+    }
+    if (err instanceof OrganizationLookupError) {
+      if (err.message.startsWith('Slug already in use')) {
+        return res.status(409).send({ error: 'duplicate_slug', message: err.message });
+      }
+      return res.status(404).send({ error: 'organization_not_found', message: err.message });
+    }
+    console.error('organization_update_error', err);
     return res.status(500).send({ error: 'internal_error' });
   }
 });
@@ -194,6 +253,43 @@ const PlayerListQuery = z
     path: ['organization_id'],
   });
 
+const PlayerUpdate = z
+  .object({
+    organization_id: z.string().uuid().optional(),
+    organization_slug: z.string().optional(),
+    display_name: z.string().min(1).optional(),
+    short_name: z.string().nullable().optional(),
+    native_name: z.string().nullable().optional(),
+    external_ref: z.string().nullable().optional(),
+    given_name: z.string().nullable().optional(),
+    family_name: z.string().nullable().optional(),
+    sex: z.enum(['M', 'F', 'X']).nullable().optional(),
+    birth_year: z.number().int().nullable().optional(),
+    country_code: z.string().nullable().optional(),
+    region_id: z.string().nullable().optional(),
+  })
+  .refine((data) => data.organization_id || data.organization_slug, {
+    message: 'organization_id or organization_slug is required',
+    path: ['organization_id'],
+  })
+  .refine(
+    (data) =>
+      data.display_name !== undefined ||
+      data.short_name !== undefined ||
+      data.native_name !== undefined ||
+      data.external_ref !== undefined ||
+      data.given_name !== undefined ||
+      data.family_name !== undefined ||
+      data.sex !== undefined ||
+      data.birth_year !== undefined ||
+      data.country_code !== undefined ||
+      data.region_id !== undefined,
+    {
+      message: 'At least one field is required',
+      path: ['display_name'],
+    }
+  );
+
 app.get('/v1/players', requireAuth, async (req, res) => {
   const parsed = PlayerListQuery.safeParse(req.query);
   if (!parsed.success)
@@ -244,6 +340,74 @@ app.get('/v1/players', requireAuth, async (req, res) => {
   }
 });
 
+app.patch('/v1/players/:player_id', requireAuth, requireScope('matches:write'), async (req, res) => {
+  const parsed = PlayerUpdate.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+  }
+
+  try {
+    const organization = await resolveOrganizationIdentifier({
+      organization_id: parsed.data.organization_id,
+      organization_slug: parsed.data.organization_slug,
+    });
+
+    await authorizeOrgAccess(req, organization.organizationId, {
+      permissions: ['players:write', 'matches:write'],
+      errorCode: 'players_update_denied',
+      errorMessage: 'Insufficient grants for players:write',
+    });
+
+    const updateInput: PlayerUpdateInput = {};
+    if (parsed.data.display_name !== undefined) updateInput.displayName = parsed.data.display_name;
+    if (parsed.data.short_name !== undefined) updateInput.shortName = parsed.data.short_name;
+    if (parsed.data.native_name !== undefined) updateInput.nativeName = parsed.data.native_name;
+    if (parsed.data.external_ref !== undefined) updateInput.externalRef = parsed.data.external_ref;
+    if (parsed.data.given_name !== undefined) updateInput.givenName = parsed.data.given_name;
+    if (parsed.data.family_name !== undefined) updateInput.familyName = parsed.data.family_name;
+    if (parsed.data.sex !== undefined) updateInput.sex = parsed.data.sex;
+    if (parsed.data.birth_year !== undefined) updateInput.birthYear = parsed.data.birth_year;
+    if (parsed.data.country_code !== undefined) updateInput.countryCode = parsed.data.country_code;
+    if (parsed.data.region_id !== undefined) updateInput.regionId = parsed.data.region_id;
+
+    const updated = await store.updatePlayer(req.params.player_id, organization.organizationId, updateInput);
+
+    return res.send({
+      player_id: updated.playerId,
+      organization_id: updated.organizationId,
+      organization_slug: organization.slug,
+      display_name: updated.displayName,
+      short_name: updated.shortName ?? null,
+      native_name: updated.nativeName ?? null,
+      given_name: updated.givenName ?? null,
+      family_name: updated.familyName ?? null,
+      sex: updated.sex ?? null,
+      birth_year: updated.birthYear ?? null,
+      country_code: updated.countryCode ?? null,
+      region_id: updated.regionId ?? null,
+      external_ref: updated.externalRef ?? null,
+    });
+  } catch (err) {
+    if (err instanceof OrganizationLookupError) {
+      return res.status(400).send({ error: 'invalid_organization', message: err.message });
+    }
+    if (err instanceof AuthorizationError) {
+      return res.status(err.status).send({ error: err.code, message: err.message });
+    }
+    if (err instanceof PlayerLookupError) {
+      if (err.context.missing?.length) {
+        return res.status(404).send({ error: 'player_not_found', message: err.message });
+      }
+      if (err.context.wrongOrganization?.length) {
+        return res.status(403).send({ error: 'players_update_denied', message: err.message });
+      }
+      return res.status(400).send({ error: 'invalid_player', message: err.message });
+    }
+    console.error('player_update_error', err);
+    return res.status(500).send({ error: 'internal_error' });
+  }
+});
+
 // ---- matches ----
 const MatchSubmit = z
   .object({
@@ -269,6 +433,29 @@ const MatchSubmit = z
     message: 'organization_id or organization_slug is required',
     path: ['organization_id'],
   });
+
+const MatchUpdate = z
+  .object({
+    organization_id: z.string().uuid().optional(),
+    organization_slug: z.string().optional(),
+    start_time: z.string().optional(),
+    venue_id: z.string().nullable().optional(),
+    venue_region_id: z.string().nullable().optional(),
+  })
+  .refine((data) => data.organization_id || data.organization_slug, {
+    message: 'organization_id or organization_slug is required',
+    path: ['organization_id'],
+  })
+  .refine(
+    (data) =>
+      data.start_time !== undefined ||
+      data.venue_id !== undefined ||
+      data.venue_region_id !== undefined,
+    {
+      message: 'At least one field is required',
+      path: ['start_time'],
+    }
+  );
 
 app.post('/v1/matches', requireAuth, requireScope('matches:write'), async (req, res) => {
   const parsed = MatchSubmit.safeParse(req.body);
@@ -379,6 +566,73 @@ app.post('/v1/matches', requireAuth, requireScope('matches:write'), async (req, 
       return res.status(400).send({ error: 'invalid_organization', message: err.message });
     }
     console.error('match_update_error', err);
+    return res.status(500).send({ error: 'internal_error' });
+  }
+});
+
+app.patch('/v1/matches/:match_id', requireAuth, requireScope('matches:write'), async (req, res) => {
+  const parsed = MatchUpdate.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+  }
+
+  try {
+    const organization = await resolveOrganizationIdentifier({
+      organization_id: parsed.data.organization_id,
+      organization_slug: parsed.data.organization_slug,
+    });
+
+    await authorizeOrgAccess(req, organization.organizationId, {
+      permissions: ['matches:write'],
+      errorCode: 'matches_update_denied',
+      errorMessage: 'Insufficient grants for matches:write',
+    });
+
+    const updateInput: MatchUpdateInput = {};
+    if (parsed.data.start_time !== undefined) updateInput.startTime = parsed.data.start_time;
+    if (parsed.data.venue_id !== undefined) updateInput.venueId = parsed.data.venue_id;
+    if (parsed.data.venue_region_id !== undefined) {
+      updateInput.regionId = parsed.data.venue_region_id === null
+        ? normalizeRegion(null)
+        : normalizeRegion(parsed.data.venue_region_id);
+    }
+
+    const updated = await store.updateMatch(req.params.match_id, organization.organizationId, updateInput);
+
+    return res.send({
+      match_id: updated.matchId,
+      organization_id: updated.organizationId,
+      organization_slug: organization.slug,
+      sport: updated.sport,
+      discipline: updated.discipline,
+      format: updated.format,
+      tier: updated.tier,
+      start_time: updated.startTime,
+      venue_id: updated.venueId,
+      region_id: updated.regionId,
+      sides: updated.sides.reduce((acc, side) => {
+        acc[side.side] = { players: side.players };
+        return acc;
+      }, {} as Record<'A' | 'B', { players: string[] }>),
+      games: updated.games.map((game) => ({ game_no: game.gameNo, a: game.a, b: game.b })),
+    });
+  } catch (err) {
+    if (err instanceof OrganizationLookupError) {
+      return res.status(400).send({ error: 'invalid_organization', message: err.message });
+    }
+    if (err instanceof AuthorizationError) {
+      return res.status(err.status).send({ error: err.code, message: err.message });
+    }
+    if (err instanceof MatchLookupError) {
+      if (err.message.includes('does not belong')) {
+        return res.status(403).send({ error: 'matches_update_denied', message: err.message });
+      }
+      if (err.message.startsWith('Invalid start time')) {
+        return res.status(400).send({ error: 'invalid_match_update', message: err.message });
+      }
+      return res.status(404).send({ error: 'match_not_found', message: err.message });
+    }
+    console.error('match_modify_error', err);
     return res.status(500).send({ error: 'internal_error' });
   }
 });

@@ -22,9 +22,12 @@ import type {
   EnsurePlayersResult,
   LadderKey,
   PlayerCreateInput,
+  PlayerUpdateInput,
   PlayerRecord,
   RatingStore,
   RecordMatchParams,
+  MatchUpdateInput,
+  OrganizationUpdateInput,
 } from './types.js';
 import {
   PlayerLookupError,
@@ -40,6 +43,7 @@ import {
   OrganizationListResult,
   OrganizationRecord,
   OrganizationLookupError,
+  MatchLookupError,
 } from './types.js';
 import { buildLadderId, isDefaultRegion, toDbRegionId } from './helpers.js';
 
@@ -120,6 +124,118 @@ export class PostgresStore implements RatingStore {
       slug: row.slug,
       description: row.description,
       createdAt: row.createdAt?.toISOString(),
+    };
+  }
+
+  private toPlayerRecord(row: {
+    playerId: string;
+    organizationId: string;
+    displayName: string;
+    shortName: string | null;
+    nativeName: string | null;
+    externalRef: string | null;
+    givenName: string | null;
+    familyName: string | null;
+    sex: string | null;
+    birthYear: number | null;
+    countryCode: string | null;
+    regionId: string | null;
+  }): PlayerRecord {
+    return {
+      playerId: row.playerId,
+      organizationId: row.organizationId,
+      displayName: row.displayName,
+      shortName: row.shortName ?? undefined,
+      nativeName: row.nativeName ?? undefined,
+      externalRef: row.externalRef ?? undefined,
+      givenName: row.givenName ?? undefined,
+      familyName: row.familyName ?? undefined,
+      sex: (row.sex ?? undefined) as 'M' | 'F' | 'X' | undefined,
+      birthYear: row.birthYear ?? undefined,
+      countryCode: row.countryCode ?? undefined,
+      regionId: row.regionId ?? undefined,
+    };
+  }
+
+  private async getMatchSummaryById(matchId: string): Promise<MatchSummary | null> {
+    const rows = await this.db
+      .select({
+        matchId: matches.matchId,
+        organizationId: matches.organizationId,
+        sport: matches.sport,
+        discipline: matches.discipline,
+        format: matches.format,
+        tier: matches.tier,
+        startTime: matches.startTime,
+        venueId: matches.venueId,
+        regionId: matches.regionId,
+      })
+      .from(matches)
+      .where(eq(matches.matchId, matchId))
+      .limit(1);
+
+    const matchRow = rows.at(0);
+    if (!matchRow) return null;
+
+    const sideRows = (await this.db
+      .select({
+        side: matchSides.side,
+        playerId: matchSidePlayers.playerId,
+        position: matchSidePlayers.position,
+      })
+      .from(matchSides)
+      .innerJoin(matchSidePlayers, eq(matchSidePlayers.matchSideId, matchSides.id))
+      .where(eq(matchSides.matchId, matchId))
+      .orderBy(matchSides.side, matchSidePlayers.position)) as Array<{
+        side: string;
+        playerId: string;
+        position: number;
+      }>;
+
+    const gameRows = (await this.db
+      .select({
+        gameNo: matchGames.gameNo,
+        scoreA: matchGames.scoreA,
+        scoreB: matchGames.scoreB,
+      })
+      .from(matchGames)
+      .where(eq(matchGames.matchId, matchId))
+      .orderBy(matchGames.gameNo)) as Array<{
+        gameNo: number;
+        scoreA: number;
+        scoreB: number;
+      }>;
+
+    const sideMap = new Map<string, string[]>();
+    for (const row of sideRows) {
+      const players = sideMap.get(row.side) ?? [];
+      players[row.position] = row.playerId;
+      sideMap.set(row.side, players);
+    }
+
+    const games: MatchGameSummary[] = gameRows.map((row) => ({
+      gameNo: row.gameNo,
+      a: row.scoreA,
+      b: row.scoreB,
+    }));
+
+    const sides: MatchSideSummary[] = ['A', 'B'].map((side) => ({
+      side: side as 'A' | 'B',
+      players: (sideMap.get(side) ?? []).filter((player): player is string => Boolean(player)),
+    }));
+
+    return {
+      matchId: matchRow.matchId,
+      organizationId: matchRow.organizationId,
+      sport: matchRow.sport as MatchInput['sport'],
+      discipline: matchRow.discipline as MatchInput['discipline'],
+      format: matchRow.format,
+      tier: matchRow.tier ?? undefined,
+      startTime: matchRow.startTime.toISOString(),
+      venueId: matchRow.venueId ?? null,
+      regionId: matchRow.regionId ?? null,
+      sides,
+      games,
     };
   }
 
@@ -226,6 +342,56 @@ export class PostgresStore implements RatingStore {
     }
   }
 
+  async updateOrganization(organizationId: string, input: OrganizationUpdateInput): Promise<OrganizationRecord> {
+    const updates: Record<string, any> = {};
+
+    if (input.name !== undefined) {
+      updates.name = input.name;
+    }
+    if (input.description !== undefined) {
+      updates.description = input.description ?? null;
+    }
+    if (input.slug !== undefined) {
+      updates.slug = input.slug.toLowerCase();
+    }
+
+    if (!Object.keys(updates).length) {
+      const existing = await this.getOrganizationRowById(organizationId);
+      if (!existing) {
+        throw new OrganizationLookupError(`Organization not found: ${organizationId}`);
+      }
+      return this.toOrganizationRecord(existing);
+    }
+
+    updates.updatedAt = now();
+
+    try {
+      const [row] = await this.db
+        .update(organizations)
+        .set(updates)
+        .where(eq(organizations.organizationId, organizationId))
+        .returning({
+          organizationId: organizations.organizationId,
+          name: organizations.name,
+          slug: organizations.slug,
+          description: organizations.description,
+          createdAt: organizations.createdAt,
+        });
+
+      if (!row) {
+        throw new OrganizationLookupError(`Organization not found: ${organizationId}`);
+      }
+
+      return this.toOrganizationRecord(row);
+    } catch (err: any) {
+      if (err && typeof err === 'object' && 'code' in err && err.code === '23505') {
+        const slug = input.slug?.toLowerCase();
+        throw new OrganizationLookupError(`Slug already in use: ${slug}`);
+      }
+      throw err;
+    }
+  }
+
   async listOrganizations(query: OrganizationListQuery): Promise<OrganizationListResult> {
     const limit = clampLimit(query.limit);
     const filters: any[] = [];
@@ -315,6 +481,78 @@ export class PostgresStore implements RatingStore {
       regionId: regionId ?? undefined,
       externalRef: input.externalRef,
     } satisfies PlayerRecord;
+  }
+
+  async updatePlayer(playerId: string, organizationId: string, input: PlayerUpdateInput): Promise<PlayerRecord> {
+    const selection = {
+      playerId: players.playerId,
+      organizationId: players.organizationId,
+      displayName: players.displayName,
+      shortName: players.shortName,
+      nativeName: players.nativeName,
+      externalRef: players.externalRef,
+      givenName: players.givenName,
+      familyName: players.familyName,
+      sex: players.sex,
+      birthYear: players.birthYear,
+      countryCode: players.countryCode,
+      regionId: players.regionId,
+    } as const;
+
+    const existingRows = await this.db
+      .select(selection)
+      .from(players)
+      .where(eq(players.playerId, playerId))
+      .limit(1);
+
+    const existing = existingRows.at(0);
+    if (!existing) {
+      throw new PlayerLookupError(`Player not found: ${playerId}`, { missing: [playerId] });
+    }
+    if (existing.organizationId !== organizationId) {
+      throw new PlayerLookupError(
+        `Player not registered to organization ${organizationId}: ${playerId}`,
+        { wrongOrganization: [playerId] }
+      );
+    }
+
+    const updates: Record<string, any> = {};
+
+    if (input.displayName !== undefined) updates.displayName = input.displayName;
+    if (input.shortName !== undefined) updates.shortName = input.shortName ?? null;
+    if (input.nativeName !== undefined) updates.nativeName = input.nativeName ?? null;
+    if (input.externalRef !== undefined) updates.externalRef = input.externalRef ?? null;
+    if (input.givenName !== undefined) updates.givenName = input.givenName ?? null;
+    if (input.familyName !== undefined) updates.familyName = input.familyName ?? null;
+    if (input.sex !== undefined) updates.sex = input.sex ?? null;
+    if (input.birthYear !== undefined) updates.birthYear = input.birthYear ?? null;
+    if (input.countryCode !== undefined) updates.countryCode = input.countryCode ?? null;
+
+    if (input.regionId !== undefined) {
+      if (!input.regionId) {
+        updates.regionId = null;
+      } else {
+        updates.regionId = await this.ensureRegion(input.regionId, organizationId);
+      }
+    }
+
+    if (!Object.keys(updates).length) {
+      return this.toPlayerRecord(existing);
+    }
+
+    updates.updatedAt = now();
+
+    const [row] = await this.db
+      .update(players)
+      .set(updates)
+      .where(and(eq(players.playerId, playerId), eq(players.organizationId, organizationId)))
+      .returning(selection);
+
+    if (!row) {
+      throw new PlayerLookupError(`Player not found: ${playerId}`, { missing: [playerId] });
+    }
+
+    return this.toPlayerRecord(row);
   }
 
   private async ensureLadder(key: LadderKey) {
@@ -519,6 +757,74 @@ export class PostgresStore implements RatingStore {
     });
 
     return { matchId };
+  }
+
+  async updateMatch(matchId: string, organizationId: string, input: MatchUpdateInput): Promise<MatchSummary> {
+    const existingRows = await this.db
+      .select({
+        matchId: matches.matchId,
+        organizationId: matches.organizationId,
+        regionId: matches.regionId,
+        venueId: matches.venueId,
+      })
+      .from(matches)
+      .where(eq(matches.matchId, matchId))
+      .limit(1);
+
+    const existing = existingRows.at(0);
+    if (!existing) {
+      throw new MatchLookupError(`Match not found: ${matchId}`);
+    }
+    if (existing.organizationId !== organizationId) {
+      throw new MatchLookupError(`Match does not belong to organization ${organizationId}`);
+    }
+
+    const updates: Record<string, any> = {};
+
+    if (input.startTime !== undefined) {
+      const date = new Date(input.startTime);
+      if (Number.isNaN(date.getTime())) {
+        throw new MatchLookupError('Invalid start time provided');
+      }
+      updates.startTime = date;
+    }
+
+    let nextRegionId = existing.regionId;
+    if (input.regionId !== undefined) {
+      if (!input.regionId) {
+        updates.regionId = null;
+        nextRegionId = null;
+      } else {
+        nextRegionId = await this.ensureRegion(input.regionId, organizationId);
+        updates.regionId = nextRegionId;
+      }
+    }
+
+    if (input.venueId !== undefined) {
+      if (!input.venueId) {
+        updates.venueId = null;
+      } else {
+        updates.venueId = await this.ensureVenue(input.venueId, organizationId, nextRegionId ?? null);
+      }
+    }
+
+    if (Object.keys(updates).length) {
+      const [row] = await this.db
+        .update(matches)
+        .set(updates)
+        .where(and(eq(matches.matchId, matchId), eq(matches.organizationId, organizationId)))
+        .returning({ matchId: matches.matchId });
+
+      if (!row) {
+        throw new MatchLookupError(`Match not found: ${matchId}`);
+      }
+    }
+
+    const summary = await this.getMatchSummaryById(matchId);
+    if (!summary) {
+      throw new MatchLookupError(`Match not found: ${matchId}`);
+    }
+    return summary;
   }
 
   async getPlayerRating(playerId: string, ladderKey: LadderKey): Promise<PlayerState | null> {

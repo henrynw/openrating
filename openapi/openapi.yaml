@@ -50,6 +50,32 @@ paths:
               schema:
                 $ref: '#/components/schemas/OrganizationListResponse'
 
+  /v1/organizations/{organization_id}:
+    patch:
+      summary: Update an organization
+      parameters:
+        - in: path
+          name: organization_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrganizationUpdate'
+      responses:
+        '200':
+          description: Updated organization
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationResponse'
+        '404':
+          description: Organization not found
+        '409':
+          description: Slug already in use
+
   /v1/players:
     post:
       summary: Create a player
@@ -97,6 +123,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PlayerListResponse'
+  /v1/players/{player_id}:
+    patch:
+      summary: Update a player
+      parameters:
+        - in: path
+          name: player_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerUpdate'
+      responses:
+        '200':
+          description: Updated player
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerResponse'
+        '404':
+          description: Player not found
+
   /v1/matches:
     post:
       summary: Submit a match result and update ratings
@@ -154,10 +204,34 @@ paths:
       responses:
         '200':
           description: Paginated list of matches
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MatchListResponse'
+
+  /v1/matches/{match_id}:
+    patch:
+      summary: Update match metadata
+      parameters:
+        - in: path
+          name: match_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchUpdate'
+      responses:
+        '200':
+          description: Updated match
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MatchListResponse'
+                $ref: '#/components/schemas/MatchSummary'
+        '404':
+          description: Match not found
 components:
   schemas:
     PlayerUpsert:
@@ -176,6 +250,21 @@ components:
         birth_year: { type: integer }
         country_code: { type: string }
         region_id: { type: string }
+    PlayerUpdate:
+      type: object
+      properties:
+        organization_id: { type: string }
+        organization_slug: { type: string }
+        display_name: { type: string }
+        short_name: { type: string, nullable: true }
+        native_name: { type: string, nullable: true }
+        external_ref: { type: string, nullable: true }
+        given_name: { type: string, nullable: true }
+        family_name: { type: string, nullable: true }
+        sex: { type: string, enum: [M, F, X], nullable: true }
+        birth_year: { type: integer, nullable: true }
+        country_code: { type: string, nullable: true }
+        region_id: { type: string, nullable: true }
     PlayerResponse:
       type: object
       properties:
@@ -239,6 +328,14 @@ components:
               game_no: { type: integer }
               a: { type: integer }
               b: { type: integer }
+    MatchUpdate:
+      type: object
+      properties:
+        organization_id: { type: string }
+        organization_slug: { type: string }
+        start_time: { type: string, format: date-time }
+        venue_id: { type: string, nullable: true }
+        venue_region_id: { type: string, nullable: true }
     MatchSubmitResponse:
       type: object
       properties:
@@ -270,6 +367,12 @@ components:
       properties:
         name: { type: string }
         slug: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+    OrganizationUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        slug: { type: string }
         description: { type: string, nullable: true }
     OrganizationResponse:
       type: object
