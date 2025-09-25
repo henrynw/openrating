@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { P } from '../engine/params.js';
-import type { MatchInput, PairState, PlayerState, UpdateResult } from '../engine/types.js';
+import type { MatchInput, PairState, PairUpdate, PlayerState, UpdateResult } from '../engine/types.js';
 import type {
   EnsurePlayersResult,
   LadderKey,
@@ -29,7 +29,6 @@ import type {
   RatingEventRecord,
   RatingSnapshot,
   NightlyStabilizationOptions,
-  PairUpdate,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError } from './types.js';
 import { buildLadderId, DEFAULT_REGION } from './helpers.js';

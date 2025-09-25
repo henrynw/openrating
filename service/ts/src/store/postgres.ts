@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { and, eq, inArray, or, lt, lte, gt, gte, sql, desc } from 'drizzle-orm';
-import type { PlayerState, MatchInput, PairState } from '../engine/types.js';
+import type { PlayerState, MatchInput, PairState, PairUpdate } from '../engine/types.js';
 import { P } from '../engine/params.js';
 import { getDb } from '../db/client.js';
 import {
@@ -49,7 +49,6 @@ import type {
   EnsurePairSynergiesParams,
   EnsurePairSynergiesResult,
   NightlyStabilizationOptions,
-  PairUpdate,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError } from './types.js';
 import { buildLadderId, isDefaultRegion, toDbRegionId, DEFAULT_REGION } from './helpers.js';
@@ -481,9 +480,10 @@ export class PostgresStore implements RatingStore {
       set.add(to);
     };
 
-    const matchGroups = new Map<string, { ladderId: string; A: string[]; B: string[] }>();
+    type MatchGroup = { ladderId: string; A: string[]; B: string[] };
+    const matchGroups = new Map<string, MatchGroup>();
     for (const row of matchRows) {
-      const group = matchGroups.get(row.matchId) ?? { ladderId: row.ladderId, A: [], B: [] };
+      const group = matchGroups.get(row.matchId) ?? { ladderId: row.ladderId, A: [] as string[], B: [] as string[] };
       if (row.side === 'A') group.A.push(`${row.ladderId}|${row.playerId}`);
       else group.B.push(`${row.ladderId}|${row.playerId}`);
       matchGroups.set(row.matchId, group);

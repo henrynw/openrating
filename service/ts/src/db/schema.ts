@@ -218,7 +218,7 @@ export const pairSynergies = pgTable('pair_synergies', {
     onDelete: 'cascade',
   }).notNull(),
   pairKey: text('pair_key').notNull(),
-  players: jsonb('players').$type<string[]>().notNull(),
+  players: jsonb('players').notNull(),
   gamma: doublePrecision('gamma').default(0).notNull(),
   matches: integer('matches').default(0).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
