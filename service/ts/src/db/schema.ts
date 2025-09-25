@@ -212,3 +212,32 @@ export const playerRatingHistory = pgTable('player_rating_history', {
   movWeight: doublePrecision('mov_weight'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const pairSynergies = pgTable('pair_synergies', {
+  ladderId: text('ladder_id').references(() => ratingLadders.ladderId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  pairKey: text('pair_key').notNull(),
+  players: jsonb('players').$type<string[]>().notNull(),
+  gamma: doublePrecision('gamma').default(0).notNull(),
+  matches: integer('matches').default(0).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table: any) => ({
+  pk: primaryKey(table.ladderId, table.pairKey),
+}));
+
+export const pairSynergyHistory = pgTable('pair_synergy_history', {
+  id: serial('id').primaryKey(),
+  ladderId: text('ladder_id').references(() => ratingLadders.ladderId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  pairKey: text('pair_key').notNull(),
+  matchId: text('match_id').references(() => matches.matchId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  gammaBefore: doublePrecision('gamma_before').notNull(),
+  gammaAfter: doublePrecision('gamma_after').notNull(),
+  delta: doublePrecision('delta').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});

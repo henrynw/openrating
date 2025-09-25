@@ -1,6 +1,7 @@
 import { P } from './params.js';
 import { movWeight } from './mov.js';
-import type { MatchInput, PlayerState, UpdateResult } from './types.js';
+import { getSportProfile } from './profiles.js';
+import type { MatchInput, MatchUpdateContext, PairState, PairUpdate, PlayerState, UpdateResult } from './types.js';
 
 // Numerical approximation (Abramowitz & Stegun 7.1.26) for environments lacking Math.erf.
 const erf = (x:number) => {
@@ -17,39 +18,50 @@ const winnerIsA = (games:{a:number;b:number}[]) => {
   const wa = games.filter(g => g.a > g.b).length;
   return wa > (games.length - wa);
 };
-const tierToWeight = (t?:string) => t==='SANCTIONED'?1.2 : t==='SOCIAL'?0.8 : t==='EXHIBITION'?0.6 : 1.0;
+const tierToWeight = (tier?: string) => {
+  if (!tier) return P.tierWeights.DEFAULT;
+  return P.tierWeights[tier] ?? P.tierWeights.DEFAULT;
+};
 const avgSigma2 = (xs:PlayerState[]) => xs.reduce((s,p)=>s+p.sigma*p.sigma,0)/Math.max(1,xs.length);
+const sortPlayers = (players: string[]) => [...players].sort((a, b) => a.localeCompare(b));
 
 export function expectedWinProb(Ra:number, Rb:number, beta=200) {
   return phi((Ra - Rb) / (Math.SQRT2 * beta));
 }
 
-function mismatchMultiplier(pA:number, y:number) {
-  // If A is heavy favorite and wins → tiny gain; if A loses → bigger loss.
-  if (pA > P.mismatchSoftcapProb) return y===1 ? P.winnerGainMultWhenHeavyFavorite : P.loserLossMultWhenHeavyFavorite;
-  if (pA < 1 - P.mismatchSoftcapProb) return y===1 ? P.loserLossMultWhenHeavyFavorite : P.winnerGainMultWhenHeavyFavorite;
-  return 1;
-}
+const mismatchMultiplier = (pA: number, y: number) => 1 + P.mismatchLambda * (2 * pA - 1) * (1 - 2 * y);
 
 export function updateMatch(
   match: MatchInput,
-  getPlayer: (id:string)=>PlayerState
+  context: MatchUpdateContext
 ): UpdateResult {
-  const Aids = match.sides.A.players, Bids = match.sides.B.players;
+  const getPlayer = context.getPlayer;
+  const getPair = context.getPair;
+
+  const Aids = match.sides.A.players;
+  const Bids = match.sides.B.players;
   const Aplayers = Aids.map(getPlayer);
   const Bplayers = Bids.map(getPlayer);
 
-  // Team ratings: sum of mus (synergy omitted in this minimal version)
-  const Ra = Aplayers.reduce((s,p)=>s+p.mu,0);
-  const Rb = Bplayers.reduce((s,p)=>s+p.mu,0);
+  const pairAPlayers = Aids.length > 1 ? sortPlayers(Aids) : null;
+  const pairBPlayers = Bids.length > 1 ? sortPlayers(Bids) : null;
+  const pairA = pairAPlayers && getPair ? getPair(pairAPlayers) : undefined;
+  const pairB = pairBPlayers && getPair ? getPair(pairBPlayers) : undefined;
 
-  const pA = expectedWinProb(Ra, Rb, P.beta);
+  // Team ratings: sum of player mus plus any active pair synergy bonuses
+  const gammaA = pairA?.gamma ?? 0;
+  const gammaB = pairB?.gamma ?? 0;
+  const Ra = Aplayers.reduce((s,p)=>s+p.mu,0) + gammaA;
+  const Rb = Bplayers.reduce((s,p)=>s+p.mu,0) + gammaB;
+
+  const sportProfile = getSportProfile(match.sport);
+  const pA = expectedWinProb(Ra, Rb, sportProfile.beta);
   const winner = match.winner ?? (match.games.length ? (winnerIsA(match.games) ? 'A' : 'B') : 'A');
   const y  = winner === 'A' ? 1 : 0;
   const surprise = y - pA;
 
-  const w  = match.movWeight ?? movWeight(match.games, P.movWeight.min, P.movWeight.max, P.movCapPerGame);
-  const wt = w * tierToWeight(match.tier);
+  const w  = match.movWeight ?? movWeight(match);
+  const wt = Math.min(P.multiplierCap, w * tierToWeight(match.tier));
 
   // K scaled by uncertainty
   const u = Math.sqrt((avgSigma2(Aplayers) + avgSigma2(Bplayers)) / (2*P.sigmaRef*P.sigmaRef));
@@ -72,14 +84,61 @@ export function updateMatch(
   for (const p of Aplayers) p.mu += deltaTeam / Aplayers.length;
   for (const p of Bplayers) p.mu -= deltaTeam / Bplayers.length;
 
-  // Update sigma (shrink with evidence; bounded)
-  const shrink = (p:PlayerState)=>{
-    const alpha = P.alpha0 * Math.abs(surprise) * wt;
-    const s2 = p.sigma*p.sigma*(1-alpha) + alpha*(P.sigmaMin*P.sigmaMin);
-    p.sigma = clamp(Math.sqrt(s2), P.sigmaMin, P.sigmaMax);
+  const info = 4 * pA * (1 - pA);
+  const adjustSigma = (p: PlayerState) => {
+    const baseVar = p.sigma * p.sigma;
+    let nextVar = baseVar - P.etaDown * info * baseVar;
+    if (Math.abs(surprise) > P.surpriseThreshold) {
+      nextVar = Math.min(
+        P.sigmaMax * P.sigmaMax,
+        nextVar + P.etaUp * (Math.abs(surprise) - P.surpriseThreshold) * baseVar
+      );
+    }
+    nextVar = Math.max(P.sigmaMin * P.sigmaMin, nextVar);
+    p.sigma = Math.sqrt(nextVar);
     p.matchesCount += 1;
   };
-  [...Aplayers, ...Bplayers].forEach(shrink);
+
+  [...Aplayers, ...Bplayers].forEach(adjustSigma);
+
+  const pairUpdates: PairUpdate[] = [];
+  const processPair = (pair: PairState | undefined, players: string[], direction: number) => {
+    if (!pair) return;
+    const matchesBefore = pair.matches;
+    const gammaBefore = pair.gamma;
+    pair.matches += 1;
+    let gammaAfter = gammaBefore;
+    let delta = 0;
+    let activated = false;
+
+    if (pair.matches >= P.synergy.activationMatches) {
+      activated = true;
+      delta = clamp(P.synergy.K0 * surprise * direction, -P.synergy.deltaMax, P.synergy.deltaMax);
+      gammaAfter = clamp(gammaBefore + delta, P.synergy.gammaMin, P.synergy.gammaMax);
+      pair.gamma = gammaAfter;
+    }
+
+    pairUpdates.push({
+      pairId: pair.pairId,
+      players: [...players],
+      gammaBefore,
+      gammaAfter,
+      delta,
+      matchesBefore,
+      matchesAfter: pair.matches,
+      activated,
+    });
+  };
+
+  const directionA = winner === 'A' ? 1 : -1;
+  const directionB = -directionA;
+
+  if (pairAPlayers) {
+    processPair(pairA, pairAPlayers, directionA);
+  }
+  if (pairBPlayers) {
+    processPair(pairB, pairBPlayers, directionB);
+  }
 
   return {
     perPlayer: before.map((b) => {
@@ -94,5 +153,8 @@ export function updateMatch(
         winProbPre: +pA.toFixed(2),
       };
     }),
+    pairUpdates,
+    teamDelta: deltaTeam,
+    winProbability: pA,
   };
 }

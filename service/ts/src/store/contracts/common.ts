@@ -1,4 +1,4 @@
-import type { MatchInput, PlayerState, UpdateResult } from '../../engine/types.js';
+import type { MatchInput, PairState, PairUpdate, PlayerState, UpdateResult } from '../../engine/types.js';
 
 export interface LadderKey {
   organizationId: string;
@@ -14,12 +14,21 @@ export interface EnsurePlayersResult {
   players: Map<string, PlayerState>;
 }
 
+export interface EnsurePairSynergiesParams {
+  ladderId: string;
+  ladderKey: LadderKey;
+  pairs: Array<{ pairId: string; players: string[] }>;
+}
+
+export type EnsurePairSynergiesResult = Map<string, PairState>;
+
 export interface RecordMatchParams {
   ladderId: string;
   ladderKey: LadderKey;
   match: MatchInput;
   result: UpdateResult;
   playerStates: Map<string, PlayerState>;
+  pairUpdates: PairUpdate[];
   submissionMeta: {
     providerId: string;
     organizationId: string;
@@ -33,4 +42,9 @@ export interface RecordMatchParams {
 export interface RecordMatchResult {
   matchId: string;
   ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }>;
+}
+
+export interface NightlyStabilizationOptions {
+  asOf?: Date;
+  horizonDays?: number;
 }

@@ -8,11 +8,12 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "eslint .",
-    "test": "NODE_ENV=test AUTH_DISABLE=1 node --test --loader tsx ./test/routes/ratings.test.ts",
+    "test": "NODE_ENV=test AUTH_DISABLE=1 node --test --loader tsx $(find ./test -name '*.test.ts' -o -name '*.test.js')",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:studio": "drizzle-kit studio --config drizzle.config.ts",
-    "grants": "tsx scripts/grants.ts"
+    "grants": "tsx scripts/grants.ts",
+    "nightly": "NODE_ENV=production tsx scripts/nightly.ts"
   },
   "dependencies": {
     "express": "^4.19.2",

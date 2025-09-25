@@ -23,6 +23,29 @@ export interface MatchInput {
   movWeight?: number;
 }
 
+export interface PairState {
+  pairId: string;
+  players: string[];
+  gamma: number;
+  matches: number;
+}
+
+export interface PairUpdate {
+  pairId: string;
+  players: string[];
+  gammaBefore: number;
+  gammaAfter: number;
+  delta: number;
+  matchesBefore: number;
+  matchesAfter: number;
+  activated: boolean;
+}
+
+export interface MatchUpdateContext {
+  getPlayer: (id: string) => PlayerState;
+  getPair?: (players: string[]) => PairState | undefined;
+}
+
 export interface UpdateResult {
   perPlayer: Array<{
     playerId: string;
@@ -33,4 +56,7 @@ export interface UpdateResult {
     sigmaAfter: number;
     winProbPre: number;
   }>;
+  pairUpdates: PairUpdate[];
+  teamDelta: number;
+  winProbability: number;
 }

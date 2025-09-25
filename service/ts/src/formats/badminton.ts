@@ -1,5 +1,3 @@
-import { movWeight } from '../engine/mov.js';
-import { P } from '../engine/params.js';
 import type { MatchInput, WinnerSide } from '../engine/types.js';
 import type {
   MatchSubmission,
@@ -64,7 +62,6 @@ const normalizeSinglesBo3 = (submission: MatchSubmission): NormalizationResult =
     sides: submission.sides,
     games: sortedGames,
     winner,
-    movWeight: movWeight(sortedGames, P.movWeight.min, P.movWeight.max, P.movCapPerGame),
   };
 
   return { ok: true, match };

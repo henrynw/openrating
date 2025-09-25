@@ -11,6 +11,12 @@ export const isDefaultRegion = (regionId: string) => regionId === NULL_REGION;
 export const buildLadderId = (key: LadderKey) =>
   [key.organizationId, key.sport, key.discipline, key.format, key.tier, key.regionId].join(':');
 
+const sortPair = (players: string[]) => [...players].sort((a, b) => a.localeCompare(b));
+
+export const buildPairKey = (players: string[]) => sortPair(players).join('|');
+
+export const sortPairPlayers = sortPair;
+
 export const DEFAULT_TIER = NULL_TIER;
 export const DEFAULT_REGION = NULL_REGION;
 

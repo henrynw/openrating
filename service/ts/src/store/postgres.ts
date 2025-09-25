@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { and, eq, inArray, or, lt, lte, gt, gte, sql, desc } from 'drizzle-orm';
-import type { PlayerState, MatchInput } from '../engine/types.js';
+import type { PlayerState, MatchInput, PairState } from '../engine/types.js';
 import { P } from '../engine/params.js';
 import { getDb } from '../db/client.js';
 import {
@@ -17,6 +17,8 @@ import {
   regions,
   sports,
   venues,
+  pairSynergies,
+  pairSynergyHistory,
 } from '../db/schema.js';
 import type {
   EnsurePlayersResult,
@@ -44,9 +46,13 @@ import type {
   RatingEventListResult,
   RatingEventRecord,
   RatingSnapshot,
+  EnsurePairSynergiesParams,
+  EnsurePairSynergiesResult,
+  NightlyStabilizationOptions,
+  PairUpdate,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError } from './types.js';
-import { buildLadderId, isDefaultRegion, toDbRegionId } from './helpers.js';
+import { buildLadderId, isDefaultRegion, toDbRegionId, DEFAULT_REGION } from './helpers.js';
 
 const now = () => new Date();
 const DEFAULT_PAGE_SIZE = 50;
@@ -83,6 +89,9 @@ const parseRatingEventCursor = (cursor: string) => {
   if (!Number.isFinite(id)) return null;
   return { createdAt, id };
 };
+
+const clampValue = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
 
 type RatingEventRow = {
   id: number;
@@ -314,6 +323,252 @@ export class PostgresStore implements RatingStore {
     const org = await this.getOrganizationRowById(id);
     if (!org) throw new OrganizationLookupError(`Organization not found: ${id}`);
     return org;
+  }
+
+  private async applyInactivity(tx: any, asOf: Date) {
+    const rows = await tx
+      .select({
+        playerId: playerRatings.playerId,
+        ladderId: playerRatings.ladderId,
+        sigma: playerRatings.sigma,
+        updatedAt: playerRatings.updatedAt,
+      })
+      .from(playerRatings);
+
+    for (const row of rows) {
+      const updatedAt = row.updatedAt ?? asOf;
+      const weeks = Math.max(0, (asOf.getTime() - updatedAt.getTime()) / MS_PER_WEEK);
+      if (weeks <= 0) continue;
+      const factor = Math.pow(1 + P.idle.ratePerWeek, weeks);
+      let nextVar = row.sigma * row.sigma * factor;
+      nextVar = Math.min(P.sigmaMax * P.sigmaMax, nextVar);
+      const nextSigma = Math.max(P.sigmaMin, Math.sqrt(nextVar));
+      if (Math.abs(nextSigma - row.sigma) < 1e-6) continue;
+
+      await tx
+        .update(playerRatings)
+        .set({ sigma: nextSigma, updatedAt: asOf })
+        .where(
+          and(
+            eq(playerRatings.playerId, row.playerId),
+            eq(playerRatings.ladderId, row.ladderId)
+          )
+        );
+    }
+  }
+
+  private async applySynergyDecay(tx: any, asOf: Date) {
+    const rows = await tx
+      .select({
+        ladderId: pairSynergies.ladderId,
+        pairKey: pairSynergies.pairKey,
+        gamma: pairSynergies.gamma,
+        updatedAt: pairSynergies.updatedAt,
+      })
+      .from(pairSynergies);
+
+    for (const row of rows) {
+      const updatedAt = row.updatedAt ?? asOf;
+      const weeks = Math.max(0, (asOf.getTime() - updatedAt.getTime()) / MS_PER_WEEK);
+      if (weeks <= 0) continue;
+      const decayFactor = Math.pow(Math.max(0, 1 - P.synergy.decayRatePerWeek), weeks);
+      let gamma = clampValue(row.gamma * decayFactor, P.synergy.gammaMin, P.synergy.gammaMax);
+      gamma = clampValue(gamma - gamma * P.synergy.regularization, P.synergy.gammaMin, P.synergy.gammaMax);
+
+      await tx
+        .update(pairSynergies)
+        .set({ gamma, updatedAt: asOf })
+        .where(
+          and(
+            eq(pairSynergies.ladderId, row.ladderId),
+            eq(pairSynergies.pairKey, row.pairKey)
+          )
+        );
+    }
+  }
+
+  private async applyRegionBias(tx: any, asOf: Date) {
+    const rows = await tx
+      .select({
+        playerId: playerRatings.playerId,
+        ladderId: playerRatings.ladderId,
+        mu: playerRatings.mu,
+        regionId: players.regionId,
+      })
+      .from(playerRatings)
+      .innerJoin(players, eq(playerRatings.playerId, players.playerId));
+
+    if (!rows.length) return;
+
+    const globalMean = rows.reduce((acc: number, row: any) => acc + row.mu, 0) / rows.length;
+    const regionStats = new Map<string, { sum: number; count: number }>();
+
+    for (const row of rows) {
+      const regionId = row.regionId ?? DEFAULT_REGION;
+      if (regionId === DEFAULT_REGION) continue;
+      const stat = regionStats.get(regionId) ?? { sum: 0, count: 0 };
+      stat.sum += row.mu;
+      stat.count += 1;
+      regionStats.set(regionId, stat);
+    }
+
+    const adjustments = new Map<string, number>();
+    for (const [regionId, stat] of regionStats.entries()) {
+      if (!stat.count) continue;
+      const mean = stat.sum / stat.count;
+      const shift = clampValue(mean - globalMean, -P.region.maxShiftPerDay, P.region.maxShiftPerDay);
+      if (Math.abs(shift) < 1e-6) continue;
+      adjustments.set(regionId, shift);
+    }
+
+    for (const [regionId, shift] of adjustments.entries()) {
+      await tx
+        .execute(sql`
+          UPDATE ${playerRatings}
+          SET mu = mu - ${shift}, updated_at = ${asOf}
+          WHERE player_id IN (
+            SELECT ${players.playerId}
+            FROM ${players}
+            WHERE ${players.regionId} = ${regionId}
+          )
+        `);
+    }
+  }
+
+  private async applyGraphSmoothing(tx: any, asOf: Date, horizonDays: number) {
+    const cutoff = new Date(asOf.getTime() - horizonDays * 24 * 60 * 60 * 1000);
+    const lambda = P.graph.smoothingLambda;
+    if (lambda <= 0) return;
+
+    const ratingRows = await tx
+      .select({
+        playerId: playerRatings.playerId,
+        ladderId: playerRatings.ladderId,
+        mu: playerRatings.mu,
+        sigma: playerRatings.sigma,
+      })
+      .from(playerRatings);
+
+    const ratingMap = new Map<string, { mu: number; sigma: number }>();
+    ratingRows.forEach((row: any) => {
+      ratingMap.set(`${row.ladderId}|${row.playerId}`, { mu: row.mu, sigma: row.sigma });
+    });
+
+    if (!ratingMap.size) return;
+
+    const matchRows = await tx
+      .select({
+        matchId: matches.matchId,
+        ladderId: matches.ladderId,
+        startTime: matches.startTime,
+        side: matchSides.side,
+        playerId: matchSidePlayers.playerId,
+      })
+      .from(matches)
+      .innerJoin(matchSides, eq(matchSides.matchId, matches.matchId))
+      .innerJoin(matchSidePlayers, eq(matchSidePlayers.matchSideId, matchSides.id))
+      .where(gte(matches.startTime, cutoff));
+
+    const adjacency = new Map<string, Set<string>>();
+    const addEdge = (from: string, to: string) => {
+      if (from === to) return;
+      if (!ratingMap.has(from) || !ratingMap.has(to)) return;
+      let set = adjacency.get(from);
+      if (!set) {
+        set = new Set<string>();
+        adjacency.set(from, set);
+      }
+      set.add(to);
+    };
+
+    const matchGroups = new Map<string, { ladderId: string; A: string[]; B: string[] }>();
+    for (const row of matchRows) {
+      const group = matchGroups.get(row.matchId) ?? { ladderId: row.ladderId, A: [], B: [] };
+      if (row.side === 'A') group.A.push(`${row.ladderId}|${row.playerId}`);
+      else group.B.push(`${row.ladderId}|${row.playerId}`);
+      matchGroups.set(row.matchId, group);
+    }
+
+    for (const group of matchGroups.values()) {
+      if (!group.A.length && !group.B.length) continue;
+      for (const node of group.A) {
+        for (const teammate of group.A) addEdge(node, teammate);
+        for (const opponent of group.B) addEdge(node, opponent);
+      }
+      for (const node of group.B) {
+        for (const teammate of group.B) addEdge(node, teammate);
+        for (const opponent of group.A) addEdge(node, opponent);
+      }
+    }
+
+    const updates: Array<{ playerId: string; ladderId: string; mu: number }> = [];
+    for (const [node, neighbors] of adjacency.entries()) {
+      const state = ratingMap.get(node);
+      if (!state || state.sigma > P.sigmaProvisional) continue;
+      const neighborMus: number[] = [];
+      neighbors.forEach((neighbor) => {
+        const neighborState = ratingMap.get(neighbor);
+        if (neighborState) neighborMus.push(neighborState.mu);
+      });
+      if (!neighborMus.length) continue;
+      const neighborMean = neighborMus.reduce((acc, val) => acc + val, 0) / neighborMus.length;
+      const delta = lambda * (state.mu - neighborMean);
+      const newMu = state.mu - delta;
+      ratingMap.set(node, { ...state, mu: newMu });
+      const [ladderId, playerId] = node.split('|');
+      updates.push({ playerId, ladderId, mu: newMu });
+    }
+
+    for (const update of updates) {
+      await tx
+        .update(playerRatings)
+        .set({ mu: update.mu, updatedAt: asOf })
+        .where(
+          and(
+            eq(playerRatings.playerId, update.playerId),
+            eq(playerRatings.ladderId, update.ladderId)
+          )
+        );
+    }
+  }
+
+  private async applyDriftControl(tx: any, asOf: Date) {
+    const rows = await tx
+      .select({
+        playerId: playerRatings.playerId,
+        ladderId: playerRatings.ladderId,
+        mu: playerRatings.mu,
+      })
+      .from(playerRatings);
+
+    if (!rows.length) return;
+
+    const mean = rows.reduce((acc: number, row: any) => acc + row.mu, 0) / rows.length;
+    const variance = rows.reduce((acc: number, row: any) => acc + (row.mu - mean) ** 2, 0) / rows.length;
+    const std = Math.sqrt(variance);
+    const targetMean = P.baseMu;
+    const targetStd = P.drift.targetStd;
+
+    for (const row of rows) {
+      let newMu = row.mu;
+      if (std > 1e-6) {
+        newMu = targetMean + (row.mu - mean) * (targetStd / std);
+      } else {
+        newMu = targetMean;
+      }
+      let delta = newMu - row.mu;
+      delta = clampValue(delta, -P.drift.maxDailyDelta, P.drift.maxDailyDelta);
+      const mu = row.mu + delta;
+      await tx
+        .update(playerRatings)
+        .set({ mu, updatedAt: asOf })
+        .where(
+          and(
+            eq(playerRatings.playerId, row.playerId),
+            eq(playerRatings.ladderId, row.ladderId)
+          )
+        );
+    }
   }
 
   private async ensureSport(id: string, tx = this.db) {
@@ -726,6 +981,53 @@ export class PostgresStore implements RatingStore {
     return { ladderId, players: map };
   }
 
+  async ensurePairSynergies(params: EnsurePairSynergiesParams): Promise<EnsurePairSynergiesResult> {
+    if (!params.pairs.length) return new Map();
+
+    const nowTs = now();
+    await this.db
+      .insert(pairSynergies)
+      .values(
+        params.pairs.map((pair) => ({
+          ladderId: params.ladderId,
+          pairKey: pair.pairId,
+          players: pair.players,
+          gamma: 0,
+          matches: 0,
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        }))
+      )
+      .onConflictDoNothing({ target: [pairSynergies.ladderId, pairSynergies.pairKey] });
+
+    const rows = await this.db
+      .select({
+        pairKey: pairSynergies.pairKey,
+        gamma: pairSynergies.gamma,
+        matches: pairSynergies.matches,
+      })
+      .from(pairSynergies)
+      .where(
+        and(
+          eq(pairSynergies.ladderId, params.ladderId),
+          inArray(pairSynergies.pairKey, params.pairs.map((pair) => pair.pairId))
+        )
+      );
+
+    const descriptor = new Map(params.pairs.map((pair) => [pair.pairId, pair.players]));
+    const map = new Map<string, PairState>();
+    for (const row of rows) {
+      map.set(row.pairKey, {
+        pairId: row.pairKey,
+        players: descriptor.get(row.pairKey) ?? [],
+        gamma: row.gamma ?? 0,
+        matches: row.matches ?? 0,
+      });
+    }
+
+    return map;
+  }
+
   async recordMatch(params: RecordMatchParams): Promise<RecordMatchResult> {
     const matchId = randomUUID();
     const movWeight = params.match.movWeight ?? null;
@@ -841,6 +1143,33 @@ export class PostgresStore implements RatingStore {
             appliedAt: historyRow.createdAt.toISOString(),
           });
         }
+      }
+
+      for (const update of params.pairUpdates) {
+        await tx
+          .update(pairSynergies)
+          .set({
+            gamma: update.gammaAfter,
+            matches: update.matchesAfter,
+            players: update.players,
+            updatedAt: now(),
+          })
+          .where(
+            and(
+              eq(pairSynergies.ladderId, params.ladderId),
+              eq(pairSynergies.pairKey, update.pairId)
+            )
+          );
+
+        await tx.insert(pairSynergyHistory).values({
+          ladderId: params.ladderId,
+          pairKey: update.pairId,
+          matchId,
+          gammaBefore: update.gammaBefore,
+          gammaAfter: update.gammaAfter,
+          delta: update.delta,
+          createdAt: now(),
+        });
       }
     });
 
@@ -1168,6 +1497,19 @@ export class PostgresStore implements RatingStore {
       sigma: effectiveSigma,
       ratingEvent: eventRecord,
     } satisfies RatingSnapshot;
+  }
+
+  async runNightlyStabilization(options: NightlyStabilizationOptions = {}): Promise<void> {
+    const asOf = options.asOf ?? now();
+    const horizonDays = options.horizonDays ?? P.graph.horizonDays;
+
+    await this.db.transaction(async (tx: any) => {
+      await this.applyInactivity(tx, asOf);
+      await this.applySynergyDecay(tx, asOf);
+      await this.applyRegionBias(tx, asOf);
+      await this.applyGraphSmoothing(tx, asOf, horizonDays);
+      await this.applyDriftControl(tx, asOf);
+    });
   }
 
   async listPlayers(query: PlayerListQuery): Promise<PlayerListResult> {

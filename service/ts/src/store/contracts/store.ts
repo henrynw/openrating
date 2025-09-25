@@ -7,7 +7,15 @@ import type {
   OrganizationUpdateInput,
 } from './organizations.js';
 import type { MatchListQuery, MatchListResult, MatchSummary, MatchUpdateInput } from './matches.js';
-import type { LadderKey, EnsurePlayersResult, RecordMatchParams, RecordMatchResult } from './common.js';
+import type {
+  LadderKey,
+  EnsurePlayersResult,
+  EnsurePairSynergiesParams,
+  EnsurePairSynergiesResult,
+  RecordMatchParams,
+  RecordMatchResult,
+  NightlyStabilizationOptions,
+} from './common.js';
 import type { RatingEventListQuery, RatingEventListResult, RatingEventRecord, RatingSnapshot } from './ratings.js';
 import type { PlayerState } from '../../engine/types.js';
 
@@ -15,6 +23,7 @@ export interface RatingStore {
   createPlayer(input: PlayerCreateInput): Promise<PlayerRecord>;
   updatePlayer(playerId: string, organizationId: string, input: PlayerUpdateInput): Promise<PlayerRecord>;
   ensurePlayers(ids: string[], ladderKey: LadderKey): Promise<EnsurePlayersResult>;
+  ensurePairSynergies(params: EnsurePairSynergiesParams): Promise<EnsurePairSynergiesResult>;
   recordMatch(params: RecordMatchParams): Promise<RecordMatchResult>;
   updateMatch(matchId: string, organizationId: string, input: MatchUpdateInput): Promise<MatchSummary>;
   getPlayerRating(playerId: string, ladderKey: LadderKey): Promise<PlayerState | null>;
@@ -32,4 +41,5 @@ export interface RatingStore {
   listOrganizations(query: OrganizationListQuery): Promise<OrganizationListResult>;
   getOrganizationBySlug(slug: string): Promise<OrganizationRecord | null>;
   getOrganizationById(id: string): Promise<OrganizationRecord | null>;
+  runNightlyStabilization(options?: NightlyStabilizationOptions): Promise<void>;
 }

@@ -17,6 +17,8 @@ import { normalizeMatchSubmission } from '../formats/index.js';
 import { normalizeRegion, normalizeTier, isDefaultRegion } from '../store/helpers.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
 import { toMatchSummaryResponse } from './helpers/responders.js';
+import { buildPairKey, sortPairPlayers } from '../store/helpers.js';
+import type { PairState } from '../engine/types.js';
 
 const MatchSubmitSchema = z
   .object({
@@ -137,10 +139,30 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
 
       const { ladderId, players } = await store.ensurePlayers(uniquePlayerIds, ladderKey);
 
-      const result = updateMatch(normalization.match, (id) => {
-        const state = players.get(id);
-        if (!state) throw new Error(`missing player state for ${id}`);
-        return state;
+      const pairDescriptors: Array<{ pairId: string; players: string[] }> = [];
+      const collectPair = (sidePlayers: string[]) => {
+        if (sidePlayers.length < 2) return;
+        const sorted = sortPairPlayers(sidePlayers);
+        pairDescriptors.push({ pairId: buildPairKey(sorted), players: sorted });
+      };
+
+      collectPair(normalization.match.sides.A.players);
+      collectPair(normalization.match.sides.B.players);
+
+      let pairStates: Map<string, PairState> = new Map();
+      if (pairDescriptors.length) {
+        pairStates = await store.ensurePairSynergies({ ladderId, ladderKey, pairs: pairDescriptors });
+      }
+
+      const result = updateMatch(normalization.match, {
+        getPlayer: (id) => {
+          const state = players.get(id);
+          if (!state) throw new Error(`missing player state for ${id}`);
+          return state;
+        },
+        getPair: pairDescriptors.length
+          ? (sidePlayers) => pairStates.get(buildPairKey(sidePlayers))
+          : undefined,
       });
 
       const { matchId, ratingEvents } = await store.recordMatch({
@@ -157,6 +179,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
           venueId: parsed.data.venue_id ?? null,
           regionId: parsed.data.venue_region_id ?? null,
         },
+        pairUpdates: result.pairUpdates,
       });
 
       const ratingEventByPlayer = new Map(
