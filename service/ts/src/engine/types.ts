@@ -26,7 +26,11 @@ export interface MatchInput {
 export interface UpdateResult {
   perPlayer: Array<{
     playerId: string;
-    muBefore: number; muAfter: number; delta: number;
-    sigmaAfter: number; winProbPre: number;
+    muBefore: number;
+    muAfter: number;
+    delta: number;
+    sigmaBefore: number;
+    sigmaAfter: number;
+    winProbPre: number;
   }>;
 }

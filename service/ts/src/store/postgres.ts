@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { and, eq, inArray, or, lt, lte, sql, desc } from 'drizzle-orm';
+import { and, eq, inArray, or, lt, lte, gt, gte, sql, desc } from 'drizzle-orm';
 import type { PlayerState, MatchInput } from '../engine/types.js';
 import { P } from '../engine/params.js';
 import { getDb } from '../db/client.js';
@@ -26,11 +26,9 @@ import type {
   PlayerRecord,
   RatingStore,
   RecordMatchParams,
+  RecordMatchResult,
   MatchUpdateInput,
   OrganizationUpdateInput,
-} from './types.js';
-import {
-  PlayerLookupError,
   PlayerListQuery,
   PlayerListResult,
   MatchListQuery,
@@ -42,9 +40,12 @@ import {
   OrganizationListQuery,
   OrganizationListResult,
   OrganizationRecord,
-  OrganizationLookupError,
-  MatchLookupError,
+  RatingEventListQuery,
+  RatingEventListResult,
+  RatingEventRecord,
+  RatingSnapshot,
 } from './types.js';
+import { PlayerLookupError, OrganizationLookupError, MatchLookupError } from './types.js';
 import { buildLadderId, isDefaultRegion, toDbRegionId } from './helpers.js';
 
 const now = () => new Date();
@@ -69,6 +70,34 @@ const parseMatchCursor = (cursor: string) => {
   const date = new Date(ts);
   if (Number.isNaN(date.getTime())) return null;
   return { startTime: date, matchId: id };
+};
+
+const buildRatingEventCursor = (createdAt: Date, id: number) => `${createdAt.toISOString()}|${id}`;
+
+const parseRatingEventCursor = (cursor: string) => {
+  const [ts, idRaw] = cursor.split('|');
+  if (!ts || !idRaw) return null;
+  const createdAt = new Date(ts);
+  if (Number.isNaN(createdAt.getTime())) return null;
+  const id = Number(idRaw);
+  if (!Number.isFinite(id)) return null;
+  return { createdAt, id };
+};
+
+type RatingEventRow = {
+  id: number;
+  playerId: string;
+  ladderId: string;
+  matchId: string | null;
+  createdAt: Date;
+  muBefore: number;
+  muAfter: number;
+  delta: number;
+  sigmaBefore: number | null;
+  sigmaAfter: number;
+  winProbPre: number | null;
+  movWeight: number | null;
+  organizationId: string;
 };
 
 const slugify = (value: string) =>
@@ -155,6 +184,48 @@ export class PostgresStore implements RatingStore {
       countryCode: row.countryCode ?? undefined,
       regionId: row.regionId ?? undefined,
     };
+  }
+
+  private toRatingEventRecord(row: RatingEventRow): RatingEventRecord {
+    return {
+      ratingEventId: String(row.id),
+      organizationId: row.organizationId,
+      playerId: row.playerId,
+      ladderId: row.ladderId,
+      matchId: row.matchId,
+      appliedAt: row.createdAt.toISOString(),
+      ratingSystem: 'OPENRATING_TRUESKILL_LITE',
+      muBefore: row.muBefore,
+      muAfter: row.muAfter,
+      delta: row.delta,
+      sigmaBefore: row.sigmaBefore ?? null,
+      sigmaAfter: row.sigmaAfter,
+      winProbPre: row.winProbPre ?? null,
+      movWeight: row.movWeight ?? null,
+      metadata: null,
+    };
+  }
+
+  private async assertPlayerInOrganization(playerId: string, organizationId: string) {
+    const rows = await this.db
+      .select({
+        playerId: players.playerId,
+        organizationId: players.organizationId,
+      })
+      .from(players)
+      .where(eq(players.playerId, playerId))
+      .limit(1);
+
+    const row = rows.at(0);
+    if (!row) {
+      throw new PlayerLookupError(`Player not found: ${playerId}`, { missing: [playerId] });
+    }
+    if (row.organizationId !== organizationId) {
+      throw new PlayerLookupError(
+        `Player not registered to organization ${organizationId}: ${playerId}`,
+        { wrongOrganization: [playerId] }
+      );
+    }
   }
 
   private async getMatchSummaryById(matchId: string): Promise<MatchSummary | null> {
@@ -655,7 +726,7 @@ export class PostgresStore implements RatingStore {
     return { ladderId, players: map };
   }
 
-  async recordMatch(params: RecordMatchParams): Promise<{ matchId: string }> {
+  async recordMatch(params: RecordMatchParams): Promise<RecordMatchResult> {
     const matchId = randomUUID();
     const movWeight = params.match.movWeight ?? null;
 
@@ -673,6 +744,8 @@ export class PostgresStore implements RatingStore {
       params.submissionMeta.organizationId,
       submissionRegionId ?? ladderRegionId ?? null
     );
+
+    const ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
 
     await this.db.transaction(async (tx: any) => {
       await tx.insert(matches).values({
@@ -741,22 +814,37 @@ export class PostgresStore implements RatingStore {
             )
           );
 
-        await tx.insert(playerRatingHistory).values({
-          playerId: entry.playerId,
-          ladderId: params.ladderId,
-          matchId,
-          muBefore: entry.muBefore,
-          muAfter: entry.muAfter,
-          sigmaAfter: entry.sigmaAfter,
-          delta: entry.delta,
-          winProbPre: entry.winProbPre,
-          movWeight,
-          createdAt: now(),
-        });
+        const [historyRow] = await tx
+          .insert(playerRatingHistory)
+          .values({
+            playerId: entry.playerId,
+            ladderId: params.ladderId,
+            matchId,
+            muBefore: entry.muBefore,
+            muAfter: entry.muAfter,
+            sigmaBefore: entry.sigmaBefore,
+            sigmaAfter: entry.sigmaAfter,
+            delta: entry.delta,
+            winProbPre: entry.winProbPre,
+            movWeight,
+            createdAt: now(),
+          })
+          .returning({
+            id: playerRatingHistory.id,
+            createdAt: playerRatingHistory.createdAt,
+          });
+
+        if (historyRow) {
+          ratingEvents.push({
+            playerId: entry.playerId,
+            ratingEventId: String(historyRow.id),
+            appliedAt: historyRow.createdAt.toISOString(),
+          });
+        }
       }
     });
 
-    return { matchId };
+    return { matchId, ratingEvents };
   }
 
   async updateMatch(matchId: string, organizationId: string, input: MatchUpdateInput): Promise<MatchSummary> {
@@ -855,6 +943,231 @@ export class PostgresStore implements RatingStore {
       matchesCount: row.matchesCount,
       regionId: row.regionId ?? undefined,
     };
+  }
+
+  async listRatingEvents(query: RatingEventListQuery): Promise<RatingEventListResult> {
+    const ladderId = buildLadderId(query.ladderKey);
+    const limit = clampLimit(query.limit);
+
+    await this.assertOrganizationExists(query.ladderKey.organizationId);
+    await this.assertPlayerInOrganization(query.playerId, query.ladderKey.organizationId);
+
+    const filters: any[] = [
+      eq(playerRatingHistory.playerId, query.playerId),
+      eq(playerRatingHistory.ladderId, ladderId),
+      eq(matches.organizationId, query.ladderKey.organizationId),
+    ];
+
+    if (query.matchId) {
+      filters.push(eq(playerRatingHistory.matchId, query.matchId));
+    }
+
+    if (query.since) {
+      const since = new Date(query.since);
+      if (!Number.isNaN(since.getTime())) {
+        filters.push(gte(playerRatingHistory.createdAt, since));
+      }
+    }
+
+    if (query.until) {
+      const until = new Date(query.until);
+      if (!Number.isNaN(until.getTime())) {
+        filters.push(lt(playerRatingHistory.createdAt, until));
+      }
+    }
+
+    if (query.cursor) {
+      const parsed = parseRatingEventCursor(query.cursor);
+      if (parsed) {
+        filters.push(
+          or(
+            lt(playerRatingHistory.createdAt, parsed.createdAt),
+            and(
+              eq(playerRatingHistory.createdAt, parsed.createdAt),
+              lt(playerRatingHistory.id, parsed.id)
+            )
+          )
+        );
+      }
+    }
+
+    const condition = combineFilters(filters);
+
+    let historyQuery = this.db
+      .select({
+        id: playerRatingHistory.id,
+        playerId: playerRatingHistory.playerId,
+        ladderId: playerRatingHistory.ladderId,
+        matchId: playerRatingHistory.matchId,
+        createdAt: playerRatingHistory.createdAt,
+        muBefore: playerRatingHistory.muBefore,
+        muAfter: playerRatingHistory.muAfter,
+        delta: playerRatingHistory.delta,
+        sigmaBefore: playerRatingHistory.sigmaBefore,
+        sigmaAfter: playerRatingHistory.sigmaAfter,
+        winProbPre: playerRatingHistory.winProbPre,
+        movWeight: playerRatingHistory.movWeight,
+        organizationId: matches.organizationId,
+      })
+      .from(playerRatingHistory)
+      .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId))
+      .orderBy(desc(playerRatingHistory.createdAt), desc(playerRatingHistory.id))
+      .limit(limit + 1);
+
+    if (condition) {
+      historyQuery = historyQuery.where(condition);
+    }
+
+    const rows = (await historyQuery) as RatingEventRow[];
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+
+    const items: RatingEventRecord[] = page.map((row) => this.toRatingEventRecord(row));
+    const last = page.at(-1);
+    const nextCursor = hasMore && last
+      ? buildRatingEventCursor(last.createdAt, last.id)
+      : undefined;
+
+    return { items, nextCursor };
+  }
+
+  async getRatingEvent(
+    identifiers: { ladderKey: LadderKey; playerId: string; ratingEventId: string }
+  ): Promise<RatingEventRecord | null> {
+    const ladderId = buildLadderId(identifiers.ladderKey);
+    await this.assertOrganizationExists(identifiers.ladderKey.organizationId);
+    await this.assertPlayerInOrganization(identifiers.playerId, identifiers.ladderKey.organizationId);
+
+    const numericId = Number(identifiers.ratingEventId);
+    if (!Number.isFinite(numericId)) {
+      return null;
+    }
+
+    const rows = (await this.db
+      .select({
+        id: playerRatingHistory.id,
+        playerId: playerRatingHistory.playerId,
+        ladderId: playerRatingHistory.ladderId,
+        matchId: playerRatingHistory.matchId,
+        createdAt: playerRatingHistory.createdAt,
+        muBefore: playerRatingHistory.muBefore,
+        muAfter: playerRatingHistory.muAfter,
+        delta: playerRatingHistory.delta,
+        sigmaBefore: playerRatingHistory.sigmaBefore,
+        sigmaAfter: playerRatingHistory.sigmaAfter,
+        winProbPre: playerRatingHistory.winProbPre,
+        movWeight: playerRatingHistory.movWeight,
+        organizationId: matches.organizationId,
+      })
+      .from(playerRatingHistory)
+      .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId))
+      .where(
+        and(
+          eq(playerRatingHistory.id, numericId),
+          eq(playerRatingHistory.playerId, identifiers.playerId),
+          eq(playerRatingHistory.ladderId, ladderId),
+          eq(matches.organizationId, identifiers.ladderKey.organizationId)
+        )
+      )
+      .limit(1)) as RatingEventRow[];
+
+    const row = rows.at(0);
+    if (!row) return null;
+    return this.toRatingEventRecord(row);
+  }
+
+  async getRatingSnapshot(
+    params: { playerId: string; ladderKey: LadderKey; asOf?: string }
+  ): Promise<RatingSnapshot | null> {
+    const ladderId = buildLadderId(params.ladderKey);
+    await this.assertOrganizationExists(params.ladderKey.organizationId);
+    await this.assertPlayerInOrganization(params.playerId, params.ladderKey.organizationId);
+
+    const filters: any[] = [
+      eq(playerRatingHistory.playerId, params.playerId),
+      eq(playerRatingHistory.ladderId, ladderId),
+      eq(matches.organizationId, params.ladderKey.organizationId),
+    ];
+
+    let asOfDate: Date | null = null;
+    if (params.asOf) {
+      const parsed = new Date(params.asOf);
+      if (!Number.isNaN(parsed.getTime())) {
+        asOfDate = parsed;
+        filters.push(lte(playerRatingHistory.createdAt, parsed));
+      }
+    }
+
+    const condition = combineFilters(filters);
+
+    let historyQuery = this.db
+      .select({
+        id: playerRatingHistory.id,
+        playerId: playerRatingHistory.playerId,
+        ladderId: playerRatingHistory.ladderId,
+        matchId: playerRatingHistory.matchId,
+        createdAt: playerRatingHistory.createdAt,
+        muBefore: playerRatingHistory.muBefore,
+        muAfter: playerRatingHistory.muAfter,
+        delta: playerRatingHistory.delta,
+        sigmaBefore: playerRatingHistory.sigmaBefore,
+        sigmaAfter: playerRatingHistory.sigmaAfter,
+        winProbPre: playerRatingHistory.winProbPre,
+        movWeight: playerRatingHistory.movWeight,
+        organizationId: matches.organizationId,
+      })
+      .from(playerRatingHistory)
+      .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId))
+      .orderBy(desc(playerRatingHistory.createdAt), desc(playerRatingHistory.id))
+      .limit(1);
+
+    if (condition) {
+      historyQuery = historyQuery.where(condition);
+    }
+
+    const [historyRow] = (await historyQuery) as RatingEventRow[];
+    const ratingRow = await this.db
+      .select({
+        mu: playerRatings.mu,
+        sigma: playerRatings.sigma,
+        updatedAt: playerRatings.updatedAt,
+      })
+      .from(playerRatings)
+      .innerJoin(players, eq(playerRatings.playerId, players.playerId))
+      .where(
+        and(
+          eq(playerRatings.playerId, params.playerId),
+          eq(playerRatings.ladderId, ladderId),
+          eq(players.organizationId, params.ladderKey.organizationId)
+        )
+      )
+      .limit(1);
+
+    const latestRating = ratingRow.at(0);
+    if (!historyRow && !latestRating) {
+      return null;
+    }
+
+    const eventRecord = historyRow ? this.toRatingEventRecord(historyRow) : null;
+
+    const effectiveMu = historyRow ? historyRow.muAfter : latestRating?.mu ?? P.baseMu;
+    const effectiveSigma = historyRow ? historyRow.sigmaAfter : latestRating?.sigma ?? P.baseSigma;
+
+    const asOf = asOfDate
+      ? asOfDate.toISOString()
+      : historyRow
+        ? historyRow.createdAt.toISOString()
+        : latestRating?.updatedAt?.toISOString() ?? new Date().toISOString();
+
+    return {
+      organizationId: params.ladderKey.organizationId,
+      playerId: params.playerId,
+      ladderId,
+      asOf,
+      mu: effectiveMu,
+      sigma: effectiveSigma,
+      ratingEvent: eventRecord,
+    } satisfies RatingSnapshot;
   }
 
   async listPlayers(query: PlayerListQuery): Promise<PlayerListResult> {

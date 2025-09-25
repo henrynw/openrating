@@ -9,6 +9,7 @@ import type {
   PlayerRecord,
   RatingStore,
   RecordMatchParams,
+  RecordMatchResult,
   PlayerListQuery,
   PlayerListResult,
   MatchListQuery,
@@ -21,12 +22,32 @@ import type {
   OrganizationListQuery,
   OrganizationListResult,
   OrganizationRecord,
+  RatingEventListQuery,
+  RatingEventListResult,
+  RatingEventRecord,
+  RatingSnapshot,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError } from './types.js';
 import { buildLadderId } from './helpers.js';
 
 interface MemoryPlayerRecord extends PlayerRecord {
   ratings: Map<string, PlayerState>;
+}
+
+interface MemoryRatingEvent {
+  ratingEventId: string;
+  organizationId: string;
+  playerId: string;
+  ladderId: string;
+  matchId: string | null;
+  appliedAt: Date;
+  muBefore: number;
+  muAfter: number;
+  delta: number;
+  sigmaBefore: number | null;
+  sigmaAfter: number;
+  winProbPre: number | null;
+  movWeight: number | null;
 }
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -52,6 +73,16 @@ const parseMatchCursor = (cursor: string) => {
   const date = new Date(ts);
   if (Number.isNaN(date.getTime())) return null;
   return { startTime: date, matchId: id };
+};
+
+const buildRatingEventCursor = (appliedAt: Date, id: string) => `${appliedAt.toISOString()}|${id}`;
+
+const parseRatingEventCursor = (cursor: string) => {
+  const [ts, id] = cursor.split('|');
+  if (!ts || !id) return null;
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return null;
+  return { appliedAt: date, id };
 };
 
 const toPlayerRecord = (player: MemoryPlayerRecord): PlayerRecord => ({
@@ -110,6 +141,7 @@ export class MemoryStore implements RatingStore {
     venueId?: string | null;
     regionId?: string | null;
   }> = [];
+  private ratingEvents = new Map<string, Map<string, MemoryRatingEvent[]>>();
 
   async createPlayer(input: PlayerCreateInput): Promise<PlayerRecord> {
     const playerId = randomUUID();
@@ -203,9 +235,10 @@ export class MemoryStore implements RatingStore {
     return { ladderId, players: playersMap };
   }
 
-  async recordMatch(params: RecordMatchParams): Promise<{ matchId: string }> {
+  async recordMatch(params: RecordMatchParams): Promise<RecordMatchResult> {
     const matchId = randomUUID();
     this.assertOrganizationExists(params.ladderKey.organizationId);
+    const ladderId = buildLadderId(params.ladderKey);
     this.matches.push({
       matchId,
       match: params.match,
@@ -219,7 +252,36 @@ export class MemoryStore implements RatingStore {
       venueId: params.submissionMeta.venueId ?? null,
       regionId: params.submissionMeta.regionId ?? null,
     });
-    return { matchId };
+
+    const ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
+    for (const entry of params.result.perPlayer) {
+      const appliedAt = new Date();
+      const event: MemoryRatingEvent = {
+        ratingEventId: randomUUID(),
+        organizationId: params.ladderKey.organizationId,
+        playerId: entry.playerId,
+        ladderId,
+        matchId,
+        appliedAt,
+        muBefore: entry.muBefore,
+        muAfter: entry.muAfter,
+        delta: entry.delta,
+        sigmaBefore: entry.sigmaBefore,
+        sigmaAfter: entry.sigmaAfter,
+        winProbPre: entry.winProbPre,
+        movWeight: params.match.movWeight ?? null,
+      };
+
+      const bucket = this.getRatingEventBucket(ladderId, entry.playerId, true)!;
+      bucket.unshift(event);
+      ratingEvents.push({
+        playerId: entry.playerId,
+        ratingEventId: event.ratingEventId,
+        appliedAt: appliedAt.toISOString(),
+      });
+    }
+
+    return { matchId, ratingEvents };
   }
 
   async updateMatch(matchId: string, organizationId: string, input: MatchUpdateInput): Promise<MatchSummary> {
@@ -270,6 +332,108 @@ export class MemoryStore implements RatingStore {
     const player = this.players.get(playerId);
     if (!player) return null;
     return player.ratings.get(ladderId) ?? null;
+  }
+
+  async listRatingEvents(query: RatingEventListQuery): Promise<RatingEventListResult> {
+    const ladderId = buildLadderId(query.ladderKey);
+    this.assertOrganizationExists(query.ladderKey.organizationId);
+    this.assertPlayerInOrganization(query.playerId, query.ladderKey.organizationId);
+
+    const limit = clampLimit(query.limit);
+    let events = [...(this.getRatingEventBucket(ladderId, query.playerId) ?? [])];
+
+    if (query.matchId) {
+      events = events.filter((event) => event.matchId === query.matchId);
+    }
+
+    if (query.since) {
+      const since = new Date(query.since);
+      if (!Number.isNaN(since.getTime())) {
+        events = events.filter((event) => event.appliedAt >= since);
+      }
+    }
+
+    if (query.until) {
+      const until = new Date(query.until);
+      if (!Number.isNaN(until.getTime())) {
+        events = events.filter((event) => event.appliedAt < until);
+      }
+    }
+
+    if (query.cursor) {
+      const parsed = parseRatingEventCursor(query.cursor);
+      if (parsed) {
+        events = events.filter((event) => {
+          if (event.appliedAt < parsed.appliedAt) return true;
+          if (event.appliedAt > parsed.appliedAt) return false;
+          return event.ratingEventId < parsed.id;
+        });
+      }
+    }
+
+    const slice = events.slice(0, limit);
+    const nextCursor = events.length > limit && slice.length
+      ? buildRatingEventCursor(slice[slice.length - 1].appliedAt, slice[slice.length - 1].ratingEventId)
+      : undefined;
+
+    return {
+      items: slice.map((event) => this.toRatingEventRecord(event)),
+      nextCursor,
+    } satisfies RatingEventListResult;
+  }
+
+  async getRatingEvent(
+    identifiers: { ladderKey: LadderKey; playerId: string; ratingEventId: string }
+  ): Promise<RatingEventRecord | null> {
+    const ladderId = buildLadderId(identifiers.ladderKey);
+    this.assertOrganizationExists(identifiers.ladderKey.organizationId);
+    this.assertPlayerInOrganization(identifiers.playerId, identifiers.ladderKey.organizationId);
+
+    const events = this.getRatingEventBucket(ladderId, identifiers.playerId) ?? [];
+    const event = events.find((entry) => entry.ratingEventId === identifiers.ratingEventId);
+    if (!event) return null;
+    return this.toRatingEventRecord(event);
+  }
+
+  async getRatingSnapshot(
+    params: { playerId: string; ladderKey: LadderKey; asOf?: string }
+  ): Promise<RatingSnapshot | null> {
+    const ladderId = buildLadderId(params.ladderKey);
+    this.assertOrganizationExists(params.ladderKey.organizationId);
+    this.assertPlayerInOrganization(params.playerId, params.ladderKey.organizationId);
+
+    const events = this.getRatingEventBucket(ladderId, params.playerId) ?? [];
+    const asOfDate = params.asOf ? new Date(params.asOf) : null;
+    const validAsOf = asOfDate && !Number.isNaN(asOfDate.getTime()) ? asOfDate : null;
+
+    const event = validAsOf
+      ? events.find((entry) => entry.appliedAt <= validAsOf)
+      : events[0];
+
+    const player = this.players.get(params.playerId);
+    const rating = player?.ratings.get(ladderId);
+
+    if (!event && !rating) {
+      return null;
+    }
+
+    const mu = event ? event.muAfter : rating?.mu ?? P.baseMu;
+    const sigma = event ? event.sigmaAfter : rating?.sigma ?? P.baseSigma;
+    const asOf = validAsOf
+      ? validAsOf.toISOString()
+      : event
+        ? event.appliedAt.toISOString()
+        : new Date().toISOString();
+
+    return {
+      organizationId: params.ladderKey.organizationId,
+      playerId: params.playerId,
+      ladderId,
+      asOf,
+      mu,
+      sigma,
+      ratingEvent: event ? this.toRatingEventRecord(event) : null,
+    } satisfies RatingSnapshot;
   }
 
   async listPlayers(query: PlayerListQuery): Promise<PlayerListResult> {
@@ -440,6 +604,55 @@ export class MemoryStore implements RatingStore {
 
   async getOrganizationById(id: string): Promise<OrganizationRecord | null> {
     return this.organizations.get(id) ?? null;
+  }
+
+  private getRatingEventBucket(ladderId: string, playerId: string, create = false) {
+    let ladderBuckets = this.ratingEvents.get(ladderId);
+    if (!ladderBuckets && create) {
+      ladderBuckets = new Map<string, MemoryRatingEvent[]>();
+      this.ratingEvents.set(ladderId, ladderBuckets);
+    }
+    if (!ladderBuckets) return undefined;
+
+    let events = ladderBuckets.get(playerId);
+    if (!events && create) {
+      events = [];
+      ladderBuckets.set(playerId, events);
+    }
+    return events;
+  }
+
+  private toRatingEventRecord(event: MemoryRatingEvent): RatingEventRecord {
+    return {
+      ratingEventId: event.ratingEventId,
+      organizationId: event.organizationId,
+      playerId: event.playerId,
+      ladderId: event.ladderId,
+      matchId: event.matchId,
+      appliedAt: event.appliedAt.toISOString(),
+      ratingSystem: 'OPENRATING_TRUESKILL_LITE',
+      muBefore: event.muBefore,
+      muAfter: event.muAfter,
+      delta: event.delta,
+      sigmaBefore: event.sigmaBefore,
+      sigmaAfter: event.sigmaAfter,
+      winProbPre: event.winProbPre,
+      movWeight: event.movWeight,
+      metadata: null,
+    } satisfies RatingEventRecord;
+  }
+
+  private assertPlayerInOrganization(playerId: string, organizationId: string) {
+    const player = this.players.get(playerId);
+    if (!player) {
+      throw new PlayerLookupError(`Player not found: ${playerId}`, { missing: [playerId] });
+    }
+    if (player.organizationId !== organizationId) {
+      throw new PlayerLookupError(
+        `Player not registered to organization ${organizationId}: ${playerId}`,
+        { wrongOrganization: [playerId] }
+      );
+    }
   }
 
   private assertOrganizationExists(id: string) {

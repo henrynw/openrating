@@ -205,6 +205,7 @@ export const playerRatingHistory = pgTable('player_rating_history', {
   }).notNull(),
   muBefore: doublePrecision('mu_before').notNull(),
   muAfter: doublePrecision('mu_after').notNull(),
+  sigmaBefore: doublePrecision('sigma_before'),
   sigmaAfter: doublePrecision('sigma_after').notNull(),
   delta: doublePrecision('delta').notNull(),
   winProbPre: doublePrecision('win_prob_pre'),

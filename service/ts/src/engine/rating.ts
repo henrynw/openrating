@@ -66,7 +66,7 @@ export function updateMatch(
   const deltaTeam = mult * K * surprise * wt;
 
   // Remember before-values
-  const before = [...Aplayers, ...Bplayers].map(p => ({ id: p.playerId, mu: p.mu }));
+  const before = [...Aplayers, ...Bplayers].map(p => ({ id: p.playerId, mu: p.mu, sigma: p.sigma }));
 
   // Apply deltas equally to teammates
   for (const p of Aplayers) p.mu += deltaTeam / Aplayers.length;
@@ -82,16 +82,17 @@ export function updateMatch(
   [...Aplayers, ...Bplayers].forEach(shrink);
 
   return {
-    perPlayer: before.map(b => {
-      const p = [...Aplayers, ...Bplayers].find(x=>x.playerId===b.id)!;
+    perPlayer: before.map((b) => {
+      const p = [...Aplayers, ...Bplayers].find((x) => x.playerId === b.id)!;
       return {
         playerId: p.playerId,
         muBefore: b.mu,
         muAfter: p.mu,
         delta: +(p.mu - b.mu).toFixed(2),
+        sigmaBefore: +b.sigma.toFixed(1),
         sigmaAfter: +p.sigma.toFixed(1),
         winProbPre: +pA.toFixed(2),
       };
-    })
+    }),
   };
 }
