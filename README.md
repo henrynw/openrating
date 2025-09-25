@@ -34,14 +34,6 @@ npm run dev
 
 > Tip: if `DATABASE_URL` is omitted the service falls back to the in-memory store (handy for demos, no persistence).
 
-### Deploy on AWS (Terraform)
-```bash
-cd terraform/example-usage
-terraform init
-terraform apply
-```
-Provide `aws_region`, `container_image`, and `db_password` (or wire Secrets Manager).
-
 ### Deploy on Render (blueprint)
 1. [Create a Render account](https://render.com) and connect this repo.
 2. Accept the detected `render.yaml` blueprint — it provisions a Node web service (`openrating-api`) and a managed Postgres instance (`openrating-db`).
@@ -99,7 +91,6 @@ Players must be registered in advance—match submissions referencing unknown or
 openapi/        # OpenAPI spec (API-first)
 service/ts/     # Reference API (Express + Zod) — swap for Go if preferred
 sdk/ts/         # Minimal TypeScript client
-terraform/      # Terraform module + example usage
 docs/           # MkDocs site (optional)
 .github/        # CI workflows & issue templates
 ```
