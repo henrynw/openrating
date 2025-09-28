@@ -62,14 +62,35 @@ export async function authorizeOrgAccess(
   }
 }
 
-export async function enforceMatchWrite(req: Request, params: { organizationId: string; sport: string; regionId: string }) {
-  await authorizeOrgAccess(req, params.organizationId, {
-    permissions: ['matches:write'],
-    sport: params.sport,
-    regionId: params.regionId,
-    errorCode: 'matches_write_denied',
-    errorMessage: 'Insufficient grants for matches:write',
-  });
+export async function enforceMatchWrite(
+  req: Request,
+  params: { organizationId: string; sport: string; regionId: string }
+) {
+  try {
+    await authorizeOrgAccess(req, params.organizationId, {
+      permissions: ['matches:write'],
+      sport: params.sport,
+      regionId: params.regionId,
+      errorCode: 'matches_write_denied',
+      errorMessage: 'Insufficient grants for matches:write',
+    });
+  } catch (err) {
+    if (err instanceof AuthorizationError) {
+      const payload = getPayload(req) ?? {};
+      const subject = (payload.sub as string | undefined) ?? 'unknown_sub';
+      const clientId = (payload.azp as string | undefined) ?? payload.client_id ?? 'unknown_client';
+      const tokenScopes = (payload.scope as string | undefined) ?? '';
+      console.error('matches_write_denied', {
+        subject,
+        clientId,
+        tokenScopes,
+        organizationId: params.organizationId,
+        sport: params.sport,
+        regionId: params.regionId,
+      });
+    }
+    throw err;
+  }
 }
 
 type SubjectContext = {
