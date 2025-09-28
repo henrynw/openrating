@@ -193,8 +193,9 @@ paths:
           required: false
           schema: { type: string }
           description: >-
-            Match format identifying the ladder. Badminton ladders accept the
-            canonical BWF draw codes (MS, WS, BS, GS, MD, WD, BD, GD, XD).
+            Match format identifying the ladder. OpenRating uses the standard
+            draw codes common across racket sports (MS, WS, BS, GS, MD, WD, BD,
+            GD, XD).
         - in: query
           name: tier
           required: false
@@ -277,8 +278,9 @@ paths:
           required: false
           schema: { type: string }
           description: >-
-            Match format identifying the ladder. Badminton ladders accept the
-            canonical BWF draw codes (MS, WS, BS, GS, MD, WD, BD, GD, XD).
+            Match format identifying the ladder. OpenRating uses the standard
+            draw codes common across racket sports (MS, WS, BS, GS, MD, WD, BD,
+            GD, XD).
         - in: query
           name: tier
           required: false
@@ -331,8 +333,9 @@ paths:
           required: false
           schema: { type: string }
           description: >-
-            Match format identifying the ladder. Badminton ladders accept the
-            canonical BWF draw codes (MS, WS, BS, GS, MD, WD, BD, GD, XD).
+            Match format identifying the ladder. OpenRating uses the standard
+            draw codes common across racket sports (MS, WS, BS, GS, MD, WD, BD,
+            GD, XD).
         - in: query
           name: tier
           required: false
@@ -555,8 +558,9 @@ components:
           type: string
           example: MS
           description: >-
-            Match format identifying the ladder. Badminton ladders accept the
-            canonical BWF draw codes (MS, WS, BS, GS, MD, WD, BD, GD, XD).
+            Match format identifying the ladder. OpenRating uses the standard
+            draw codes common across racket sports (MS, WS, BS, GS, MD, WD, BD,
+            GD, XD).
         start_time: { type: string, format: date-time }
         venue_region_id: { type: string }
         tier: { type: string, enum: [SANCTIONED, LEAGUE, SOCIAL, EXHIBITION] }
