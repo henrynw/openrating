@@ -61,7 +61,14 @@ npm run grants -- add \
   --name "BWF Provider" \
   --org BWF \
   --sport BADMINTON \
-  --region GLOBAL \
+  --permission matches:write
+
+# Use --region ANY (or "*") to allow all regions for the organization.
+npm run grants -- add \
+  --subject bwf-provider \
+  --org BWF \
+  --sport BADMINTON \
+  --region ANY \
   --permission matches:write
 
 # List grants

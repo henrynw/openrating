@@ -18,7 +18,13 @@ const addHandler: CommandHandler = async (argv) => {
   let organizationId = argv.org as string;
   const permission = argv.permission as string;
   const sport = (argv.sport as string | undefined) ?? null;
-  const region = (argv.region as string | undefined) ?? DEFAULT_REGION;
+  const rawRegion = argv.region as string | undefined;
+  const region =
+    rawRegion === undefined
+      ? DEFAULT_REGION
+      : ['*', 'ANY', 'any', 'ALL', 'all', 'NULL', 'null'].includes(rawRegion)
+        ? null
+        : rawRegion;
   const displayName = (argv.name as string | undefined) ?? subjectId;
 
   await ensureSubject(subjectId, displayName);
@@ -65,7 +71,9 @@ const listHandler: CommandHandler = async (argv) => {
     return;
   }
   for (const grant of grants) {
-    console.log(`- ${grant.permission} :: org=${grant.organizationId} sport=${grant.sport ?? '*'} region=${grant.regionId ?? '*'} `);
+    console.log(
+      `- ${grant.permission} :: org=${grant.organizationId} sport=${grant.sport ?? '*'} region=${grant.regionId ?? '*'} `
+    );
   }
 };
 
