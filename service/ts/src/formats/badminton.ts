@@ -78,7 +78,7 @@ const normalizeSinglesBo3 = createNormalizeBo3(1, 'badminton singles');
 const normalizeDoublesBo3 = createNormalizeBo3(2, 'badminton doubles');
 const normalizeMixedBo3 = createNormalizeBo3(2, 'badminton mixed doubles');
 
-const singlesFormats = ['BO3_21RALLY', 'MS', 'WS', 'BS', 'GS'];
+const singlesFormats = ['MS', 'WS', 'BS', 'GS'];
 const doublesFormats = ['MD', 'WD', 'BD', 'GD'];
 const mixedFormats = ['XD'];
 

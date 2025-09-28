@@ -76,3 +76,22 @@ test('rejects unsupported badminton format code', () => {
   assert.equal(result.error, 'unsupported_format');
   assert.match(result.message, /unsupported format BADMINTON\/SINGLES\/UNKNOWN/);
 });
+
+test('rejects legacy BO3_21RALLY format code', () => {
+  const result = normalizeMatchSubmission({
+    sport: 'BADMINTON',
+    discipline: 'SINGLES',
+    format: 'BO3_21RALLY',
+    sides: {
+      A: { players: ['A'] },
+      B: { players: ['B'] },
+    },
+    games,
+  });
+
+  assert.equal(result.ok, false, 'expected legacy format to be rejected');
+  if (result.ok) return;
+
+  assert.equal(result.error, 'unsupported_format');
+  assert.match(result.message, /BADMINTON\/SINGLES\/BO3_21RALLY/);
+});

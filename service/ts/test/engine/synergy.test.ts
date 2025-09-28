@@ -17,7 +17,7 @@ const createPlayerState = (playerId: string, overrides: Partial<PlayerState> = {
 const sampleMatch: MatchInput = {
   sport: 'BADMINTON',
   discipline: 'DOUBLES',
-  format: 'BO3_21RALLY',
+  format: 'MD',
   sides: {
     A: { players: ['A1', 'A2'] },
     B: { players: ['B1', 'B2'] },

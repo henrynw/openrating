@@ -66,7 +66,7 @@ const buildLadderKeyForOrganization = (
   organizationId,
   sport: (params.sport ?? 'BADMINTON') as LadderKey['sport'],
   discipline: (params.discipline ?? 'SINGLES') as LadderKey['discipline'],
-  format: params.format ?? 'BO3_21RALLY',
+  format: params.format ?? 'MS',
   tier: normalizeTier(params.tier),
   regionId: normalizeRegion(params.region_id ?? null),
 });
@@ -98,7 +98,7 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         organizationId: organization.organizationId,
         sport: (parsed.data.sport ?? 'BADMINTON') as LadderKey['sport'],
         discipline: (parsed.data.discipline ?? 'SINGLES') as LadderKey['discipline'],
-        format: parsed.data.format ?? 'BO3_21RALLY',
+        format: parsed.data.format ?? 'MS',
         tier: normalizeTier(parsed.data.tier),
         regionId: normalizeRegion(parsed.data.region_id),
       };

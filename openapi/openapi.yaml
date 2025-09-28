@@ -195,8 +195,6 @@ paths:
           description: >-
             Match format identifying the ladder. Badminton ladders accept the
             canonical BWF draw codes (MS, WS, BS, GS, MD, WD, BD, GD, XD).
-            The legacy value BO3_21RALLY remains accepted to represent the
-            standard best-of-three rally scoring and as the historical default.
         - in: query
           name: tier
           required: false
@@ -281,8 +279,6 @@ paths:
           description: >-
             Match format identifying the ladder. Badminton ladders accept the
             canonical BWF draw codes (MS, WS, BS, GS, MD, WD, BD, GD, XD).
-            The legacy value BO3_21RALLY remains accepted to represent the
-            standard best-of-three rally scoring and as the historical default.
         - in: query
           name: tier
           required: false
@@ -337,8 +333,6 @@ paths:
           description: >-
             Match format identifying the ladder. Badminton ladders accept the
             canonical BWF draw codes (MS, WS, BS, GS, MD, WD, BD, GD, XD).
-            The legacy value BO3_21RALLY remains accepted to represent the
-            standard best-of-three rally scoring and as the historical default.
         - in: query
           name: tier
           required: false
@@ -563,8 +557,6 @@ components:
           description: >-
             Match format identifying the ladder. Badminton ladders accept the
             canonical BWF draw codes (MS, WS, BS, GS, MD, WD, BD, GD, XD).
-            The legacy value BO3_21RALLY remains accepted to represent the
-            standard best-of-three rally scoring and as the historical default.
         start_time: { type: string, format: date-time }
         venue_region_id: { type: string }
         tier: { type: string, enum: [SANCTIONED, LEAGUE, SOCIAL, EXHIBITION] }

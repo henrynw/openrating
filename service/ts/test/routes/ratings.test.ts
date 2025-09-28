@@ -12,7 +12,7 @@ const { createTestApp } = await import('../helpers/app.js');
 const ladderQuery = {
   sport: 'BADMINTON',
   discipline: 'SINGLES',
-  format: 'BO3_21RALLY',
+  format: 'MS',
 };
 
 let agent: request.SuperTest<request.Test>;
