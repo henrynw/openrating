@@ -78,24 +78,24 @@ const normalizeSinglesBo3 = createNormalizeBo3(1, 'badminton singles');
 const normalizeDoublesBo3 = createNormalizeBo3(2, 'badminton doubles');
 const normalizeMixedBo3 = createNormalizeBo3(2, 'badminton mixed doubles');
 
-const singlesFormats = ['MS', 'WS', 'BS', 'GS'];
-const doublesFormats = ['MD', 'WD', 'BD', 'GD'];
-const mixedFormats = ['XD'];
+const singlesFormats = ['MS', 'WS', 'BS', 'GS'] as const;
+const doublesFormats = ['MD', 'WD', 'BD', 'GD'] as const;
+const mixedFormats = ['XD'] as const;
 
 export const badmintonFormats: RegisteredFormat[] = [
-  ...singlesFormats.map((format) => ({
+  ...singlesFormats.map((format): RegisteredFormat => ({
     sport: 'BADMINTON',
     discipline: 'SINGLES',
     format,
     normalize: normalizeSinglesBo3,
   })),
-  ...doublesFormats.map((format) => ({
+  ...doublesFormats.map((format): RegisteredFormat => ({
     sport: 'BADMINTON',
     discipline: 'DOUBLES',
     format,
     normalize: normalizeDoublesBo3,
   })),
-  ...mixedFormats.map((format) => ({
+  ...mixedFormats.map((format): RegisteredFormat => ({
     sport: 'BADMINTON',
     discipline: 'MIXED',
     format,
