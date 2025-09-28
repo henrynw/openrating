@@ -192,7 +192,10 @@ paths:
           name: format
           required: false
           schema: { type: string }
-          description: 'Match format identifying the ladder (defaults to BO3_21RALLY)'
+          description: >-
+            Match format identifying the ladder (defaults to BO3_21RALLY).
+            Badminton ladders accept the canonical BWF codes: BO3_21RALLY, MS, WS,
+            BS, GS, MD, WD, BD, GD, XD.
         - in: query
           name: tier
           required: false
@@ -274,7 +277,10 @@ paths:
           name: format
           required: false
           schema: { type: string }
-          description: 'Match format identifying the ladder (defaults to BO3_21RALLY)'
+          description: >-
+            Match format identifying the ladder (defaults to BO3_21RALLY).
+            Badminton ladders accept the canonical BWF codes: BO3_21RALLY, MS, WS,
+            BS, GS, MD, WD, BD, GD, XD.
         - in: query
           name: tier
           required: false
@@ -326,7 +332,10 @@ paths:
           name: format
           required: false
           schema: { type: string }
-          description: 'Match format identifying the ladder (defaults to BO3_21RALLY)'
+          description: >-
+            Match format identifying the ladder (defaults to BO3_21RALLY).
+            Badminton ladders accept the canonical BWF codes: BO3_21RALLY, MS, WS,
+            BS, GS, MD, WD, BD, GD, XD.
         - in: query
           name: tier
           required: false
@@ -545,7 +554,12 @@ components:
           type: string
           enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
         discipline: { type: string, enum: [SINGLES, DOUBLES, MIXED] }
-        format: { type: string, example: BO3_21RALLY }
+        format:
+          type: string
+          example: MS
+          description: >-
+            Match format identifying the ladder. Badminton ladders accept the
+            canonical BWF codes: BO3_21RALLY, MS, WS, BS, GS, MD, WD, BD, GD, XD.
         start_time: { type: string, format: date-time }
         venue_region_id: { type: string }
         tier: { type: string, enum: [SANCTIONED, LEAGUE, SOCIAL, EXHIBITION] }
