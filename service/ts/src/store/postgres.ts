@@ -49,6 +49,12 @@ import type {
   EnsurePairSynergiesParams,
   EnsurePairSynergiesResult,
   NightlyStabilizationOptions,
+  LeaderboardQuery,
+  LeaderboardResult,
+  LeaderboardEntry,
+  LeaderboardMoversQuery,
+  LeaderboardMoversResult,
+  LeaderboardMoverEntry,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError } from './types.js';
 import { buildLadderId, isDefaultRegion, toDbRegionId, DEFAULT_REGION } from './helpers.js';
@@ -1497,6 +1503,236 @@ export class PostgresStore implements RatingStore {
       sigma: effectiveSigma,
       ratingEvent: eventRecord,
     } satisfies RatingSnapshot;
+  }
+
+  async listLeaderboard(params: LeaderboardQuery): Promise<LeaderboardResult> {
+    const ladderId = buildLadderId(params.ladderKey);
+    await this.assertOrganizationExists(params.ladderKey.organizationId);
+    const limit = clampLimit(params.limit);
+
+    const rows = (await this.db
+      .select({
+        playerId: playerRatings.playerId,
+        mu: playerRatings.mu,
+        sigma: playerRatings.sigma,
+        matchesCount: playerRatings.matchesCount,
+        updatedAt: playerRatings.updatedAt,
+        displayName: players.displayName,
+        shortName: players.shortName,
+        givenName: players.givenName,
+        familyName: players.familyName,
+        countryCode: players.countryCode,
+        regionId: players.regionId,
+      })
+      .from(playerRatings)
+      .innerJoin(players, eq(playerRatings.playerId, players.playerId))
+      .where(
+        and(
+          eq(playerRatings.ladderId, ladderId),
+          eq(players.organizationId, params.ladderKey.organizationId)
+        )
+      )
+      .orderBy(desc(playerRatings.mu), playerRatings.playerId)
+      .limit(limit)) as Array<{
+        playerId: string;
+        mu: number;
+        sigma: number;
+        matchesCount: number;
+        updatedAt: Date | null;
+        displayName: string;
+        shortName: string | null;
+        givenName: string | null;
+        familyName: string | null;
+        countryCode: string | null;
+        regionId: string | null;
+      }>;
+
+    const playerIds = rows.map((row) => row.playerId);
+    const latestEvents = new Map<string, { delta: number; matchId: string | null; createdAt: Date }>();
+
+    if (playerIds.length) {
+      const eventRows = (await this.db
+        .select({
+          playerId: playerRatingHistory.playerId,
+          delta: playerRatingHistory.delta,
+          matchId: playerRatingHistory.matchId,
+          createdAt: playerRatingHistory.createdAt,
+          id: playerRatingHistory.id,
+        })
+        .from(playerRatingHistory)
+        .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId))
+        .where(
+          and(
+            eq(playerRatingHistory.ladderId, ladderId),
+            eq(matches.organizationId, params.ladderKey.organizationId),
+            inArray(playerRatingHistory.playerId, playerIds)
+          )
+        )
+        .orderBy(desc(playerRatingHistory.createdAt), desc(playerRatingHistory.id))) as Array<{
+          playerId: string;
+          delta: number;
+          matchId: string | null;
+          createdAt: Date;
+          id: number;
+        }>;
+
+      for (const row of eventRows) {
+        if (!latestEvents.has(row.playerId)) {
+          latestEvents.set(row.playerId, {
+            delta: row.delta,
+            matchId: row.matchId,
+            createdAt: row.createdAt,
+          });
+        }
+        if (latestEvents.size === playerIds.length) {
+          break;
+        }
+      }
+    }
+
+    const items = rows.map((row, index) => {
+      const latest = latestEvents.get(row.playerId);
+      return {
+        rank: index + 1,
+        playerId: row.playerId,
+        displayName: row.displayName,
+        shortName: row.shortName ?? undefined,
+        givenName: row.givenName ?? undefined,
+        familyName: row.familyName ?? undefined,
+        countryCode: row.countryCode ?? undefined,
+        regionId: row.regionId ?? undefined,
+        mu: row.mu,
+        sigma: row.sigma,
+        matches: row.matchesCount,
+        delta: latest?.delta ?? null,
+        lastEventAt: latest?.createdAt ? latest.createdAt.toISOString() : null,
+        lastMatchId: latest?.matchId ?? null,
+      } satisfies LeaderboardEntry;
+    });
+
+    return { items } satisfies LeaderboardResult;
+  }
+
+  async listLeaderboardMovers(params: LeaderboardMoversQuery): Promise<LeaderboardMoversResult> {
+    const ladderId = buildLadderId(params.ladderKey);
+    await this.assertOrganizationExists(params.ladderKey.organizationId);
+    const limit = clampLimit(params.limit);
+
+    const since = new Date(params.since);
+    if (Number.isNaN(since.getTime())) {
+      throw new Error('Invalid since timestamp');
+    }
+
+    const aggregateRows = (await this.db
+      .select({
+        playerId: playerRatingHistory.playerId,
+        change: sql<number>`sum(${playerRatingHistory.delta})`,
+        events: sql<number>`count(*)`,
+        lastEventAt: sql<Date>`max(${playerRatingHistory.createdAt})`,
+      })
+      .from(playerRatingHistory)
+      .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId))
+      .where(
+        and(
+          eq(playerRatingHistory.ladderId, ladderId),
+          eq(matches.organizationId, params.ladderKey.organizationId),
+          gte(playerRatingHistory.createdAt, since)
+        )
+      )
+      .groupBy(playerRatingHistory.playerId)
+      .orderBy(sql`sum(${playerRatingHistory.delta}) DESC`, sql`max(${playerRatingHistory.createdAt}) DESC`)
+      .limit(limit)) as Array<{
+        playerId: string;
+        change: unknown;
+        events: unknown;
+        lastEventAt: Date | string | null;
+      }>;
+
+    const playerIds = aggregateRows.map((row) => row.playerId);
+    if (!playerIds.length) {
+      return { items: [] } satisfies LeaderboardMoversResult;
+    }
+
+    const detailsRows = (await this.db
+      .select({
+        playerId: playerRatings.playerId,
+        mu: playerRatings.mu,
+        sigma: playerRatings.sigma,
+        matchesCount: playerRatings.matchesCount,
+        displayName: players.displayName,
+        shortName: players.shortName,
+        givenName: players.givenName,
+        familyName: players.familyName,
+        countryCode: players.countryCode,
+        regionId: players.regionId,
+      })
+      .from(playerRatings)
+      .innerJoin(players, eq(playerRatings.playerId, players.playerId))
+      .where(
+        and(
+          eq(playerRatings.ladderId, ladderId),
+          eq(players.organizationId, params.ladderKey.organizationId),
+          inArray(playerRatings.playerId, playerIds)
+        )
+      )) as Array<{
+        playerId: string;
+        mu: number;
+        sigma: number;
+        matchesCount: number;
+        displayName: string;
+        shortName: string | null;
+        givenName: string | null;
+        familyName: string | null;
+        countryCode: string | null;
+        regionId: string | null;
+      }>;
+
+    const detailsByPlayer = new Map<string, (typeof detailsRows)[number]>();
+    for (const row of detailsRows) {
+      detailsByPlayer.set(row.playerId, row);
+    }
+
+    const items: LeaderboardMoverEntry[] = [];
+
+    for (const row of aggregateRows) {
+      const details = detailsByPlayer.get(row.playerId);
+      if (!details) continue;
+
+      const change = Number(row.change);
+      if (!Number.isFinite(change) || change === 0) continue;
+
+      const eventsRaw = Number(row.events);
+      const eventsCount = Number.isFinite(eventsRaw) ? eventsRaw : 0;
+
+      const rawLast = row.lastEventAt;
+      let lastEventAt: string | null = null;
+      if (rawLast instanceof Date) {
+        lastEventAt = rawLast.toISOString();
+      } else if (rawLast) {
+        const parsed = new Date(rawLast);
+        if (!Number.isNaN(parsed.getTime())) {
+          lastEventAt = parsed.toISOString();
+        }
+      }
+
+      items.push({
+        playerId: details.playerId,
+        displayName: details.displayName,
+        shortName: details.shortName ?? undefined,
+        givenName: details.givenName ?? undefined,
+        familyName: details.familyName ?? undefined,
+        countryCode: details.countryCode ?? undefined,
+        regionId: details.regionId ?? undefined,
+        mu: details.mu,
+        sigma: details.sigma,
+        matches: details.matchesCount,
+        change,
+        events: eventsCount,
+        lastEventAt,
+      });
+    }
+
+    return { items } satisfies LeaderboardMoversResult;
   }
 
   async runNightlyStabilization(options: NightlyStabilizationOptions = {}): Promise<void> {

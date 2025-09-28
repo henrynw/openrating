@@ -82,6 +82,8 @@ The CLI reads credentials from environment variables so provider secrets stay ou
 - `GET /v1/organizations`: search/paginate organizations by name or slug.
 - `GET /v1/players`: paginated list filtered by `organization_id` or `organization_slug`, optional `q`, `limit`, and `cursor`. Returns `next_cursor` for continue tokens.
 - `GET /v1/matches`: paginated list filtered by `organization_id` or `organization_slug` with optional `sport`, `player_id`, `start_after`, `start_before`, `cursor`, and `limit`.
+- `GET /v1/public/organizations/{slug}/leaderboard`: read-optimized leaderboard for the current ladder, including rank, ratings, and latest deltas (requires `ratings:read`, `matches:read`, or `matches:write`).
+- `GET /v1/public/organizations/{slug}/leaderboard/movers`: highlights players with the largest rating changes since a supplied timestamp (requires `ratings:read`, `matches:read`, or `matches:write`).
 
 Players must be registered in advance—match submissions referencing unknown or cross-organization player IDs return `invalid_players`.
 

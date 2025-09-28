@@ -29,6 +29,12 @@ import type {
   RatingEventRecord,
   RatingSnapshot,
   NightlyStabilizationOptions,
+  LeaderboardQuery,
+  LeaderboardResult,
+  LeaderboardEntry,
+  LeaderboardMoversQuery,
+  LeaderboardMoversResult,
+  LeaderboardMoverEntry,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError } from './types.js';
 import { buildLadderId, DEFAULT_REGION } from './helpers.js';
@@ -556,6 +562,105 @@ export class MemoryStore implements RatingStore {
       sigma,
       ratingEvent: event ? this.toRatingEventRecord(event) : null,
     } satisfies RatingSnapshot;
+  }
+
+  async listLeaderboard(params: LeaderboardQuery): Promise<LeaderboardResult> {
+    const ladderId = buildLadderId(params.ladderKey);
+    this.assertOrganizationExists(params.ladderKey.organizationId);
+    const limit = clampLimit(params.limit);
+
+    const candidates: Array<{
+      player: MemoryPlayerRecord;
+      rating: MemoryRatingRecord;
+      latest?: MemoryRatingEvent;
+    }> = [];
+
+    for (const player of this.players.values()) {
+      if (player.organizationId !== params.ladderKey.organizationId) continue;
+      const rating = player.ratings.get(ladderId);
+      if (!rating) continue;
+      const events = this.getRatingEventBucket(ladderId, player.playerId) ?? [];
+      candidates.push({ player, rating, latest: events[0] });
+    }
+
+    candidates.sort((a, b) => {
+      const diff = b.rating.mu - a.rating.mu;
+      if (diff !== 0) return diff;
+      return a.player.playerId.localeCompare(b.player.playerId);
+    });
+
+    const items: LeaderboardEntry[] = candidates.slice(0, limit).map((entry, index) => ({
+      rank: index + 1,
+      playerId: entry.player.playerId,
+      displayName: entry.player.displayName,
+      shortName: entry.player.shortName ?? undefined,
+      givenName: entry.player.givenName ?? undefined,
+      familyName: entry.player.familyName ?? undefined,
+      countryCode: entry.player.countryCode ?? undefined,
+      regionId: entry.player.regionId ?? undefined,
+      mu: entry.rating.mu,
+      sigma: entry.rating.sigma,
+      matches: entry.rating.matchesCount,
+      delta: entry.latest?.delta ?? null,
+      lastEventAt: entry.latest ? entry.latest.appliedAt.toISOString() : null,
+      lastMatchId: entry.latest?.matchId ?? null,
+    }));
+
+    return { items };
+  }
+
+  async listLeaderboardMovers(params: LeaderboardMoversQuery): Promise<LeaderboardMoversResult> {
+    const ladderId = buildLadderId(params.ladderKey);
+    this.assertOrganizationExists(params.ladderKey.organizationId);
+    const since = new Date(params.since);
+    if (Number.isNaN(since.getTime())) {
+      throw new Error('Invalid since timestamp');
+    }
+    const limit = clampLimit(params.limit);
+
+    const movers: Array<{
+      player: MemoryPlayerRecord;
+      rating: MemoryRatingRecord;
+      events: MemoryRatingEvent[];
+      change: number;
+    }> = [];
+
+    for (const player of this.players.values()) {
+      if (player.organizationId !== params.ladderKey.organizationId) continue;
+      const rating = player.ratings.get(ladderId);
+      if (!rating) continue;
+      const events = (this.getRatingEventBucket(ladderId, player.playerId) ?? []).filter((event) => event.appliedAt >= since);
+      if (!events.length) continue;
+      const change = events.reduce((sum, event) => sum + event.delta, 0);
+      if (change === 0) continue;
+      movers.push({ player, rating, events, change });
+    }
+
+    movers.sort((a, b) => {
+      const diff = b.change - a.change;
+      if (diff !== 0) return diff;
+      const aTime = a.events[0]?.appliedAt.getTime() ?? 0;
+      const bTime = b.events[0]?.appliedAt.getTime() ?? 0;
+      return bTime - aTime;
+    });
+
+    const items: LeaderboardMoverEntry[] = movers.slice(0, limit).map((entry) => ({
+      playerId: entry.player.playerId,
+      displayName: entry.player.displayName,
+      shortName: entry.player.shortName ?? undefined,
+      givenName: entry.player.givenName ?? undefined,
+      familyName: entry.player.familyName ?? undefined,
+      countryCode: entry.player.countryCode ?? undefined,
+      regionId: entry.player.regionId ?? undefined,
+      mu: entry.rating.mu,
+      sigma: entry.rating.sigma,
+      matches: entry.rating.matchesCount,
+      change: entry.change,
+      events: entry.events.length,
+      lastEventAt: entry.events[0]?.appliedAt.toISOString() ?? null,
+    }));
+
+    return { items };
   }
 
   async runNightlyStabilization(options: NightlyStabilizationOptions = {}): Promise<void> {

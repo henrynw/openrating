@@ -42,3 +42,51 @@ export interface RatingSnapshot {
   sigma: number;
   ratingEvent?: RatingEventRecord | null;
 }
+
+export interface LeaderboardPlayerInfo {
+  playerId: string;
+  displayName: string;
+  shortName?: string;
+  givenName?: string;
+  familyName?: string;
+  countryCode?: string;
+  regionId?: string;
+}
+
+export interface LeaderboardEntry extends LeaderboardPlayerInfo {
+  rank: number;
+  mu: number;
+  sigma: number;
+  matches: number;
+  delta?: number | null;
+  lastEventAt?: string | null;
+  lastMatchId?: string | null;
+}
+
+export interface LeaderboardQuery {
+  ladderKey: LadderKey;
+  limit?: number;
+}
+
+export interface LeaderboardResult {
+  items: LeaderboardEntry[];
+}
+
+export interface LeaderboardMoverEntry extends LeaderboardPlayerInfo {
+  mu: number;
+  sigma: number;
+  matches: number;
+  change: number;
+  events: number;
+  lastEventAt?: string | null;
+}
+
+export interface LeaderboardMoversQuery {
+  ladderKey: LadderKey;
+  since: string;
+  limit?: number;
+}
+
+export interface LeaderboardMoversResult {
+  items: LeaderboardMoverEntry[];
+}

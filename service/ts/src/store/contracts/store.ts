@@ -16,7 +16,16 @@ import type {
   RecordMatchResult,
   NightlyStabilizationOptions,
 } from './common.js';
-import type { RatingEventListQuery, RatingEventListResult, RatingEventRecord, RatingSnapshot } from './ratings.js';
+import type {
+  RatingEventListQuery,
+  RatingEventListResult,
+  RatingEventRecord,
+  RatingSnapshot,
+  LeaderboardQuery,
+  LeaderboardResult,
+  LeaderboardMoversQuery,
+  LeaderboardMoversResult,
+} from './ratings.js';
 import type { PlayerState } from '../../engine/types.js';
 
 export interface RatingStore {
@@ -36,6 +45,8 @@ export interface RatingStore {
   getRatingSnapshot(
     params: { playerId: string; ladderKey: LadderKey; asOf?: string }
   ): Promise<RatingSnapshot | null>;
+  listLeaderboard(params: LeaderboardQuery): Promise<LeaderboardResult>;
+  listLeaderboardMovers(params: LeaderboardMoversQuery): Promise<LeaderboardMoversResult>;
   createOrganization(input: OrganizationCreateInput): Promise<OrganizationRecord>;
   updateOrganization(organizationId: string, input: OrganizationUpdateInput): Promise<OrganizationRecord>;
   listOrganizations(query: OrganizationListQuery): Promise<OrganizationListResult>;

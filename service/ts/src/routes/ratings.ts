@@ -12,6 +12,7 @@ import { OrganizationLookupError, PlayerLookupError } from '../store/index.js';
 import { normalizeRegion, normalizeTier, isDefaultRegion } from '../store/helpers.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
 import { toRatingEventResponse } from './helpers/responders.js';
+import { buildLadderKeyForOrganization } from './helpers/ladder.js';
 
 const RatingQuerySchema = z
   .object({
@@ -53,24 +54,6 @@ interface RatingRouteDeps {
   resolveOrganization: (input: OrganizationIdentifierInput) => Promise<OrganizationRecord>;
 }
 
-const buildLadderKeyForOrganization = (
-  organizationId: string,
-  params: {
-    sport?: string;
-    discipline?: string;
-    format?: string;
-    tier?: string;
-    region_id?: string;
-  }
-): LadderKey => ({
-  organizationId,
-  sport: (params.sport ?? 'BADMINTON') as LadderKey['sport'],
-  discipline: (params.discipline ?? 'SINGLES') as LadderKey['discipline'],
-  format: params.format ?? 'MS',
-  tier: normalizeTier(params.tier),
-  regionId: normalizeRegion(params.region_id ?? null),
-});
-
 export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
   const { store, resolveOrganization } = deps;
 
@@ -94,14 +77,13 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         organization_slug: parsed.data.organization_slug,
       });
 
-      const ladderKey: LadderKey = {
-        organizationId: organization.organizationId,
-        sport: (parsed.data.sport ?? 'BADMINTON') as LadderKey['sport'],
-        discipline: (parsed.data.discipline ?? 'SINGLES') as LadderKey['discipline'],
-        format: parsed.data.format ?? 'MS',
-        tier: normalizeTier(parsed.data.tier),
-        regionId: normalizeRegion(parsed.data.region_id),
-      };
+      const ladderKey = buildLadderKeyForOrganization(organization.organizationId, {
+        sport: parsed.data.sport,
+        discipline: parsed.data.discipline,
+        format: parsed.data.format,
+        tier: parsed.data.tier,
+        region_id: parsed.data.region_id,
+      });
 
       const rating = await store.getPlayerRating(req.params.player_id, ladderKey);
       if (!rating) {

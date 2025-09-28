@@ -456,6 +456,131 @@ paths:
                 $ref: '#/components/schemas/MatchSummary'
         '404':
           description: Match not found
+  /v1/public/organizations/{organization_slug}/leaderboard:
+    get:
+      tags: [Leaderboards]
+      summary: Fetch the current ladder leaderboard for an organization
+      description: >-
+        Returns the top players for the specified organization ladder, including their
+        current rating, latest delta, and ranking order. Requires authentication with
+        grants that include `ratings:read`, `matches:read`, or `matches:write`.
+      parameters:
+        - in: path
+          name: organization_slug
+          required: true
+          schema: { type: string }
+          description: Slug identifier for the organization
+        - in: query
+          name: sport
+          required: false
+          schema:
+            type: string
+            enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+          description: Sport ladder to inspect (defaults to BADMINTON)
+        - in: query
+          name: discipline
+          required: false
+          schema:
+            type: string
+            enum: [SINGLES, DOUBLES, MIXED]
+          description: Discipline within the sport (defaults to SINGLES)
+        - in: query
+          name: format
+          required: false
+          schema: { type: string }
+          description: Match format identifying the ladder (defaults to MS)
+        - in: query
+          name: tier
+          required: false
+          schema: { type: string }
+          description: Competition tier for the ladder (defaults to UNSPECIFIED)
+        - in: query
+          name: region_id
+          required: false
+          schema: { type: string }
+          description: Region within the organization (defaults to GLOBAL)
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: Leaderboard snapshot for the requested ladder
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaderboardResponse'
+        '404':
+          description: Organization not found
+
+  /v1/public/organizations/{organization_slug}/leaderboard/movers:
+    get:
+      tags: [Leaderboards]
+      summary: List leaderboard movers since a point in time
+      description: >-
+        Returns the players with the largest rating change since the supplied timestamp for
+        the specified organization ladder. Requires authentication with grants that include
+        `ratings:read`, `matches:read`, or `matches:write`.
+      parameters:
+        - in: path
+          name: organization_slug
+          required: true
+          schema: { type: string }
+          description: Slug identifier for the organization
+        - in: query
+          name: sport
+          required: false
+          schema:
+            type: string
+            enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+          description: Sport ladder to inspect (defaults to BADMINTON)
+        - in: query
+          name: discipline
+          required: false
+          schema:
+            type: string
+            enum: [SINGLES, DOUBLES, MIXED]
+          description: Discipline within the sport (defaults to SINGLES)
+        - in: query
+          name: format
+          required: false
+          schema: { type: string }
+          description: Match format identifying the ladder (defaults to MS)
+        - in: query
+          name: tier
+          required: false
+          schema: { type: string }
+          description: Competition tier for the ladder (defaults to UNSPECIFIED)
+        - in: query
+          name: region_id
+          required: false
+          schema: { type: string }
+          description: Region within the organization (defaults to GLOBAL)
+        - in: query
+          name: since
+          required: true
+          schema: { type: string, format: date-time }
+          description: Only include rating changes applied at or after this timestamp
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: Movers list for the requested ladder
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaderboardMoversResponse'
+        '404':
+          description: Organization not found
+
 components:
   schemas:
     PlayerUpsert:
@@ -743,3 +868,93 @@ components:
             - $ref: '#/components/schemas/RatingEvent'
             - type: 'null'
           description: 'Latest rating event applied at or before the snapshot time'
+    LeaderboardPlayer:
+      type: object
+      properties:
+        rank: { type: integer }
+        player_id: { type: string }
+        display_name: { type: string }
+        short_name:
+          type: [string, 'null']
+        given_name:
+          type: [string, 'null']
+        family_name:
+          type: [string, 'null']
+        country_code:
+          type: [string, 'null']
+        region_id:
+          type: [string, 'null']
+        mu: { type: number }
+        sigma: { type: number }
+        matches: { type: integer }
+        delta:
+          type: [number, 'null']
+        last_event_at:
+          type: [string, 'null']
+          format: date-time
+        last_match_id:
+          type: [string, 'null']
+    LeaderboardResponse:
+      type: object
+      properties:
+        organization_id: { type: string }
+        organization_slug: { type: string }
+        sport:
+          type: string
+          enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+        discipline:
+          type: string
+          enum: [SINGLES, DOUBLES, MIXED]
+        format: { type: string }
+        tier:
+          type: [string, 'null']
+        region_id:
+          type: [string, 'null']
+        players:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaderboardPlayer'
+    LeaderboardMover:
+      type: object
+      properties:
+        player_id: { type: string }
+        display_name: { type: string }
+        short_name:
+          type: [string, 'null']
+        given_name:
+          type: [string, 'null']
+        family_name:
+          type: [string, 'null']
+        country_code:
+          type: [string, 'null']
+        region_id:
+          type: [string, 'null']
+        mu: { type: number }
+        sigma: { type: number }
+        matches: { type: integer }
+        change: { type: number }
+        events: { type: integer }
+        last_event_at:
+          type: [string, 'null']
+          format: date-time
+    LeaderboardMoversResponse:
+      type: object
+      properties:
+        organization_id: { type: string }
+        organization_slug: { type: string }
+        sport:
+          type: string
+          enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+        discipline:
+          type: string
+          enum: [SINGLES, DOUBLES, MIXED]
+        format: { type: string }
+        tier:
+          type: [string, 'null']
+        region_id:
+          type: [string, 'null']
+        since: { type: string, format: date-time }
+        players:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaderboardMover'
