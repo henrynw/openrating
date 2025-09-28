@@ -35,7 +35,7 @@ const maybe = <T>(value: T | null | undefined) => (value ?? null);
 export const registerLeaderboardRoutes = (app: Express, deps: LeaderboardRouteDeps) => {
   const { store, resolveOrganization } = deps;
 
-  app.get('/v1/public/organizations/:organization_slug/leaderboard', requireAuth, async (req, res) => {
+  app.get('/v1/organizations/:organization_slug/leaderboard', requireAuth, async (req, res) => {
     const parsed = LeaderboardQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
@@ -92,7 +92,7 @@ export const registerLeaderboardRoutes = (app: Express, deps: LeaderboardRouteDe
     }
   });
 
-  app.get('/v1/public/organizations/:organization_slug/leaderboard/movers', requireAuth, async (req, res) => {
+  app.get('/v1/organizations/:organization_slug/leaderboard/movers', requireAuth, async (req, res) => {
     const parsed = LeaderboardMoversQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });

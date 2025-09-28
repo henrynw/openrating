@@ -456,7 +456,7 @@ paths:
                 $ref: '#/components/schemas/MatchSummary'
         '404':
           description: Match not found
-  /v1/public/organizations/{organization_slug}/leaderboard:
+  /v1/organizations/{organization_slug}/leaderboard:
     get:
       tags: [Leaderboards]
       summary: Fetch the current ladder leaderboard for an organization
@@ -516,7 +516,7 @@ paths:
         '404':
           description: Organization not found
 
-  /v1/public/organizations/{organization_slug}/leaderboard/movers:
+  /v1/organizations/{organization_slug}/leaderboard/movers:
     get:
       tags: [Leaderboards]
       summary: List leaderboard movers since a point in time
