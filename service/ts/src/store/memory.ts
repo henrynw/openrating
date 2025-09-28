@@ -565,31 +565,35 @@ export class MemoryStore implements RatingStore {
   }
 
   async listLeaderboard(params: LeaderboardQuery): Promise<LeaderboardResult> {
-    const ladderId = buildLadderId(params.ladderKey);
-    this.assertOrganizationExists(params.ladderKey.organizationId);
+    this.assertOrganizationExists(params.organizationId);
     const limit = clampLimit(params.limit);
 
-    const candidates: Array<{
+    const entries: Array<{
       player: MemoryPlayerRecord;
       rating: MemoryRatingRecord;
+      ladderId: string;
       latest?: MemoryRatingEvent;
     }> = [];
 
     for (const player of this.players.values()) {
-      if (player.organizationId !== params.ladderKey.organizationId) continue;
-      const rating = player.ratings.get(ladderId);
-      if (!rating) continue;
-      const events = this.getRatingEventBucket(ladderId, player.playerId) ?? [];
-      candidates.push({ player, rating, latest: events[0] });
+      if (player.organizationId !== params.organizationId) continue;
+      const selection = this.selectBestPlayerRating(player, params);
+      if (!selection) continue;
+      const events = this.getRatingEventBucket(selection.ladderId, player.playerId) ?? [];
+      entries.push({ player, rating: selection.rating, ladderId: selection.ladderId, latest: events[0] });
     }
 
-    candidates.sort((a, b) => {
+    if (!entries.length) {
+      return { items: [] };
+    }
+
+    entries.sort((a, b) => {
       const diff = b.rating.mu - a.rating.mu;
       if (diff !== 0) return diff;
       return a.player.playerId.localeCompare(b.player.playerId);
     });
 
-    const items: LeaderboardEntry[] = candidates.slice(0, limit).map((entry, index) => ({
+    const items: LeaderboardEntry[] = entries.slice(0, limit).map((entry, index) => ({
       rank: index + 1,
       playerId: entry.player.playerId,
       displayName: entry.player.displayName,
@@ -610,8 +614,7 @@ export class MemoryStore implements RatingStore {
   }
 
   async listLeaderboardMovers(params: LeaderboardMoversQuery): Promise<LeaderboardMoversResult> {
-    const ladderId = buildLadderId(params.ladderKey);
-    this.assertOrganizationExists(params.ladderKey.organizationId);
+    this.assertOrganizationExists(params.organizationId);
     const since = new Date(params.since);
     if (Number.isNaN(since.getTime())) {
       throw new Error('Invalid since timestamp');
@@ -621,26 +624,49 @@ export class MemoryStore implements RatingStore {
     const movers: Array<{
       player: MemoryPlayerRecord;
       rating: MemoryRatingRecord;
-      events: MemoryRatingEvent[];
       change: number;
+      events: number;
+      lastEventAt: Date | null;
     }> = [];
 
     for (const player of this.players.values()) {
-      if (player.organizationId !== params.ladderKey.organizationId) continue;
-      const rating = player.ratings.get(ladderId);
-      if (!rating) continue;
-      const events = (this.getRatingEventBucket(ladderId, player.playerId) ?? []).filter((event) => event.appliedAt >= since);
-      if (!events.length) continue;
-      const change = events.reduce((sum, event) => sum + event.delta, 0);
+      if (player.organizationId !== params.organizationId) continue;
+      const selection = this.selectBestPlayerRating(player, params);
+      if (!selection) continue;
+
+      const matchingLadders = this.getMatchingPlayerLadders(player, params);
+      let change = 0;
+      let eventsCount = 0;
+      let lastEventAt: Date | null = null;
+
+      for (const ladderId of matchingLadders) {
+        const events = this.getRatingEventBucket(ladderId, player.playerId) ?? [];
+        for (const event of events) {
+          if (event.appliedAt < since) break;
+          change += event.delta;
+          eventsCount += 1;
+          if (!lastEventAt || event.appliedAt > lastEventAt) {
+            lastEventAt = event.appliedAt;
+          }
+        }
+      }
+
       if (change === 0) continue;
-      movers.push({ player, rating, events, change });
+
+      movers.push({
+        player,
+        rating: selection.rating,
+        change,
+        events: eventsCount,
+        lastEventAt,
+      });
     }
 
     movers.sort((a, b) => {
       const diff = b.change - a.change;
       if (diff !== 0) return diff;
-      const aTime = a.events[0]?.appliedAt.getTime() ?? 0;
-      const bTime = b.events[0]?.appliedAt.getTime() ?? 0;
+      const aTime = a.lastEventAt?.getTime() ?? 0;
+      const bTime = b.lastEventAt?.getTime() ?? 0;
       return bTime - aTime;
     });
 
@@ -656,11 +682,11 @@ export class MemoryStore implements RatingStore {
       sigma: entry.rating.sigma,
       matches: entry.rating.matchesCount,
       change: entry.change,
-      events: entry.events.length,
-      lastEventAt: entry.events[0]?.appliedAt.toISOString() ?? null,
+      events: entry.events,
+      lastEventAt: entry.lastEventAt ? entry.lastEventAt.toISOString() : null,
     }));
 
-    return { items };
+    return { items } satisfies LeaderboardMoversResult;
   }
 
   async runNightlyStabilization(options: NightlyStabilizationOptions = {}): Promise<void> {
@@ -857,6 +883,73 @@ export class MemoryStore implements RatingStore {
       ladderBuckets.set(playerId, events);
     }
     return events;
+  }
+
+  private parseLadderId(ladderId: string) {
+    const [organizationId, sport, discipline, format, tier, region] = ladderId.split(':');
+    return {
+      organizationId,
+      sport,
+      discipline,
+      format,
+      tier,
+      region: region ?? DEFAULT_REGION,
+    };
+  }
+
+  private ladderMatches(
+    ladderId: string,
+    params: { organizationId: string; sport: string; discipline: string; format: string; tier?: string | null; regionId?: string | null }
+  ) {
+    const parsed = this.parseLadderId(ladderId);
+    if (parsed.organizationId !== params.organizationId) return false;
+    if (parsed.sport !== params.sport) return false;
+    if (parsed.discipline !== params.discipline) return false;
+    if (parsed.format !== params.format) return false;
+    if (params.tier && parsed.tier !== params.tier) return false;
+    if (params.regionId) {
+      const targetRegion = params.regionId;
+      const ladderRegion = parsed.region ?? DEFAULT_REGION;
+      if (targetRegion === DEFAULT_REGION) {
+        if (ladderRegion !== DEFAULT_REGION) return false;
+      } else if (ladderRegion !== targetRegion) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private getMatchingPlayerLadders(player: MemoryPlayerRecord, params: LeaderboardQuery) {
+    const ladders: string[] = [];
+    for (const ladderId of player.ratings.keys()) {
+      if (this.ladderMatches(ladderId, params)) {
+        ladders.push(ladderId);
+      }
+    }
+    return ladders;
+  }
+
+  private selectBestPlayerRating(player: MemoryPlayerRecord, params: LeaderboardQuery) {
+    const ladders = this.getMatchingPlayerLadders(player, params);
+    let best: { ladderId: string; rating: MemoryRatingRecord } | null = null;
+    for (const ladderId of ladders) {
+      const rating = player.ratings.get(ladderId);
+      if (!rating) continue;
+      if (!best) {
+        best = { ladderId, rating };
+        continue;
+      }
+      const currentTs = rating.updatedAt?.getTime?.() ?? 0;
+      const bestTs = best.rating.updatedAt?.getTime?.() ?? 0;
+      if (currentTs > bestTs) {
+        best = { ladderId, rating };
+        continue;
+      }
+      if (currentTs === bestTs && rating.mu > best.rating.mu) {
+        best = { ladderId, rating };
+      }
+    }
+    return best;
   }
 
   private toRatingEventRecord(event: MemoryRatingEvent): RatingEventRecord {

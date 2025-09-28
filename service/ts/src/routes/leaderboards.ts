@@ -3,14 +3,14 @@ import { z } from 'zod';
 
 import type { RatingStore, OrganizationRecord } from '../store/index.js';
 import { OrganizationLookupError } from '../store/index.js';
-import { isDefaultRegion } from '../store/helpers.js';
+import { isDefaultRegion, normalizeTier, normalizeRegion } from '../store/helpers.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
-import { buildLadderKeyForOrganization } from './helpers/ladder.js';
 import {
   AuthorizationError,
   authorizeOrgAccess,
   requireAuth,
 } from '../auth.js';
+import type { Sport, Discipline } from '../engine/types.js';
 
 const LeaderboardQuerySchema = z.object({
   sport: z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']).optional(),
@@ -44,25 +44,38 @@ export const registerLeaderboardRoutes = (app: Express, deps: LeaderboardRouteDe
     try {
       const organization = await resolveOrganization({ organization_slug: req.params.organization_slug });
 
-      const ladderKey = buildLadderKeyForOrganization(organization.organizationId, parsed.data);
+      const sport = (parsed.data.sport ?? 'BADMINTON') as Sport;
+      const discipline = (parsed.data.discipline ?? 'SINGLES') as Discipline;
+      const format = parsed.data.format ?? 'MS';
+      const tierFilter = parsed.data.tier ? normalizeTier(parsed.data.tier) : null;
+      const regionFilterRaw = parsed.data.region_id ?? null;
+      const regionFilter = regionFilterRaw ? normalizeRegion(regionFilterRaw) : null;
 
       await authorizeOrgAccess(req, organization.organizationId, {
         permissions: ['ratings:read', 'matches:read', 'matches:write'],
-        sport: ladderKey.sport,
-        regionId: isDefaultRegion(ladderKey.regionId) ? null : ladderKey.regionId,
+        sport,
+        regionId: regionFilter ? (isDefaultRegion(regionFilter) ? null : regionFilter) : undefined,
         errorCode: 'leaderboard_read_denied',
         errorMessage: 'Insufficient grants to read leaderboards',
       });
-      const result = await store.listLeaderboard({ ladderKey, limit: parsed.data.limit });
+      const result = await store.listLeaderboard({
+        organizationId: organization.organizationId,
+        sport,
+        discipline,
+        format,
+        tier: tierFilter,
+        regionId: regionFilter,
+        limit: parsed.data.limit,
+      });
 
       return res.send({
         organization_id: organization.organizationId,
         organization_slug: organization.slug,
-        sport: ladderKey.sport,
-        discipline: ladderKey.discipline,
-        format: ladderKey.format,
-        tier: ladderKey.tier === 'UNSPECIFIED' ? null : ladderKey.tier,
-        region_id: isDefaultRegion(ladderKey.regionId) ? null : ladderKey.regionId,
+        sport,
+        discipline,
+        format,
+        tier: tierFilter ?? null,
+        region_id: regionFilter ?? null,
         players: result.items.map((entry) => ({
           rank: entry.rank,
           player_id: entry.playerId,
@@ -100,17 +113,27 @@ export const registerLeaderboardRoutes = (app: Express, deps: LeaderboardRouteDe
 
     try {
       const organization = await resolveOrganization({ organization_slug: req.params.organization_slug });
-      const ladderKey = buildLadderKeyForOrganization(organization.organizationId, parsed.data);
+      const sport = (parsed.data.sport ?? 'BADMINTON') as Sport;
+      const discipline = (parsed.data.discipline ?? 'SINGLES') as Discipline;
+      const format = parsed.data.format ?? 'MS';
+      const tierFilter = parsed.data.tier ? normalizeTier(parsed.data.tier) : null;
+      const regionFilterRaw = parsed.data.region_id ?? null;
+      const regionFilter = regionFilterRaw ? normalizeRegion(regionFilterRaw) : null;
 
       await authorizeOrgAccess(req, organization.organizationId, {
         permissions: ['ratings:read', 'matches:read', 'matches:write'],
-        sport: ladderKey.sport,
-        regionId: isDefaultRegion(ladderKey.regionId) ? null : ladderKey.regionId,
+        sport,
+        regionId: regionFilter ? (isDefaultRegion(regionFilter) ? null : regionFilter) : undefined,
         errorCode: 'leaderboard_movers_denied',
         errorMessage: 'Insufficient grants to read leaderboard movers',
       });
       const result = await store.listLeaderboardMovers({
-        ladderKey,
+        organizationId: organization.organizationId,
+        sport,
+        discipline,
+        format,
+        tier: tierFilter,
+        regionId: regionFilter,
         limit: parsed.data.limit,
         since: parsed.data.since,
       });
@@ -118,11 +141,11 @@ export const registerLeaderboardRoutes = (app: Express, deps: LeaderboardRouteDe
       return res.send({
         organization_id: organization.organizationId,
         organization_slug: organization.slug,
-        sport: ladderKey.sport,
-        discipline: ladderKey.discipline,
-        format: ladderKey.format,
-        tier: ladderKey.tier === 'UNSPECIFIED' ? null : ladderKey.tier,
-        region_id: isDefaultRegion(ladderKey.regionId) ? null : ladderKey.regionId,
+        sport,
+        discipline,
+        format,
+        tier: tierFilter ?? null,
+        region_id: regionFilter ?? null,
         since: parsed.data.since,
         players: result.items.map((entry) => ({
           player_id: entry.playerId,

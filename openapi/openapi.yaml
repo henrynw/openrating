@@ -493,12 +493,12 @@ paths:
           name: tier
           required: false
           schema: { type: string }
-          description: Competition tier for the ladder (defaults to UNSPECIFIED)
+          description: Optional competition tier filter for the ladder; omit to include all tiers
         - in: query
           name: region_id
           required: false
           schema: { type: string }
-          description: Region within the organization (defaults to GLOBAL)
+          description: Optional region filter within the organization; omit to include all regions
         - in: query
           name: limit
           required: false
@@ -553,12 +553,12 @@ paths:
           name: tier
           required: false
           schema: { type: string }
-          description: Competition tier for the ladder (defaults to UNSPECIFIED)
+          description: Optional competition tier filter for the ladder; omit to include all tiers
         - in: query
           name: region_id
           required: false
           schema: { type: string }
-          description: Region within the organization (defaults to GLOBAL)
+          description: Optional region filter within the organization; omit to include all regions
         - in: query
           name: since
           required: true
