@@ -29,7 +29,11 @@ export const normalizeMatchSubmission = (
   );
 
   if (formatMatch) {
-    return formatMatch.normalize({ ...submission, discipline: formatMatch.discipline });
+    return {
+      ok: false,
+      error: 'validation_failed',
+      message: `format ${submission.format} requires discipline ${formatMatch.discipline}`,
+    };
   }
 
   return {
