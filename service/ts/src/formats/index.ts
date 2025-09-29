@@ -20,13 +20,21 @@ export const normalizeMatchSubmission = (
       entry.format === submission.format
   );
 
-  if (!handler) {
-    return {
-      ok: false,
-      error: 'unsupported_format',
-      message: `unsupported format ${submission.sport}/${submission.discipline}/${submission.format}`,
-    };
+  if (handler) {
+    return handler.normalize(submission);
   }
 
-  return handler.normalize(submission);
+  const formatMatch = registry.find(
+    (entry) => entry.sport === submission.sport && entry.format === submission.format
+  );
+
+  if (formatMatch) {
+    return formatMatch.normalize({ ...submission, discipline: formatMatch.discipline });
+  }
+
+  return {
+    ok: false,
+    error: 'unsupported_format',
+    message: `unsupported format ${submission.sport}/${submission.discipline}/${submission.format}`,
+  };
 };
