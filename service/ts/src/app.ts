@@ -9,6 +9,7 @@ import { registerMatchRoutes } from './routes/matches.js';
 import { registerRatingRoutes } from './routes/ratings.js';
 import { createOrganizationResolver } from './routes/helpers/organization-resolver.js';
 import { registerLeaderboardRoutes } from './routes/leaderboards.js';
+import { registerEventRoutes } from './routes/events.js';
 
 export const createApp = (store: RatingStore): Express => {
   const app = express();
@@ -23,6 +24,7 @@ export const createApp = (store: RatingStore): Express => {
   registerMatchRoutes(app, { store, resolveOrganization });
   registerRatingRoutes(app, { store, resolveOrganization });
   registerLeaderboardRoutes(app, { store, resolveOrganization });
+  registerEventRoutes(app, { store, resolveOrganization });
 
   return app;
 };

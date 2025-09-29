@@ -19,6 +19,8 @@ import {
   venues,
   pairSynergies,
   pairSynergyHistory,
+  events,
+  eventParticipants,
 } from '../db/schema.js';
 import type {
   EnsurePlayersResult,
@@ -55,8 +57,16 @@ import type {
   LeaderboardMoversQuery,
   LeaderboardMoversResult,
   LeaderboardMoverEntry,
+  EventCreateInput,
+  EventUpdateInput,
+  EventRecord,
+  EventListQuery,
+  EventListResult,
+  EventParticipantUpsertInput,
+  EventParticipantRecord,
+  EventParticipantListResult,
 } from './types.js';
-import { PlayerLookupError, OrganizationLookupError, MatchLookupError } from './types.js';
+import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
 import { buildLadderId, isDefaultRegion, toDbRegionId, DEFAULT_REGION } from './helpers.js';
 
 const now = () => new Date();
@@ -137,6 +147,30 @@ type PlayerLeaderboardRow = {
 type PlayerLeaderboardSelection = {
   row: PlayerLeaderboardRow;
   ladder: LadderMeta;
+};
+
+type EventRow = {
+  eventId: string;
+  organizationId: string;
+  type: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  startDate: Date | null;
+  endDate: Date | null;
+  metadata: unknown | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type EventParticipantRow = {
+  eventId: string;
+  playerId: string;
+  seed: number | null;
+  status: string | null;
+  metadata: unknown | null;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 const slugify = (value: string) =>
@@ -223,6 +257,120 @@ export class PostgresStore implements RatingStore {
       countryCode: row.countryCode ?? undefined,
       regionId: row.regionId ?? undefined,
     };
+  }
+
+  private toEventRecord(row: EventRow): EventRecord {
+    return {
+      eventId: row.eventId,
+      organizationId: row.organizationId,
+      type: row.type as any,
+      name: row.name,
+      slug: row.slug,
+      description: row.description,
+      startDate: row.startDate ? row.startDate.toISOString() : null,
+      endDate: row.endDate ? row.endDate.toISOString() : null,
+      metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    } satisfies EventRecord;
+  }
+
+  private toEventParticipantRecord(row: EventParticipantRow): EventParticipantRecord {
+    return {
+      eventId: row.eventId,
+      playerId: row.playerId,
+      seed: row.seed,
+      status: row.status,
+      metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    } satisfies EventParticipantRecord;
+  }
+
+  private async getEventRowById(eventId: string, client = this.db): Promise<EventRow | null> {
+    const rows = await client
+      .select({
+        eventId: events.eventId,
+        organizationId: events.organizationId,
+        type: events.type,
+        name: events.name,
+        slug: events.slug,
+        description: events.description,
+        startDate: events.startDate,
+        endDate: events.endDate,
+        metadata: events.metadata,
+        createdAt: events.createdAt,
+        updatedAt: events.updatedAt,
+      })
+      .from(events)
+      .where(eq(events.eventId, eventId))
+      .limit(1);
+    return (rows as EventRow[]).at(0) ?? null;
+  }
+
+  private async getEventRowBySlug(organizationId: string, slug: string, client = this.db): Promise<EventRow | null> {
+    const rows = await client
+      .select({
+        eventId: events.eventId,
+        organizationId: events.organizationId,
+        type: events.type,
+        name: events.name,
+        slug: events.slug,
+        description: events.description,
+        startDate: events.startDate,
+        endDate: events.endDate,
+        metadata: events.metadata,
+        createdAt: events.createdAt,
+        updatedAt: events.updatedAt,
+      })
+      .from(events)
+      .where(
+        and(eq(events.organizationId, organizationId), eq(events.slug, slug))
+      )
+      .limit(1);
+    return (rows as EventRow[]).at(0) ?? null;
+  }
+
+  private async requireEventOrganization(eventId: string): Promise<string> {
+    const row = await this.getEventRowById(eventId);
+    if (!row) {
+      throw new EventLookupError(`Event not found: ${eventId}`);
+    }
+    return row.organizationId;
+  }
+
+  private async assertEventBelongsToOrg(eventId: string, organizationId: string, client = this.db) {
+    if (!eventId) return;
+    const event = await this.getEventRowById(eventId, client);
+    if (!event) {
+      throw new EventLookupError(`Event not found: ${eventId}`);
+    }
+    if (event.organizationId !== organizationId) {
+      throw new EventLookupError(`Event ${eventId} does not belong to organization ${organizationId}`);
+    }
+  }
+
+  private async ensureEventParticipantsTx(
+    client: any,
+    eventId: string,
+    playerIds: string[]
+  ): Promise<void> {
+    if (!playerIds.length) return;
+    const uniqueIds = Array.from(new Set(playerIds));
+    const rows = uniqueIds.map((playerId) => ({
+      eventId,
+      playerId,
+      seed: null,
+      status: null,
+      metadata: null,
+      createdAt: now(),
+      updatedAt: now(),
+    }));
+
+    await client
+      .insert(eventParticipants)
+      .values(rows)
+      .onConflictDoNothing();
   }
 
   private toRatingEventRecord(row: RatingEventRow): RatingEventRecord {
@@ -379,6 +527,7 @@ export class PostgresStore implements RatingStore {
         startTime: matches.startTime,
         venueId: matches.venueId,
         regionId: matches.regionId,
+        eventId: matches.eventId,
       })
       .from(matches)
       .where(eq(matches.matchId, matchId))
@@ -444,6 +593,7 @@ export class PostgresStore implements RatingStore {
       startTime: matchRow.startTime.toISOString(),
       venueId: matchRow.venueId ?? null,
       regionId: matchRow.regionId ?? null,
+      eventId: matchRow.eventId ?? null,
       sides,
       games,
     };
@@ -902,6 +1052,230 @@ export class PostgresStore implements RatingStore {
     return row ? this.toOrganizationRecord(row) : null;
   }
 
+  async createEvent(input: EventCreateInput): Promise<EventRecord> {
+    await this.assertOrganizationExists(input.organizationId);
+    const slug = slugify(input.slug ?? input.name);
+    const existing = await this.getEventRowBySlug(input.organizationId, slug);
+    if (existing) {
+      throw new EventLookupError(`Slug already in use: ${slug}`);
+    }
+
+    const [row] = await this.db
+      .insert(events)
+      .values({
+        eventId: randomUUID(),
+        organizationId: input.organizationId,
+        type: input.type,
+        name: input.name,
+        slug,
+        description: input.description ?? null,
+        startDate: input.startDate ? new Date(input.startDate) : null,
+        endDate: input.endDate ? new Date(input.endDate) : null,
+        metadata: input.metadata ?? null,
+        createdAt: now(),
+        updatedAt: now(),
+      })
+      .returning({
+        eventId: events.eventId,
+        organizationId: events.organizationId,
+        type: events.type,
+        name: events.name,
+        slug: events.slug,
+        description: events.description,
+        startDate: events.startDate,
+        endDate: events.endDate,
+        metadata: events.metadata,
+        createdAt: events.createdAt,
+        updatedAt: events.updatedAt,
+      });
+
+    return this.toEventRecord(row as EventRow);
+  }
+
+  async updateEvent(eventId: string, input: EventUpdateInput): Promise<EventRecord> {
+    const existing = await this.getEventRowById(eventId);
+    if (!existing) {
+      throw new EventLookupError(`Event not found: ${eventId}`);
+    }
+
+    let slug = existing.slug;
+    if (input.slug !== undefined) {
+      const candidate = slugify(input.slug);
+      if (candidate !== existing.slug) {
+        const dup = await this.getEventRowBySlug(existing.organizationId, candidate);
+        if (dup) {
+          throw new EventLookupError(`Slug already in use: ${candidate}`);
+        }
+        slug = candidate;
+      }
+    }
+
+    const payload: Record<string, unknown> = { updatedAt: now() };
+    if (input.name !== undefined) payload.name = input.name;
+    if (input.type !== undefined) payload.type = input.type;
+    if (input.description !== undefined) payload.description = input.description;
+    if (input.startDate !== undefined) payload.startDate = input.startDate ? new Date(input.startDate) : null;
+    if (input.endDate !== undefined) payload.endDate = input.endDate ? new Date(input.endDate) : null;
+    if (input.metadata !== undefined) payload.metadata = input.metadata ?? null;
+    if (input.slug !== undefined) payload.slug = slug;
+
+    const [row] = await this.db
+      .update(events)
+      .set(payload)
+      .where(eq(events.eventId, eventId))
+      .returning({
+        eventId: events.eventId,
+        organizationId: events.organizationId,
+        type: events.type,
+        name: events.name,
+        slug: events.slug,
+        description: events.description,
+        startDate: events.startDate,
+        endDate: events.endDate,
+        metadata: events.metadata,
+        createdAt: events.createdAt,
+        updatedAt: events.updatedAt,
+      });
+
+    return this.toEventRecord(row as EventRow);
+  }
+
+  async listEvents(query: EventListQuery): Promise<EventListResult> {
+    await this.assertOrganizationExists(query.organizationId);
+    const limit = clampLimit(query.limit);
+
+    const filters: any[] = [eq(events.organizationId, query.organizationId)];
+
+    if (query.types && query.types.length) {
+      filters.push(inArray(events.type, query.types));
+    }
+
+    if (query.q) {
+      filters.push(sql`${events.name} ILIKE ${`%${query.q}%`}`);
+    }
+
+    if (query.cursor) {
+      filters.push(sql`${events.slug} > ${query.cursor}`);
+    }
+
+    const condition = combineFilters(filters);
+
+    let selectQuery = this.db
+      .select({
+        eventId: events.eventId,
+        organizationId: events.organizationId,
+        type: events.type,
+        name: events.name,
+        slug: events.slug,
+        description: events.description,
+        startDate: events.startDate,
+        endDate: events.endDate,
+        metadata: events.metadata,
+        createdAt: events.createdAt,
+        updatedAt: events.updatedAt,
+      })
+      .from(events)
+      .orderBy(events.slug)
+      .limit(limit + 1);
+
+    if (condition) {
+      selectQuery = selectQuery.where(condition);
+    }
+
+    const rows = (await selectQuery) as EventRow[];
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const nextCursor = hasMore && page.length ? page[page.length - 1].slug : undefined;
+
+    return {
+      items: page.map((row) => this.toEventRecord(row)),
+      nextCursor,
+    };
+  }
+
+  async getEventById(eventId: string): Promise<EventRecord | null> {
+    const row = await this.getEventRowById(eventId);
+    return row ? this.toEventRecord(row) : null;
+  }
+
+  async getEventBySlug(organizationId: string, slug: string): Promise<EventRecord | null> {
+    const row = await this.getEventRowBySlug(organizationId, slug);
+    return row ? this.toEventRecord(row) : null;
+  }
+
+  async upsertEventParticipant(input: EventParticipantUpsertInput): Promise<EventParticipantRecord> {
+    const organizationId = await this.requireEventOrganization(input.eventId);
+    await this.assertPlayerInOrganization(input.playerId, organizationId);
+
+    const nowTs = now();
+    const [row] = await this.db
+      .insert(eventParticipants)
+      .values({
+        eventId: input.eventId,
+        playerId: input.playerId,
+        seed: input.seed ?? null,
+        status: input.status ?? null,
+        metadata: input.metadata ?? null,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      })
+      .onConflictDoUpdate({
+        target: [eventParticipants.eventId, eventParticipants.playerId],
+        set: {
+          seed: input.seed ?? null,
+          status: input.status ?? null,
+          metadata: input.metadata ?? null,
+          updatedAt: nowTs,
+        },
+      })
+      .returning({
+        eventId: eventParticipants.eventId,
+        playerId: eventParticipants.playerId,
+        seed: eventParticipants.seed,
+        status: eventParticipants.status,
+        metadata: eventParticipants.metadata,
+        createdAt: eventParticipants.createdAt,
+        updatedAt: eventParticipants.updatedAt,
+      });
+
+    return this.toEventParticipantRecord(row as EventParticipantRow);
+  }
+
+  async listEventParticipants(eventId: string): Promise<EventParticipantListResult> {
+    const rows = (await this.db
+      .select({
+        eventId: eventParticipants.eventId,
+        playerId: eventParticipants.playerId,
+        seed: eventParticipants.seed,
+        status: eventParticipants.status,
+        metadata: eventParticipants.metadata,
+        createdAt: eventParticipants.createdAt,
+        updatedAt: eventParticipants.updatedAt,
+      })
+      .from(eventParticipants)
+      .where(eq(eventParticipants.eventId, eventId))
+      .orderBy(eventParticipants.playerId)) as EventParticipantRow[];
+
+    return { items: rows.map((row) => this.toEventParticipantRecord(row)) };
+  }
+
+  async ensureEventParticipants(eventId: string, playerIds: string[]): Promise<void> {
+    if (!playerIds.length) return;
+    const organizationId = await this.requireEventOrganization(eventId);
+    const uniqueIds = Array.from(new Set(playerIds));
+    const validRows = (await this.db
+      .select({ playerId: players.playerId })
+      .from(players)
+      .where(
+        and(eq(players.organizationId, organizationId), inArray(players.playerId, uniqueIds))
+      )) as Array<{ playerId: string }>;
+
+    const validIds = validRows.map((row) => row.playerId);
+    if (!validIds.length) return;
+
+    await this.ensureEventParticipantsTx(this.db, eventId, validIds);
+  }
+
   async createPlayer(input: PlayerCreateInput): Promise<PlayerRecord> {
     const playerId = randomUUID();
     await this.assertOrganizationExists(input.organizationId);
@@ -1167,6 +1541,15 @@ export class PostgresStore implements RatingStore {
     await this.assertOrganizationExists(params.submissionMeta.organizationId);
     await this.ensureSport(params.match.sport);
 
+    const playerIds = new Set<string>();
+    params.match.sides.A.players.forEach((id) => playerIds.add(id));
+    params.match.sides.B.players.forEach((id) => playerIds.add(id));
+
+    const eventId = params.eventId ?? null;
+    if (eventId) {
+      await this.assertEventBelongsToOrg(eventId, params.submissionMeta.organizationId);
+    }
+
     const ladderRegionId = await this.ensureRegion(params.ladderKey.regionId, params.ladderKey.organizationId);
     const submissionRegionId = await this.ensureRegion(
       params.submissionMeta.regionId ?? null,
@@ -1192,6 +1575,7 @@ export class PostgresStore implements RatingStore {
         tier: params.match.tier ?? 'UNSPECIFIED',
         venueId,
         regionId: submissionRegionId ?? ladderRegionId ?? null,
+        eventId,
         startTime: new Date(params.submissionMeta.startTime),
         rawPayload: params.submissionMeta.rawPayload as object,
         createdAt: now(),
@@ -1302,6 +1686,10 @@ export class PostgresStore implements RatingStore {
           createdAt: now(),
         });
       }
+
+      if (eventId) {
+        await this.ensureEventParticipantsTx(tx, eventId, Array.from(playerIds));
+      }
     });
 
     return { matchId, ratingEvents };
@@ -1314,6 +1702,7 @@ export class PostgresStore implements RatingStore {
         organizationId: matches.organizationId,
         regionId: matches.regionId,
         venueId: matches.venueId,
+        eventId: matches.eventId,
       })
       .from(matches)
       .where(eq(matches.matchId, matchId))
@@ -1328,6 +1717,7 @@ export class PostgresStore implements RatingStore {
     }
 
     const updates: Record<string, any> = {};
+    let ensureEventId: string | null = null;
 
     if (input.startTime !== undefined) {
       const date = new Date(input.startTime);
@@ -1356,6 +1746,16 @@ export class PostgresStore implements RatingStore {
       }
     }
 
+    if (input.eventId !== undefined) {
+      if (!input.eventId) {
+        updates.eventId = null;
+      } else {
+        await this.assertEventBelongsToOrg(input.eventId, organizationId);
+        updates.eventId = input.eventId;
+        ensureEventId = input.eventId;
+      }
+    }
+
     if (Object.keys(updates).length) {
       const [row] = await this.db
         .update(matches)
@@ -1366,6 +1766,16 @@ export class PostgresStore implements RatingStore {
       if (!row) {
         throw new MatchLookupError(`Match not found: ${matchId}`);
       }
+    }
+
+    if (ensureEventId) {
+      const playerRows = (await this.db
+        .select({ playerId: matchSidePlayers.playerId })
+        .from(matchSidePlayers)
+        .innerJoin(matchSides, eq(matchSides.id, matchSidePlayers.matchSideId))
+        .where(eq(matchSides.matchId, matchId))) as Array<{ playerId: string }>;
+      const playerIds = playerRows.map((row) => row.playerId);
+      await this.ensureEventParticipants(ensureEventId, playerIds);
     }
 
     const summary = await this.getMatchSummaryById(matchId);
@@ -1962,6 +2372,10 @@ export class PostgresStore implements RatingStore {
       );
     }
 
+    if (query.eventId) {
+      filters.push(eq(matches.eventId, query.eventId));
+    }
+
     const condition = combineFilters(filters);
 
     let matchQuery = this.db
@@ -1975,6 +2389,7 @@ export class PostgresStore implements RatingStore {
         startTime: matches.startTime,
         venueId: matches.venueId,
         regionId: matches.regionId,
+        eventId: matches.eventId,
       })
       .from(matches)
       .orderBy(desc(matches.startTime), desc(matches.matchId))
@@ -1986,15 +2401,16 @@ export class PostgresStore implements RatingStore {
 
     const rows = (await matchQuery) as Array<{
       matchId: string;
-        organizationId: string;
-        sport: string;
-        discipline: string;
-        format: string;
-        tier: string | null;
-        startTime: Date;
-        venueId: string | null;
-        regionId: string | null;
-      }>;
+      organizationId: string;
+      sport: string;
+      discipline: string;
+      format: string;
+      tier: string | null;
+      startTime: Date;
+      venueId: string | null;
+      regionId: string | null;
+      eventId: string | null;
+    }>;
 
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);
@@ -2069,6 +2485,7 @@ export class PostgresStore implements RatingStore {
         startTime: row.startTime.toISOString(),
         venueId: row.venueId ?? null,
         regionId: row.regionId ?? null,
+        eventId: row.eventId ?? null,
         sides,
         games: gameList,
       };

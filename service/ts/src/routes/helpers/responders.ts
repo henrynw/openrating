@@ -59,6 +59,7 @@ export const toMatchSummaryResponse = (match: MatchSummary, organizationSlug: st
   start_time: match.startTime,
   venue_id: match.venueId,
   region_id: match.regionId,
+  event_id: match.eventId ?? null,
   sides: match.sides.reduce((acc, side) => {
     acc[side.side] = { players: side.players };
     return acc;

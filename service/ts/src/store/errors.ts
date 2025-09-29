@@ -18,10 +18,16 @@ export class OrganizationLookupError extends Error {
   }
 }
 
+export class EventLookupError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EventLookupError';
+  }
+}
+
 export class MatchLookupError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'MatchLookupError';
   }
 }
-

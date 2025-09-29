@@ -32,6 +32,7 @@ const MatchSubmitSchema = z
     venue_id: z.string().optional(),
     venue_region_id: z.string().optional(),
     tier: z.enum(['SANCTIONED', 'LEAGUE', 'SOCIAL', 'EXHIBITION']).optional(),
+    event_id: z.string().uuid().optional(),
     sides: z.object({
       A: z.object({ players: z.array(z.string()).min(1).max(4) }),
       B: z.object({ players: z.array(z.string()).min(1).max(4) }),
@@ -51,6 +52,7 @@ const MatchListQuerySchema = z
     organization_slug: z.string().optional(),
     sport: z.string().optional(),
     player_id: z.string().optional(),
+    event_id: z.string().optional(),
     cursor: z.string().optional(),
     limit: z.coerce.number().int().min(1).max(200).optional(),
     start_after: z.string().datetime().optional(),
@@ -67,6 +69,7 @@ const MatchUpdateSchema = z.object({
   start_time: z.string().datetime().optional(),
   venue_id: z.string().nullable().optional(),
   venue_region_id: z.string().nullable().optional(),
+  event_id: z.string().uuid().nullable().optional(),
 });
 
 interface MatchRouteDeps {
@@ -170,6 +173,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         ladderKey,
         match: normalization.match,
         result,
+        eventId: parsed.data.event_id ?? null,
         playerStates: players,
         submissionMeta: {
           providerId: parsed.data.provider_id,
@@ -190,6 +194,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         match_id: matchId,
         organization_id: organization.organizationId,
         organization_slug: organization.slug,
+        event_id: parsed.data.event_id ?? null,
         ratings: result.perPlayer.map((p) => {
           const ratingEventId = ratingEventByPlayer.get(p.playerId);
           if (!ratingEventId) {
@@ -229,7 +234,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
     }
 
-    const { organization_id, organization_slug, sport, player_id, cursor, limit, start_after, start_before } =
+    const { organization_id, organization_slug, sport, player_id, event_id, cursor, limit, start_after, start_before } =
       parsed.data;
 
     if (!(
@@ -254,6 +259,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         organizationId: organization.organizationId,
         sport: sport ?? undefined,
         playerId: player_id ?? undefined,
+        eventId: event_id ?? undefined,
         cursor,
         limit,
         startAfter: start_after ?? undefined,
@@ -301,6 +307,9 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         updateInput.regionId = parsed.data.venue_region_id === null
           ? null
           : normalizeRegion(parsed.data.venue_region_id);
+      }
+      if (parsed.data.event_id !== undefined) {
+        updateInput.eventId = parsed.data.event_id;
       }
 
       const updated = await store.updateMatch(req.params.match_id, organization.organizationId, updateInput);

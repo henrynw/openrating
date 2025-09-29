@@ -7,6 +7,7 @@ import {
   doublePrecision,
   primaryKey,
   serial,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
 export const organizations = pgTable('organizations', {
@@ -80,6 +81,24 @@ export const venues = pgTable('venues', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const events = pgTable('events', {
+  eventId: text('event_id').primaryKey(),
+  organizationId: text('organization_id').references(() => organizations.organizationId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  type: text('type').notNull(),
+  name: text('name').notNull(),
+  slug: text('slug').notNull(),
+  description: text('description'),
+  startDate: timestamp('start_date', { withTimezone: true }),
+  endDate: timestamp('end_date', { withTimezone: true }),
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table: any) => ({
+  organizationSlugIdx: uniqueIndex('events_org_slug_idx').on(table.organizationId, table.slug),
+}));
+
 export const players = pgTable('players', {
   playerId: text('player_id').primaryKey(),
   organizationId: text('organization_id').references(() => organizations.organizationId, {
@@ -140,6 +159,9 @@ export const matches = pgTable('matches', {
     onDelete: 'set null',
   }),
   regionId: text('region_id').references(() => regions.regionId, {
+    onDelete: 'set null',
+  }),
+  eventId: text('event_id').references(() => events.eventId, {
     onDelete: 'set null',
   }),
   startTime: timestamp('start_time', { withTimezone: true }).notNull(),
@@ -212,6 +234,22 @@ export const playerRatingHistory = pgTable('player_rating_history', {
   movWeight: doublePrecision('mov_weight'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const eventParticipants = pgTable('event_participants', {
+  eventId: text('event_id').references(() => events.eventId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  playerId: text('player_id').references(() => players.playerId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  seed: integer('seed'),
+  status: text('status'),
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table: any) => ({
+  pk: primaryKey(table.eventId, table.playerId),
+}));
 
 export const pairSynergies = pgTable('pair_synergies', {
   ladderId: text('ladder_id').references(() => ratingLadders.ladderId, {

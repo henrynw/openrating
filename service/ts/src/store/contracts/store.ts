@@ -27,6 +27,16 @@ import type {
   LeaderboardMoversResult,
 } from './ratings.js';
 import type { PlayerState } from '../../engine/types.js';
+import type {
+  EventCreateInput,
+  EventUpdateInput,
+  EventRecord,
+  EventListQuery,
+  EventListResult,
+  EventParticipantUpsertInput,
+  EventParticipantRecord,
+  EventParticipantListResult,
+} from './events.js';
 
 export interface RatingStore {
   createPlayer(input: PlayerCreateInput): Promise<PlayerRecord>;
@@ -52,5 +62,13 @@ export interface RatingStore {
   listOrganizations(query: OrganizationListQuery): Promise<OrganizationListResult>;
   getOrganizationBySlug(slug: string): Promise<OrganizationRecord | null>;
   getOrganizationById(id: string): Promise<OrganizationRecord | null>;
+  createEvent(input: EventCreateInput): Promise<EventRecord>;
+  updateEvent(eventId: string, input: EventUpdateInput): Promise<EventRecord>;
+  listEvents(query: EventListQuery): Promise<EventListResult>;
+  getEventById(eventId: string): Promise<EventRecord | null>;
+  getEventBySlug(organizationId: string, slug: string): Promise<EventRecord | null>;
+  upsertEventParticipant(input: EventParticipantUpsertInput): Promise<EventParticipantRecord>;
+  listEventParticipants(eventId: string): Promise<EventParticipantListResult>;
+  ensureEventParticipants(eventId: string, playerIds: string[]): Promise<void>;
   runNightlyStabilization(options?: NightlyStabilizationOptions): Promise<void>;
 }

@@ -406,6 +406,11 @@ paths:
           required: false
           schema: { type: string }
         - in: query
+          name: event_id
+          required: false
+          schema: { type: string }
+          description: Filter matches belonging to a specific event
+        - in: query
           name: limit
           required: false
           schema:
@@ -580,6 +585,167 @@ paths:
                 $ref: '#/components/schemas/LeaderboardMoversResponse'
         '404':
           description: Organization not found
+  /v1/events:
+    post:
+      tags: [Events]
+      summary: Create an event
+      description: Create a tournament, league, or other competition container for matches.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventCreate'
+      responses:
+        '201':
+          description: Event created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event:
+                    $ref: '#/components/schemas/Event'
+        '400':
+          description: Invalid request
+    get:
+      tags: [Events]
+      summary: List events for an organization
+      parameters:
+        - in: query
+          name: organization_id
+          required: false
+          schema: { type: string }
+          description: UUID of the organization (optional if organization_slug provided)
+        - in: query
+          name: organization_slug
+          required: false
+          schema: { type: string }
+          description: Slug identifier for the organization
+        - in: query
+          name: types
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [TOURNAMENT, LEAGUE, LADDER, BOX_LEAGUE, CHAMPIONSHIP, SERIES, EXHIBITION, CUSTOM]
+        - in: query
+          name: q
+          required: false
+          schema: { type: string }
+          description: Case-insensitive search over event name or slug
+        - in: query
+          name: cursor
+          required: false
+          schema: { type: string }
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: Paginated list of events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventListResponse'
+  /v1/events/{event_id}:
+    get:
+      tags: [Events]
+      summary: Retrieve an event by ID
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Event details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event:
+                    $ref: '#/components/schemas/Event'
+        '404':
+          description: Event not found
+    patch:
+      tags: [Events]
+      summary: Update an event
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventUpdate'
+      responses:
+        '200':
+          description: Updated event
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event:
+                    $ref: '#/components/schemas/Event'
+        '404':
+          description: Event not found
+  /v1/events/{event_id}/participants:
+    post:
+      tags: [Events]
+      summary: Upsert an event participant
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventParticipantRequest'
+      responses:
+        '201':
+          description: Participant ensured
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  participant:
+                    $ref: '#/components/schemas/EventParticipant'
+        '404':
+          description: Event not found
+    get:
+      tags: [Events]
+      summary: List participants for an event
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Event participants
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventParticipantListResponse'
+        '404':
+          description: Event not found
 
 components:
   schemas:
@@ -686,6 +852,10 @@ components:
             Match format identifying the ladder. OpenRating uses the standard
             draw codes common across racket sports (MS, WS, BS, GS, MD, WD, BD,
             GD, XD).
+        event_id:
+          type: string
+          format: uuid
+          description: Optional event identifier that groups the match with a tournament or competition
         start_time: { type: string, format: date-time }
         venue_region_id: { type: string }
         tier: { type: string, enum: [SANCTIONED, LEAGUE, SOCIAL, EXHIBITION] }
@@ -726,12 +896,17 @@ components:
           type: [string, 'null']
         venue_region_id:
           type: [string, 'null']
+        event_id:
+          type: [string, 'null']
+          format: uuid
     MatchSubmitResponse:
       type: object
       properties:
         match_id: { type: string }
         organization_id: { type: string }
         organization_slug:
+          type: [string, 'null']
+        event_id:
           type: [string, 'null']
         ratings:
           type: array
@@ -807,6 +982,8 @@ components:
           type: [string, 'null']
         region_id:
           type: [string, 'null']
+        event_id:
+          type: [string, 'null']
         sides:
           type: object
           additionalProperties:
@@ -823,6 +1000,123 @@ components:
               game_no: { type: integer }
               a: { type: integer }
               b: { type: integer }
+    Event:
+      type: object
+      properties:
+        event_id: { type: string }
+        organization_id: { type: string }
+        organization_slug: { type: string }
+        type:
+          type: string
+          enum: [TOURNAMENT, LEAGUE, LADDER, BOX_LEAGUE, CHAMPIONSHIP, SERIES, EXHIBITION, CUSTOM]
+        name: { type: string }
+        slug: { type: string }
+        description:
+          type: [string, 'null']
+        start_date:
+          type: [string, 'null']
+          format: date-time
+        end_date:
+          type: [string, 'null']
+          format: date-time
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+        created_at:
+          type: [string, 'null']
+          format: date-time
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+    EventCreate:
+      type: object
+      required: [type, name]
+      properties:
+        organization_id: { type: string, format: uuid }
+        organization_slug: { type: string }
+        type:
+          type: string
+          enum: [TOURNAMENT, LEAGUE, LADDER, BOX_LEAGUE, CHAMPIONSHIP, SERIES, EXHIBITION, CUSTOM]
+        name: { type: string }
+        slug: { type: string }
+        description:
+          type: [string, 'null']
+        start_date:
+          type: [string, 'null']
+          format: date-time
+        end_date:
+          type: [string, 'null']
+          format: date-time
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+    EventUpdate:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [TOURNAMENT, LEAGUE, LADDER, BOX_LEAGUE, CHAMPIONSHIP, SERIES, EXHIBITION, CUSTOM]
+        name: { type: string }
+        slug: { type: string }
+        description:
+          type: [string, 'null']
+        start_date:
+          type: [string, 'null']
+          format: date-time
+        end_date:
+          type: [string, 'null']
+          format: date-time
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+    EventListResponse:
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+        next_cursor:
+          type: [string, 'null']
+    EventParticipant:
+      type: object
+      properties:
+        event_id: { type: string }
+        player_id: { type: string }
+        seed:
+          type: [integer, 'null']
+        status:
+          type: [string, 'null']
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+        created_at:
+          type: [string, 'null']
+          format: date-time
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+    EventParticipantRequest:
+      type: object
+      required: [player_id]
+      properties:
+        player_id: { type: string }
+        seed:
+          type: [integer, 'null']
+        status:
+          type: [string, 'null']
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+    EventParticipantListResponse:
+      type: object
+      properties:
+        event:
+          $ref: '#/components/schemas/Event'
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventParticipant'
     RatingEvent:
       type: object
       properties:

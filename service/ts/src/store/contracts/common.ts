@@ -27,6 +27,7 @@ export interface RecordMatchParams {
   ladderKey: LadderKey;
   match: MatchInput;
   result: UpdateResult;
+  eventId?: string | null;
   playerStates: Map<string, PlayerState>;
   pairUpdates: PairUpdate[];
   submissionMeta: {

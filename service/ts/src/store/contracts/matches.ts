@@ -19,6 +19,7 @@ export interface MatchSummary {
   discipline: MatchInput['discipline'];
   format: string;
   tier?: string;
+  eventId?: string | null;
   startTime: string;
   venueId?: string | null;
   regionId?: string | null;
@@ -30,6 +31,7 @@ export interface MatchListQuery {
   organizationId: string;
   sport?: string;
   playerId?: string;
+  eventId?: string;
   cursor?: string;
   limit?: number;
   startAfter?: string;
@@ -45,4 +47,5 @@ export interface MatchUpdateInput {
   startTime?: string;
   venueId?: string | null;
   regionId?: string | null;
+  eventId?: string | null;
 }

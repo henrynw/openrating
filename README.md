@@ -81,9 +81,13 @@ The CLI reads credentials from environment variables so provider secrets stay ou
 - `POST /v1/organizations`: create a new organization (returns the canonical UUID).
 - `GET /v1/organizations`: search/paginate organizations by name or slug.
 - `GET /v1/players`: paginated list filtered by `organization_id` or `organization_slug`, optional `q`, `limit`, and `cursor`. Returns `next_cursor` for continue tokens.
-- `GET /v1/matches`: paginated list filtered by `organization_id` or `organization_slug` with optional `sport`, `player_id`, `start_after`, `start_before`, `cursor`, and `limit`.
+- `GET /v1/matches`: paginated list filtered by `organization_id` or `organization_slug` with optional `sport`, `player_id`, `event_id`, `start_after`, `start_before`, `cursor`, and `limit`.
 - `GET /v1/organizations/{slug}/leaderboard`: read-optimized leaderboard for the current ladder, including rank, ratings, and latest deltas (requires `ratings:read`, `matches:read`, or `matches:write`). Tier and region filters are optional; omit them to aggregate across all ladders.
 - `GET /v1/organizations/{slug}/leaderboard/movers`: highlights players with the largest rating changes since a supplied timestamp (requires `ratings:read`, `matches:read`, or `matches:write`). Tier and region filters are optional.
+- `POST /v1/events`: create a tournament/league container for matches (requires `matches:write`).
+- `GET /v1/events`: list events for an organization with optional type filters and pagination (requires `matches:read`, `matches:write`, or `ratings:read`).
+- `GET /v1/events/{event_id}` / `PATCH /v1/events/{event_id}`: fetch or update event metadata.
+- `GET /v1/events/{event_id}/participants` & `POST /v1/events/{event_id}/participants`: view or ensure event participants. Matches linked to an event automatically enroll the players.
 
 Players must be registered in advance—match submissions referencing unknown or cross-organization player IDs return `invalid_players`.
 

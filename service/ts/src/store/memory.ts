@@ -24,6 +24,14 @@ import type {
   OrganizationListQuery,
   OrganizationListResult,
   OrganizationRecord,
+  EventCreateInput,
+  EventUpdateInput,
+  EventListQuery,
+  EventListResult,
+  EventRecord,
+  EventParticipantUpsertInput,
+  EventParticipantRecord,
+  EventParticipantListResult,
   RatingEventListQuery,
   RatingEventListResult,
   RatingEventRecord,
@@ -36,7 +44,7 @@ import type {
   LeaderboardMoversResult,
   LeaderboardMoverEntry,
 } from './types.js';
-import { PlayerLookupError, OrganizationLookupError, MatchLookupError } from './types.js';
+import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
 import { buildLadderId, DEFAULT_REGION } from './helpers.js';
 
 interface MemoryRatingRecord extends PlayerState {
@@ -45,6 +53,30 @@ interface MemoryRatingRecord extends PlayerState {
 
 interface MemoryPlayerRecord extends PlayerRecord {
   ratings: Map<string, MemoryRatingRecord>;
+}
+
+interface MemoryEventRecord {
+  eventId: string;
+  organizationId: string;
+  type: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  startDate?: Date | null;
+  endDate?: Date | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface MemoryEventParticipant {
+  eventId: string;
+  playerId: string;
+  seed?: number | null;
+  status?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 interface MemoryRatingEvent {
@@ -97,6 +129,8 @@ const slugify = (value: string) =>
     .trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '') || randomUUID();
+
+const eventSlugKey = (organizationId: string, slug: string) => `${organizationId}::${slug}`;
 
 const buildMatchCursor = (startTime: Date, matchId: string) => `${startTime.toISOString()}|${matchId}`;
 
@@ -163,6 +197,9 @@ const paginatePlayers = (
 export class MemoryStore implements RatingStore {
   private organizations = new Map<string, OrganizationRecord>();
   private organizationsBySlug = new Map<string, string>();
+  private events = new Map<string, MemoryEventRecord>();
+  private eventsBySlug = new Map<string, string>();
+  private eventParticipants = new Map<string, Map<string, MemoryEventParticipant>>();
   private players = new Map<string, MemoryPlayerRecord>();
   private matches: Array<{
     matchId: string;
@@ -177,6 +214,7 @@ export class MemoryStore implements RatingStore {
     tier?: string;
     venueId?: string | null;
     regionId?: string | null;
+    eventId?: string | null;
   }> = [];
   private ratingEvents = new Map<string, Map<string, MemoryRatingEvent[]>>();
   private pairSynergies = new Map<string, MemoryPairSynergy>();
@@ -326,6 +364,23 @@ export class MemoryStore implements RatingStore {
     const matchId = randomUUID();
     this.assertOrganizationExists(params.ladderKey.organizationId);
     const ladderId = buildLadderId(params.ladderKey);
+
+    const playerIds = new Set<string>();
+    for (const side of ['A', 'B'] as const) {
+      params.match.sides[side].players.forEach((playerId) => playerIds.add(playerId));
+    }
+
+    let eventId: string | null = params.eventId ?? null;
+    if (eventId) {
+      const event = this.events.get(eventId);
+      if (!event) {
+        throw new EventLookupError(`Event not found: ${eventId}`);
+      }
+      if (event.organizationId !== params.ladderKey.organizationId) {
+        throw new EventLookupError(`Event ${eventId} does not belong to organization ${params.ladderKey.organizationId}`);
+      }
+    }
+
     this.matches.push({
       matchId,
       ladderId,
@@ -339,6 +394,7 @@ export class MemoryStore implements RatingStore {
       tier: params.match.tier,
       venueId: params.submissionMeta.venueId ?? null,
       regionId: params.submissionMeta.regionId ?? null,
+      eventId,
     });
 
     const ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
@@ -374,6 +430,10 @@ export class MemoryStore implements RatingStore {
       if (ratingRecord) {
         ratingRecord.updatedAt = appliedAt;
       }
+    }
+
+    if (eventId) {
+      await this.ensureEventParticipants(eventId, Array.from(playerIds));
     }
 
     const pairTimestamp = new Date(params.submissionMeta.startTime ?? new Date().toISOString());
@@ -437,6 +497,22 @@ export class MemoryStore implements RatingStore {
       match.regionId = input.regionId ?? null;
     }
 
+    if (input.eventId !== undefined) {
+      if (!input.eventId) {
+        match.eventId = null;
+      } else {
+        const event = this.events.get(input.eventId);
+        if (!event || event.organizationId !== organizationId) {
+          throw new EventLookupError(`Event not found for organization ${organizationId}`);
+        }
+        match.eventId = input.eventId;
+        await this.ensureEventParticipants(input.eventId, [
+          ...match.match.sides.A.players,
+          ...match.match.sides.B.players,
+        ]);
+      }
+    }
+
     return {
       matchId: match.matchId,
       organizationId: match.organizationId,
@@ -447,6 +523,7 @@ export class MemoryStore implements RatingStore {
       startTime: match.startTime.toISOString(),
       venueId: match.venueId ?? null,
       regionId: match.regionId ?? null,
+      eventId: match.eventId ?? null,
       sides: ['A', 'B'].map((side) => ({
         side: side as 'A' | 'B',
         players: match.match.sides[side as 'A' | 'B'].players,
@@ -746,6 +823,10 @@ export class MemoryStore implements RatingStore {
       }
     }
 
+    if (query.eventId) {
+      matches = matches.filter((entry) => entry.eventId === query.eventId);
+    }
+
     matches.sort((a, b) => {
       const diff = b.startTime.getTime() - a.startTime.getTime();
       if (diff !== 0) return diff;
@@ -778,6 +859,7 @@ export class MemoryStore implements RatingStore {
       startTime: entry.startTime.toISOString(),
       venueId: entry.venueId ?? null,
       regionId: entry.regionId ?? null,
+      eventId: entry.eventId ?? null,
       sides: ['A', 'B'].map((side) => ({
         side: side as 'A' | 'B',
         players: entry.match.sides[side as 'A' | 'B'].players,
@@ -869,6 +951,221 @@ export class MemoryStore implements RatingStore {
     return this.organizations.get(id) ?? null;
   }
 
+  async createEvent(input: EventCreateInput): Promise<EventRecord> {
+    this.assertOrganizationExists(input.organizationId);
+    const eventId = randomUUID();
+    const baseSlug = input.slug ?? input.name;
+    const slug = slugify(baseSlug);
+    const slugKey = eventSlugKey(input.organizationId, slug);
+    if (this.eventsBySlug.has(slugKey)) {
+      throw new EventLookupError(`Slug already in use: ${slug}`);
+    }
+
+    const now = new Date();
+    const record: MemoryEventRecord = {
+      eventId,
+      organizationId: input.organizationId,
+      type: input.type,
+      name: input.name,
+      slug,
+      description: input.description ?? null,
+      startDate: input.startDate ? new Date(input.startDate) : null,
+      endDate: input.endDate ? new Date(input.endDate) : null,
+      metadata: input.metadata ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.events.set(eventId, record);
+    this.eventsBySlug.set(slugKey, eventId);
+
+    return this.toEventRecord(record);
+  }
+
+  async updateEvent(eventId: string, input: EventUpdateInput): Promise<EventRecord> {
+    const event = this.events.get(eventId);
+    if (!event) {
+      throw new EventLookupError(`Event not found: ${eventId}`);
+    }
+
+    if (input.slug !== undefined) {
+      const nextSlug = slugify(input.slug);
+      if (nextSlug !== event.slug) {
+        const key = eventSlugKey(event.organizationId, nextSlug);
+        if (this.eventsBySlug.has(key)) {
+          throw new EventLookupError(`Slug already in use: ${nextSlug}`);
+        }
+        this.eventsBySlug.delete(eventSlugKey(event.organizationId, event.slug));
+        this.eventsBySlug.set(key, eventId);
+        event.slug = nextSlug;
+      }
+    }
+
+    if (input.name !== undefined) event.name = input.name;
+    if (input.type !== undefined) event.type = input.type;
+    if (input.description !== undefined) event.description = input.description;
+    if (input.startDate !== undefined) {
+      event.startDate = input.startDate ? new Date(input.startDate) : null;
+    }
+    if (input.endDate !== undefined) {
+      event.endDate = input.endDate ? new Date(input.endDate) : null;
+    }
+    if (input.metadata !== undefined) event.metadata = input.metadata;
+
+    event.updatedAt = new Date();
+
+    return this.toEventRecord(event);
+  }
+
+  async listEvents(query: EventListQuery): Promise<EventListResult> {
+    this.assertOrganizationExists(query.organizationId);
+    const limit = clampLimit(query.limit);
+    let items = Array.from(this.events.values()).filter((event) => event.organizationId === query.organizationId);
+
+    if (query.types && query.types.length) {
+      const types = new Set(query.types);
+      items = items.filter((event) => types.has(event.type as any));
+    }
+
+    if (query.q) {
+      const lower = query.q.toLowerCase();
+      items = items.filter((event) => event.name.toLowerCase().includes(lower) || event.slug.includes(lower));
+    }
+
+    items.sort((a, b) => a.slug.localeCompare(b.slug));
+
+    let startIndex = 0;
+    if (query.cursor) {
+      startIndex = items.findIndex((event) => event.slug > query.cursor!);
+      if (startIndex === -1) {
+        return { items: [], nextCursor: undefined };
+      }
+    }
+
+    const slice = items.slice(startIndex, startIndex + limit);
+    const nextCursor = items.length > startIndex + slice.length && slice.length
+      ? slice[slice.length - 1].slug
+      : undefined;
+
+    return {
+      items: slice.map((event) => this.toEventRecord(event)),
+      nextCursor,
+    };
+  }
+
+  async getEventById(eventId: string): Promise<EventRecord | null> {
+    const event = this.events.get(eventId);
+    return event ? this.toEventRecord(event) : null;
+  }
+
+  async getEventBySlug(organizationId: string, slug: string): Promise<EventRecord | null> {
+    const key = eventSlugKey(organizationId, slug);
+    const eventId = this.eventsBySlug.get(key);
+    if (!eventId) return null;
+    return this.getEventById(eventId);
+  }
+
+  async upsertEventParticipant(input: EventParticipantUpsertInput): Promise<EventParticipantRecord> {
+    const event = this.events.get(input.eventId);
+    if (!event) {
+      throw new EventLookupError(`Event not found: ${input.eventId}`);
+    }
+
+    const player = this.players.get(input.playerId);
+    if (!player) {
+      throw new PlayerLookupError(`Player not found: ${input.playerId}`);
+    }
+    if (player.organizationId !== event.organizationId) {
+      throw new PlayerLookupError(`Player ${input.playerId} does not belong to organization ${event.organizationId}`);
+    }
+
+    const bucket = this.getEventParticipantBucket(input.eventId, true)!;
+    const now = new Date();
+    const existing = bucket.get(input.playerId);
+    if (existing) {
+      if (input.seed !== undefined) existing.seed = input.seed;
+      if (input.status !== undefined) existing.status = input.status;
+      if (input.metadata !== undefined) existing.metadata = input.metadata;
+      existing.updatedAt = now;
+      return {
+        eventId: existing.eventId,
+        playerId: existing.playerId,
+        seed: existing.seed ?? null,
+        status: existing.status ?? null,
+        metadata: existing.metadata ?? null,
+        createdAt: existing.createdAt.toISOString(),
+        updatedAt: existing.updatedAt.toISOString(),
+      };
+    }
+
+    const participant: MemoryEventParticipant = {
+      eventId: input.eventId,
+      playerId: input.playerId,
+      seed: input.seed ?? null,
+      status: input.status ?? null,
+      metadata: input.metadata ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    bucket.set(input.playerId, participant);
+
+    return {
+      eventId: participant.eventId,
+      playerId: participant.playerId,
+      seed: participant.seed ?? null,
+      status: participant.status ?? null,
+      metadata: participant.metadata ?? null,
+      createdAt: participant.createdAt.toISOString(),
+      updatedAt: participant.updatedAt.toISOString(),
+    };
+  }
+
+  async listEventParticipants(eventId: string): Promise<EventParticipantListResult> {
+    const bucket = this.getEventParticipantBucket(eventId);
+    if (!bucket) {
+      return { items: [] };
+    }
+    const items: EventParticipantRecord[] = Array.from(bucket.values()).map((participant) => ({
+      eventId: participant.eventId,
+      playerId: participant.playerId,
+      seed: participant.seed ?? null,
+      status: participant.status ?? null,
+      metadata: participant.metadata ?? null,
+      createdAt: participant.createdAt.toISOString(),
+      updatedAt: participant.updatedAt.toISOString(),
+    }));
+    items.sort((a, b) => a.playerId.localeCompare(b.playerId));
+    return { items };
+  }
+
+  async ensureEventParticipants(eventId: string, playerIds: string[]): Promise<void> {
+    if (!playerIds.length) return;
+    const event = this.events.get(eventId);
+    if (!event) {
+      throw new EventLookupError(`Event not found: ${eventId}`);
+    }
+
+    for (const playerId of playerIds) {
+      const player = this.players.get(playerId);
+      if (!player || player.organizationId !== event.organizationId) {
+        continue;
+      }
+      const bucket = this.getEventParticipantBucket(eventId, true)!;
+      if (!bucket.has(playerId)) {
+        const now = new Date();
+        bucket.set(playerId, {
+          eventId,
+          playerId,
+          seed: null,
+          status: null,
+          metadata: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+  }
+
   private getRatingEventBucket(ladderId: string, playerId: string, create = false) {
     let ladderBuckets = this.ratingEvents.get(ladderId);
     if (!ladderBuckets && create) {
@@ -883,6 +1180,31 @@ export class MemoryStore implements RatingStore {
       ladderBuckets.set(playerId, events);
     }
     return events;
+  }
+
+  private getEventParticipantBucket(eventId: string, create = false) {
+    let bucket = this.eventParticipants.get(eventId);
+    if (!bucket && create) {
+      bucket = new Map<string, MemoryEventParticipant>();
+      this.eventParticipants.set(eventId, bucket);
+    }
+    return bucket;
+  }
+
+  private toEventRecord(event: MemoryEventRecord): EventRecord {
+    return {
+      eventId: event.eventId,
+      organizationId: event.organizationId,
+      type: event.type as any,
+      name: event.name,
+      slug: event.slug,
+      description: event.description ?? null,
+      startDate: event.startDate ? event.startDate.toISOString() : null,
+      endDate: event.endDate ? event.endDate.toISOString() : null,
+      metadata: event.metadata ?? null,
+      createdAt: event.createdAt.toISOString(),
+      updatedAt: event.updatedAt.toISOString(),
+    };
   }
 
   private parseLadderId(ladderId: string) {
