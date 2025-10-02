@@ -911,7 +911,13 @@ components:
       type: object
       required: [provider_id, sport, discipline, format, start_time, sides, games]
       properties:
-        provider_id: { type: string }
+        provider_id: { type: string, description: 'Identifier of the data provider submitting the match' }
+        external_ref:
+          type: [string, 'null']
+          description: >-
+            Provider-specific unique identifier for this match. Used for idempotency -
+            submitting the same provider_id + external_ref combination multiple times
+            will return the existing match instead of creating duplicates.
         organization_id: { type: string, description: 'UUID of the organization' }
         organization_slug: { type: string, description: 'Slug identifier (alternative to organization_id)' }
         sport:
@@ -922,9 +928,8 @@ components:
           type: string
           example: MS
           description: >-
-            Match format identifying the ladder. OpenRating uses the standard
-            draw codes common across racket sports (MS, WS, BS, GS, MD, WD, BD,
-            GD, XD).
+            Match format code (MS, WS, BS, GS for singles; MD, WD, BD, GD for doubles; XD for mixed).
+            Note: Ratings are calculated per sport+discipline, not per format.
         event_id:
           type: string
           format: uuid
@@ -1072,6 +1077,10 @@ components:
       type: object
       properties:
         match_id: { type: string }
+        provider_id: { type: string }
+        external_ref:
+          type: [string, 'null']
+          description: Provider-specific unique identifier for this match
         organization_id: { type: string }
         organization_slug:
           type: [string, 'null']
@@ -1524,7 +1533,6 @@ components:
         discipline:
           type: string
           enum: [SINGLES, DOUBLES, MIXED]
-        format: { type: string }
         tier:
           type: [string, 'null']
         region_id:
@@ -1567,7 +1575,6 @@ components:
         discipline:
           type: string
           enum: [SINGLES, DOUBLES, MIXED]
-        format: { type: string }
         tier:
           type: [string, 'null']
         region_id:

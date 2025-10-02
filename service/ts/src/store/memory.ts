@@ -218,6 +218,8 @@ export class MemoryStore implements RatingStore {
   private matches: Array<{
     matchId: string;
     ladderId: string;
+    providerId: string;
+    externalRef?: string | null;
     match: MatchInput;
     result: UpdateResult;
     startTime: Date;
@@ -392,6 +394,40 @@ export class MemoryStore implements RatingStore {
   }
 
   async recordMatch(params: RecordMatchParams): Promise<RecordMatchResult> {
+    // Check for existing match with same provider + external_ref for idempotency
+    if (params.submissionMeta.externalRef) {
+      const existing = this.matches.find(
+        (m) =>
+          m.providerId === params.submissionMeta.providerId &&
+          m.externalRef === params.submissionMeta.externalRef
+      );
+
+      if (existing) {
+        // Match already exists, return existing match info
+        const ratingEvents = this.getRatingEventBucket(existing.ladderId, '', false);
+        const eventsForMatch: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
+
+        if (ratingEvents) {
+          for (const [playerId, events] of this.ratingEvents.get(existing.ladderId)?.entries() || []) {
+            for (const event of events) {
+              if (event.matchId === existing.matchId) {
+                eventsForMatch.push({
+                  playerId: event.playerId,
+                  ratingEventId: event.ratingEventId,
+                  appliedAt: event.appliedAt.toISOString(),
+                });
+              }
+            }
+          }
+        }
+
+        return {
+          matchId: existing.matchId,
+          ratingEvents: eventsForMatch,
+        };
+      }
+    }
+
     const matchId = randomUUID();
     this.assertOrganizationExists(params.ladderKey.organizationId);
     const ladderId = buildLadderId(params.ladderKey);
@@ -415,6 +451,8 @@ export class MemoryStore implements RatingStore {
     this.matches.push({
       matchId,
       ladderId,
+      providerId: params.submissionMeta.providerId,
+      externalRef: params.submissionMeta.externalRef ?? null,
       match: params.match,
       result: params.result,
       startTime: new Date(params.submissionMeta.startTime),
@@ -563,6 +601,8 @@ export class MemoryStore implements RatingStore {
 
     return {
       matchId: match.matchId,
+      providerId: match.providerId,
+      externalRef: match.externalRef ?? null,
       organizationId: match.organizationId,
       sport: match.sport,
       discipline: match.discipline,
@@ -912,6 +952,8 @@ export class MemoryStore implements RatingStore {
 
     const items: MatchSummary[] = slice.map((entry) => ({
       matchId: entry.matchId,
+      providerId: entry.providerId,
+      externalRef: entry.externalRef ?? null,
       organizationId: entry.organizationId,
       sport: entry.sport,
       discipline: entry.discipline,
@@ -1312,12 +1354,11 @@ export class MemoryStore implements RatingStore {
   }
 
   private parseLadderId(ladderId: string) {
-    const [organizationId, sport, discipline, format, tier, region] = ladderId.split(':');
+    const [organizationId, sport, discipline, tier, region] = ladderId.split(':');
     return {
       organizationId,
       sport,
       discipline,
-      format,
       tier,
       region: region ?? DEFAULT_REGION,
     };
@@ -1325,13 +1366,12 @@ export class MemoryStore implements RatingStore {
 
   private ladderMatches(
     ladderId: string,
-    params: { organizationId: string; sport: string; discipline: string; format: string; tier?: string | null; regionId?: string | null }
+    params: { organizationId: string; sport: string; discipline: string; tier?: string | null; regionId?: string | null }
   ) {
     const parsed = this.parseLadderId(ladderId);
     if (parsed.organizationId !== params.organizationId) return false;
     if (parsed.sport !== params.sport) return false;
     if (parsed.discipline !== params.discipline) return false;
-    if (parsed.format !== params.format) return false;
     if (params.tier && parsed.tier !== params.tier) return false;
     if (params.regionId) {
       const targetRegion = params.regionId;

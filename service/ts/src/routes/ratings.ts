@@ -20,7 +20,6 @@ const RatingQuerySchema = z
     organization_slug: z.string().optional(),
     sport: z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']).optional(),
     discipline: z.enum(['SINGLES', 'DOUBLES', 'MIXED']).optional(),
-    format: z.string().optional(),
     tier: z.string().optional(),
     region_id: z.string().optional(),
   })
@@ -32,7 +31,6 @@ const RatingQuerySchema = z
 const LadderDimensionsQuerySchema = z.object({
   sport: z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']).optional(),
   discipline: z.enum(['SINGLES', 'DOUBLES', 'MIXED']).optional(),
-  format: z.string().optional(),
   tier: z.string().optional(),
   region_id: z.string().optional(),
 });
@@ -62,7 +60,6 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
       organization_id: req.query.organization_id,
       sport: req.query.sport,
       discipline: req.query.discipline,
-      format: req.query.format,
       tier: req.query.tier,
       region_id: req.query.region_id,
     });
@@ -80,7 +77,6 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
       const ladderKey = buildLadderKeyForOrganization(organization.organizationId, {
         sport: parsed.data.sport,
         discipline: parsed.data.discipline,
-        format: parsed.data.format,
         tier: parsed.data.tier,
         region_id: parsed.data.region_id,
       });

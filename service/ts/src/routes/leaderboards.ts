@@ -15,7 +15,6 @@ import type { Sport, Discipline } from '../engine/types.js';
 const LeaderboardQuerySchema = z.object({
   sport: z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']).optional(),
   discipline: z.enum(['SINGLES', 'DOUBLES', 'MIXED']).optional(),
-  format: z.string().optional(),
   tier: z.string().optional(),
   region_id: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -46,7 +45,6 @@ export const registerLeaderboardRoutes = (app: Express, deps: LeaderboardRouteDe
 
       const sport = (parsed.data.sport ?? 'BADMINTON') as Sport;
       const discipline = (parsed.data.discipline ?? 'SINGLES') as Discipline;
-      const format = parsed.data.format ?? 'MS';
       const tierFilter = parsed.data.tier ? normalizeTier(parsed.data.tier) : null;
       const regionFilterRaw = parsed.data.region_id ?? null;
       const regionFilter = regionFilterRaw ? normalizeRegion(regionFilterRaw) : null;
@@ -62,7 +60,6 @@ export const registerLeaderboardRoutes = (app: Express, deps: LeaderboardRouteDe
         organizationId: organization.organizationId,
         sport,
         discipline,
-        format,
         tier: tierFilter,
         regionId: regionFilter,
         limit: parsed.data.limit,
@@ -73,7 +70,6 @@ export const registerLeaderboardRoutes = (app: Express, deps: LeaderboardRouteDe
         organization_slug: organization.slug,
         sport,
         discipline,
-        format,
         tier: tierFilter ?? null,
         region_id: regionFilter ?? null,
         players: result.items.map((entry) => ({
@@ -115,7 +111,6 @@ export const registerLeaderboardRoutes = (app: Express, deps: LeaderboardRouteDe
       const organization = await resolveOrganization({ organization_slug: req.params.organization_slug });
       const sport = (parsed.data.sport ?? 'BADMINTON') as Sport;
       const discipline = (parsed.data.discipline ?? 'SINGLES') as Discipline;
-      const format = parsed.data.format ?? 'MS';
       const tierFilter = parsed.data.tier ? normalizeTier(parsed.data.tier) : null;
       const regionFilterRaw = parsed.data.region_id ?? null;
       const regionFilter = regionFilterRaw ? normalizeRegion(regionFilterRaw) : null;
@@ -131,7 +126,6 @@ export const registerLeaderboardRoutes = (app: Express, deps: LeaderboardRouteDe
         organizationId: organization.organizationId,
         sport,
         discipline,
-        format,
         tier: tierFilter,
         regionId: regionFilter,
         limit: parsed.data.limit,
@@ -143,7 +137,6 @@ export const registerLeaderboardRoutes = (app: Express, deps: LeaderboardRouteDe
         organization_slug: organization.slug,
         sport,
         discipline,
-        format,
         tier: tierFilter ?? null,
         region_id: regionFilter ?? null,
         since: parsed.data.since,

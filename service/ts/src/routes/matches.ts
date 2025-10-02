@@ -85,6 +85,7 @@ const MatchGameSchema = z.object({
 const MatchSubmitSchema = z
   .object({
     provider_id: z.string(),
+    external_ref: z.string().optional(),
     organization_id: z.string().uuid().optional(),
     organization_slug: z.string().optional(),
     sport: z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']),
@@ -264,7 +265,6 @@ const buildLadderKey = (
   organizationId,
   sport: match.sport,
   discipline: match.discipline,
-  format: match.format,
   tier: normalizeTier(options.tier),
   regionId: normalizeRegion(options.regionId ?? null),
 });
@@ -377,6 +377,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         ...(gameDetails !== undefined ? { gameDetails } : {}),
         submissionMeta: {
           providerId: parsed.data.provider_id,
+          externalRef: parsed.data.external_ref ?? null,
           organizationId: organization.organizationId,
           startTime: parsed.data.start_time,
           rawPayload: req.body,

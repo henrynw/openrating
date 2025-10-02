@@ -433,7 +433,6 @@ export class PostgresStore implements RatingStore {
     organizationId: string;
     sport: string;
     discipline: string;
-    format: string;
     tier?: string | null;
     regionId?: string | null;
   }): Promise<Array<{ ladderId: string; tier: string; regionId: string | null }>> {
@@ -441,7 +440,6 @@ export class PostgresStore implements RatingStore {
       eq(ratingLadders.organizationId, params.organizationId),
       eq(ratingLadders.sport, params.sport),
       eq(ratingLadders.discipline, params.discipline),
-      eq(ratingLadders.format, params.format),
     ];
 
     if (params.tier) {
@@ -555,6 +553,8 @@ export class PostgresStore implements RatingStore {
     const rows = await this.db
       .select({
         matchId: matches.matchId,
+        providerId: matches.providerId,
+        externalRef: matches.externalRef,
         organizationId: matches.organizationId,
         sport: matches.sport,
         discipline: matches.discipline,
@@ -634,6 +634,8 @@ export class PostgresStore implements RatingStore {
 
     return {
       matchId: matchRow.matchId,
+      providerId: matchRow.providerId,
+      externalRef: matchRow.externalRef ?? null,
       organizationId: matchRow.organizationId,
       sport: matchRow.sport as MatchInput['sport'],
       discipline: matchRow.discipline as MatchInput['discipline'],
@@ -1494,7 +1496,6 @@ export class PostgresStore implements RatingStore {
         organizationId: key.organizationId,
         sport: key.sport,
         discipline: key.discipline,
-        format: key.format,
         tier: key.tier,
         regionId: toDbRegionId(key.regionId) ?? regionId,
         createdAt: now(),
@@ -1628,6 +1629,46 @@ export class PostgresStore implements RatingStore {
   }
 
   async recordMatch(params: RecordMatchParams): Promise<RecordMatchResult> {
+    // Check for existing match with same provider + external_ref for idempotency
+    if (params.submissionMeta.externalRef) {
+      const existing = await this.db
+        .select({ matchId: matches.matchId })
+        .from(matches)
+        .where(
+          and(
+            eq(matches.providerId, params.submissionMeta.providerId),
+            eq(matches.externalRef, params.submissionMeta.externalRef)
+          )
+        )
+        .limit(1);
+
+      if (existing.length > 0) {
+        // Match already exists, return existing match info
+        const existingMatchId = existing[0].matchId;
+        const ratingEvents = (await this.db
+          .select({
+            playerId: playerRatingHistory.playerId,
+            ratingEventId: sql<string>`CAST(${playerRatingHistory.id} AS TEXT)`,
+            appliedAt: playerRatingHistory.createdAt,
+          })
+          .from(playerRatingHistory)
+          .where(eq(playerRatingHistory.matchId, existingMatchId))) as Array<{
+          playerId: string;
+          ratingEventId: string;
+          appliedAt: Date;
+        }>;
+
+        return {
+          matchId: existingMatchId,
+          ratingEvents: ratingEvents.map((e) => ({
+            playerId: e.playerId,
+            ratingEventId: e.ratingEventId,
+            appliedAt: e.appliedAt.toISOString(),
+          })),
+        };
+      }
+    }
+
     const matchId = randomUUID();
     const movWeight = params.match.movWeight ?? null;
 
@@ -1670,6 +1711,7 @@ export class PostgresStore implements RatingStore {
         matchId,
         ladderId: params.ladderId,
         providerId: params.submissionMeta.providerId,
+        externalRef: params.submissionMeta.externalRef ?? null,
         organizationId: params.submissionMeta.organizationId,
         sport: params.match.sport,
         discipline: params.match.discipline,
@@ -2506,6 +2548,8 @@ export class PostgresStore implements RatingStore {
     let matchQuery = this.db
       .select({
         matchId: matches.matchId,
+        providerId: matches.providerId,
+        externalRef: matches.externalRef,
         organizationId: matches.organizationId,
         sport: matches.sport,
         discipline: matches.discipline,
@@ -2530,6 +2574,8 @@ export class PostgresStore implements RatingStore {
 
     const rows = (await matchQuery) as Array<{
       matchId: string;
+      providerId: string;
+      externalRef: string | null;
       organizationId: string;
       sport: string;
       discipline: string;
@@ -2622,6 +2668,8 @@ export class PostgresStore implements RatingStore {
       const gameList = gamesMap.get(row.matchId) ?? [];
       return {
         matchId: row.matchId,
+        providerId: row.providerId,
+        externalRef: row.externalRef ?? null,
         organizationId: row.organizationId,
         sport: row.sport as MatchInput['sport'],
         discipline: row.discipline as MatchInput['discipline'],

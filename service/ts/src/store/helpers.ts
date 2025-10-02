@@ -9,7 +9,7 @@ export const normalizeRegion = (region?: string | null) => (region && region.tri
 export const isDefaultRegion = (regionId: string) => regionId === NULL_REGION;
 
 export const buildLadderId = (key: LadderKey) =>
-  [key.organizationId, key.sport, key.discipline, key.format, key.tier, key.regionId].join(':');
+  [key.organizationId, key.sport, key.discipline, key.tier, key.regionId].join(':');
 
 const sortPair = (players: string[]) => [...players].sort((a, b) => a.localeCompare(b));
 

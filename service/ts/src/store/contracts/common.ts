@@ -10,7 +10,6 @@ export interface LadderKey {
   organizationId: string;
   sport: MatchInput['sport'];
   discipline: MatchInput['discipline'];
-  format: MatchInput['format'];
   tier: string;
   regionId: string;
 }
@@ -47,6 +46,7 @@ export interface RecordMatchParams {
   }>;
   submissionMeta: {
     providerId: string;
+    externalRef?: string | null;
     organizationId: string;
     startTime: string;
     rawPayload: unknown;

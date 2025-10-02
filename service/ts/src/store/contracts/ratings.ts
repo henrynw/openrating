@@ -67,7 +67,6 @@ export interface LeaderboardQuery {
   organizationId: string;
   sport: LadderKey['sport'];
   discipline: LadderKey['discipline'];
-  format: LadderKey['format'];
   tier?: string | null;
   regionId?: string | null;
   limit?: number;

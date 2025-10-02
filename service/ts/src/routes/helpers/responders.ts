@@ -170,6 +170,8 @@ export const toMatchSummaryResponse = (match: MatchSummary, organizationSlug: st
 
   const response: Record<string, unknown> = {
     match_id: match.matchId,
+    provider_id: match.providerId,
+    external_ref: match.externalRef ?? null,
     organization_id: match.organizationId,
     organization_slug: organizationSlug,
     sport: match.sport,

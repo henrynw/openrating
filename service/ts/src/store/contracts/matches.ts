@@ -70,6 +70,8 @@ export interface MatchGameSummary {
 
 export interface MatchSummary {
   matchId: string;
+  providerId: string;
+  externalRef?: string | null;
   organizationId: string;
   organizationSlug?: string | null;
   sport: MatchInput['sport'];

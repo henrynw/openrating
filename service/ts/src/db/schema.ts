@@ -9,6 +9,7 @@ import {
   serial,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 export const organizations = pgTable('organizations', {
   organizationId: text('organization_id').primaryKey(),
@@ -137,7 +138,6 @@ export const ratingLadders = pgTable('rating_ladders', {
     onDelete: 'restrict',
   }).notNull(),
   discipline: text('discipline').notNull(),
-  format: text('format').notNull(),
   tier: text('tier').notNull().default('UNSPECIFIED'),
   regionId: text('region_id').references(() => regions.regionId, {
     onDelete: 'set null',
@@ -154,6 +154,7 @@ export const matches = pgTable('matches', {
   providerId: text('provider_id').references(() => providers.providerId, {
     onDelete: 'restrict',
   }).notNull(),
+  externalRef: text('external_ref'),
   organizationId: text('organization_id').references(() => organizations.organizationId, {
     onDelete: 'cascade',
   }).notNull(),
@@ -179,7 +180,9 @@ export const matches = pgTable('matches', {
   sideParticipants: jsonb('side_participants'),
   rawPayload: jsonb('raw_payload').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table: any) => ({
+  providerRefIdx: uniqueIndex('matches_provider_ref_idx').on(table.providerId, table.externalRef).where(sql`${table.externalRef} IS NOT NULL`),
+}));
 
 export const matchSides = pgTable('match_sides', {
   id: serial('id').primaryKey(),

@@ -6,7 +6,6 @@ export const buildLadderKeyForOrganization = (
   params: {
     sport?: string;
     discipline?: string;
-    format?: string;
     tier?: string;
     region_id?: string | null;
   }
@@ -14,7 +13,6 @@ export const buildLadderKeyForOrganization = (
   organizationId,
   sport: (params.sport ?? 'BADMINTON') as LadderKey['sport'],
   discipline: (params.discipline ?? 'SINGLES') as LadderKey['discipline'],
-  format: params.format ?? 'MS',
   tier: normalizeTier(params.tier),
   regionId: normalizeRegion(params.region_id ?? null),
 });

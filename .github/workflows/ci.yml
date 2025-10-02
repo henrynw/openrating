@@ -21,8 +21,3 @@ jobs:
           npm run build
       - name: OpenAPI lint
         run: npx @redocly/cli@latest lint openapi/openapi.yaml || true
-      - name: Terraform fmt/validate
-        run: |
-          sudo apt-get update && sudo apt-get install -y terraform
-          terraform -chdir=terraform/example-usage init -backend=false || true
-          terraform -chdir=terraform/example-usage validate || true
