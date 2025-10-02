@@ -59,8 +59,8 @@ BEGIN
     WHERE ladder_id = ANY(duplicate_ladder_ids);
 
     -- Merge pair synergies - handle conflicts by keeping best synergy
-    INSERT INTO pair_synergies (ladder_id, pair_key, gamma, matches, updated_at, created_at)
-    SELECT keeper_ladder_id, pair_key, gamma, matches, updated_at, created_at
+    INSERT INTO pair_synergies (ladder_id, pair_key, players, gamma, matches, updated_at, created_at)
+    SELECT keeper_ladder_id, pair_key, players, gamma, matches, updated_at, created_at
     FROM pair_synergies
     WHERE ladder_id = ANY(duplicate_ladder_ids)
     ON CONFLICT (ladder_id, pair_key) DO UPDATE
