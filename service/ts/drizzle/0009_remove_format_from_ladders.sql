@@ -40,8 +40,8 @@ BEGIN
     WHERE ladder_id = ANY(duplicate_ladder_ids);
 
     -- Merge player ratings - handle conflicts by keeping best rating
-    INSERT INTO player_ratings (player_id, ladder_id, mu, sigma, matches_count, updated_at, created_at)
-    SELECT player_id, keeper_ladder_id, mu, sigma, matches_count, updated_at, created_at
+    INSERT INTO player_ratings (player_id, ladder_id, mu, sigma, matches_count, updated_at)
+    SELECT player_id, keeper_ladder_id, mu, sigma, matches_count, updated_at
     FROM player_ratings
     WHERE ladder_id = ANY(duplicate_ladder_ids)
     ON CONFLICT (player_id, ladder_id) DO UPDATE
