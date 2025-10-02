@@ -39,7 +39,10 @@ BEGIN
     UPDATE matches SET ladder_id = keeper_ladder_id
     WHERE ladder_id = ANY(duplicate_ladder_ids);
 
-    UPDATE player_ratings SET ladder_id = keeper_ladder_id
+    -- Merge player ratings - handle conflicts by keeping best rating
+    INSERT INTO player_ratings (player_id, ladder_id, mu, sigma, matches_count, updated_at, created_at)
+    SELECT player_id, keeper_ladder_id, mu, sigma, matches_count, updated_at, created_at
+    FROM player_ratings
     WHERE ladder_id = ANY(duplicate_ladder_ids)
     ON CONFLICT (player_id, ladder_id) DO UPDATE
       SET
@@ -48,10 +51,17 @@ BEGIN
         matches_count = player_ratings.matches_count + EXCLUDED.matches_count,
         updated_at = GREATEST(player_ratings.updated_at, EXCLUDED.updated_at);
 
+    -- Delete old player ratings after merge
+    DELETE FROM player_ratings WHERE ladder_id = ANY(duplicate_ladder_ids);
+
+    -- Update player rating history
     UPDATE player_rating_history SET ladder_id = keeper_ladder_id
     WHERE ladder_id = ANY(duplicate_ladder_ids);
 
-    UPDATE pair_synergies SET ladder_id = keeper_ladder_id
+    -- Merge pair synergies - handle conflicts by keeping best synergy
+    INSERT INTO pair_synergies (ladder_id, pair_key, gamma, matches, updated_at, created_at)
+    SELECT keeper_ladder_id, pair_key, gamma, matches, updated_at, created_at
+    FROM pair_synergies
     WHERE ladder_id = ANY(duplicate_ladder_ids)
     ON CONFLICT (ladder_id, pair_key) DO UPDATE
       SET
@@ -59,6 +69,10 @@ BEGIN
         matches = pair_synergies.matches + EXCLUDED.matches,
         updated_at = GREATEST(pair_synergies.updated_at, EXCLUDED.updated_at);
 
+    -- Delete old pair synergies after merge
+    DELETE FROM pair_synergies WHERE ladder_id = ANY(duplicate_ladder_ids);
+
+    -- Update pair synergy history
     UPDATE pair_synergy_history SET ladder_id = keeper_ladder_id
     WHERE ladder_id = ANY(duplicate_ladder_ids);
 
