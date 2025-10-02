@@ -8,10 +8,48 @@ export type EventType =
   | 'EXHIBITION'
   | 'CUSTOM';
 
+export type EventLevel =
+  | 'WORLD_TOUR'
+  | 'CONTINENTAL'
+  | 'NATIONAL'
+  | 'REGIONAL'
+  | 'CLUB'
+  | 'SCHOOL'
+  | 'COMMUNITY'
+  | 'OTHER';
+
+export type EventGrade =
+  | 'SUPER_1000'
+  | 'SUPER_750'
+  | 'SUPER_500'
+  | 'SUPER_300'
+  | 'GOLD'
+  | 'SILVER'
+  | 'BRONZE'
+  | 'MAJOR'
+  | 'DIVISION_1'
+  | 'DIVISION_2'
+  | 'OPEN'
+  | 'OTHER';
+
+export type EventAgeGroup =
+  | 'U11'
+  | 'U13'
+  | 'U15'
+  | 'U17'
+  | 'U19'
+  | 'U21'
+  | 'SENIOR'
+  | 'ADULT'
+  | 'VETERAN'
+  | 'MASTER'
+  | 'OPEN'
+  | 'OTHER';
+
 export interface EventClassification {
-  level?: string | null;
-  grade?: string | null;
-  ageGroup?: string | null;
+  level?: EventLevel | null;
+  grade?: EventGrade | null;
+  ageGroup?: EventAgeGroup | null;
   tour?: string | null;
   category?: string | null;
 }

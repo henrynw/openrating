@@ -23,7 +23,7 @@ const LooseRecordSchema = z.record(z.unknown());
 
 const PlayerRankingSnapshotSchema = z.object({
   source: z.string(),
-  discipline: z.string().nullable().optional(),
+  discipline: z.enum(['SINGLES', 'DOUBLES', 'MIXED']).nullable().optional(),
   position: z.number().int().min(1).nullable().optional(),
   points: z.number().nullable().optional(),
   as_of: z.string().datetime().nullable().optional(),
@@ -31,7 +31,7 @@ const PlayerRankingSnapshotSchema = z.object({
 });
 
 const PlayerCompetitiveProfileSchema = z.object({
-  discipline: z.string().nullable().optional(),
+  discipline: z.enum(['SINGLES', 'DOUBLES', 'MIXED']).nullable().optional(),
   ranking_points: z.number().nullable().optional(),
   ranking_position: z.number().int().min(1).nullable().optional(),
   total_matches: z.number().int().min(0).nullable().optional(),
@@ -40,8 +40,8 @@ const PlayerCompetitiveProfileSchema = z.object({
 });
 
 const PlayerAttributesSchema = z.object({
-  handedness: z.string().nullable().optional(),
-  dominant_side: z.string().nullable().optional(),
+  handedness: z.enum(['LEFT', 'RIGHT', 'AMBIDEXTROUS', 'OTHER']).nullable().optional(),
+  dominant_side: z.enum(['DEUCE', 'AD', 'LEFT', 'RIGHT', 'BOTH', 'OTHER']).nullable().optional(),
   height_cm: z.number().nullable().optional(),
   weight_kg: z.number().nullable().optional(),
   birth_date: z.string().date().nullable().optional(),

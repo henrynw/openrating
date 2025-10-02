@@ -30,16 +30,21 @@ import type { PairState } from '../engine/types.js';
 
 const LooseRecordSchema = z.record(z.unknown());
 
-const MatchStatisticsSchema = z.union([
-  z.record(z.union([z.number(), z.record(z.unknown())])),
-  z.null(),
-]);
+const MatchMetricSchema = z.object({
+  value: z.number(),
+  unit: z.string().nullable().optional(),
+  breakdown: z.record(z.number()).nullable().optional(),
+  source: z.string().nullable().optional(),
+  metadata: LooseRecordSchema.nullable().optional(),
+});
+
+const MatchStatisticsSchema = z.union([z.record(MatchMetricSchema), z.null()]);
 
 const MatchSegmentSchema = z.object({
   sequence: z.number().int().min(1).nullable().optional(),
   phase: z.string().nullable().optional(),
   label: z.string().nullable().optional(),
-  side: z.string().nullable().optional(),
+  side: z.enum(['A', 'B', 'HOME', 'AWAY']).nullable().optional(),
   value: z.number().nullable().optional(),
   unit: z.string().nullable().optional(),
   elapsed_seconds: z.number().nullable().optional(),
@@ -49,9 +54,9 @@ const MatchSegmentSchema = z.object({
 
 const MatchParticipantSchema = z.object({
   player_id: z.string(),
-  role: z.string().nullable().optional(),
+  role: z.enum(['STARTER', 'SUBSTITUTE', 'RESERVE', 'LEAD', 'OTHER']).nullable().optional(),
   seed: z.number().int().min(1).nullable().optional(),
-  status: z.string().nullable().optional(),
+  status: z.enum(['ACTIVE', 'STARTER', 'BENCH', 'WITHDRAWN', 'INACTIVE', 'OTHER']).nullable().optional(),
   external_ref: z.string().nullable().optional(),
   metadata: LooseRecordSchema.nullable().optional(),
 });
@@ -61,8 +66,12 @@ const MatchTimingSchema = z.object({
   actual_start: z.string().datetime().nullable().optional(),
   completed_at: z.string().datetime().nullable().optional(),
   duration_seconds: z.number().int().min(0).nullable().optional(),
-  time_zone: z.string().nullable().optional(),
-  status: z.string().nullable().optional(),
+  time_zone: z
+    .string()
+    .regex(/^[A-Za-z]+(?:\/[A-Za-z_]+)+$/)
+    .nullable()
+    .optional(),
+  status: z.enum(['SCHEDULED', 'IN_PROGRESS', 'COMPLETED', 'RETIRED', 'WALKOVER', 'CANCELLED']).nullable().optional(),
 });
 
 const MatchGameSchema = z.object({
@@ -197,7 +206,7 @@ const mapMatchParticipantsInput = (
 
 const mapMatchStatisticsInput = (
   statistics: MatchStatisticsInput | undefined
-): MatchStatistics | null | undefined => {
+): MatchStatistics | undefined => {
   if (statistics === undefined) return undefined;
   if (statistics === null) return null;
   return statistics;

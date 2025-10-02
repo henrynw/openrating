@@ -851,8 +851,7 @@ components:
       description: Summary of competitive history used to seed or calibrate ratings.
       properties:
         discipline:
-          type: [string, 'null']
-          description: Discipline or ladder the ranking applies to (e.g. SINGLES, DOUBLES).
+          $ref: '#/components/schemas/MatchSubmit/properties/discipline'
         ranking_points:
           type: [number, 'null']
         ranking_position:
@@ -891,10 +890,10 @@ components:
       description: Biographical and biometric details that influence competition context.
       properties:
         handedness:
-          type: [string, 'null']
+          $ref: '#/components/schemas/PlayerHandedness'
           description: Dominant playing hand (e.g. RIGHT, LEFT, AMBIDEXTROUS).
         dominant_side:
-          type: [string, 'null']
+          $ref: '#/components/schemas/PlayerDominantSide'
           description: Preferred side or court position for team formats.
         height_cm:
           type: [number, 'null']
@@ -1140,10 +1139,10 @@ components:
           minimum: 0
         time_zone:
           type: [string, 'null']
+          pattern: '^[A-Za-z]+(?:/[A-Za-z_]+)+$'
           description: IANA time zone identifier capturing the competition locale.
         status:
-          type: [string, 'null']
-          description: Terminal state of the match (e.g. COMPLETED, RETIRED, WALKOVER, CANCELLED).
+          $ref: '#/components/schemas/MatchStatus'
     MatchSegment:
       type: object
       description: Time-ordered scoring or momentum events captured during play.
@@ -1158,8 +1157,8 @@ components:
         label:
           type: [string, 'null']
         side:
-          type: [string, 'null']
-          description: Identifier of the side credited for the event (e.g. A, B, HOME, AWAY).
+          $ref: '#/components/schemas/MatchSegmentSide'
+          description: Identifier of the side credited for the event.
         value:
           type: [number, 'null']
           description: Numeric magnitude for the segment (such as points won).
@@ -1179,14 +1178,14 @@ components:
       properties:
         player_id: { type: string }
         role:
-          type: [string, 'null']
-          description: Competition-specific role or lineup position (e.g. LEAD, SUBSTITUTE).
+          $ref: '#/components/schemas/MatchParticipantRole'
+          description: Competition-specific role or lineup position.
         seed:
           type: [integer, 'null']
           minimum: 1
         status:
-          type: [string, 'null']
-          description: Participation status such as ACTIVE, STARTER, or WITHDRAWN.
+          $ref: '#/components/schemas/MatchParticipantStatus'
+          description: Participation status such as ACTIVE or WITHDRAWN.
         external_ref:
           type: [string, 'null']
         metadata:
@@ -1196,10 +1195,25 @@ components:
       type: object
       description: Collection of key-value metrics summarizing performance.
       additionalProperties:
-        oneOf:
-          - type: number
-          - type: object
-            additionalProperties: true
+        $ref: '#/components/schemas/MatchMetric'
+    MatchMetric:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: number
+        unit:
+          type: [string, 'null']
+        breakdown:
+          type: [object, 'null']
+          additionalProperties:
+            type: number
+        source:
+          type: [string, 'null']
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+      description: A single statistic value with optional contextual details.
     Event:
       type: object
       properties:
@@ -1311,13 +1325,13 @@ components:
       description: Structured hierarchy data describing the competitive level of an event.
       properties:
         level:
-          type: [string, 'null']
+          $ref: '#/components/schemas/EventLevel'
           description: High-level tour or competition grade (e.g. WORLD_TOUR, NATIONAL, CLUB).
         grade:
-          type: [string, 'null']
+          $ref: '#/components/schemas/EventGrade'
           description: Fine-grained grade within the level (e.g. SUPER_750, MAJOR, DIVISION_1).
         age_group:
-          type: [string, 'null']
+          $ref: '#/components/schemas/EventAgeGroup'
           description: Target age bracket if applicable (e.g. U19, SENIOR).
         tour:
           type: [string, 'null']
@@ -1392,6 +1406,42 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/EventParticipant'
+    MatchStatus:
+      type: string
+      description: Lifecycle status for a match.
+      enum: [SCHEDULED, IN_PROGRESS, COMPLETED, RETIRED, WALKOVER, CANCELLED]
+    MatchSegmentSide:
+      type: string
+      description: Identifier for the match side credited in a segment.
+      enum: [A, B, HOME, AWAY]
+    MatchParticipantRole:
+      type: string
+      description: Role designation for a participant.
+      enum: [STARTER, SUBSTITUTE, RESERVE, LEAD, OTHER]
+    MatchParticipantStatus:
+      type: string
+      description: Roster status indicator for a participant.
+      enum: [ACTIVE, STARTER, BENCH, WITHDRAWN, INACTIVE, OTHER]
+    PlayerHandedness:
+      type: string
+      description: Dominant playing hand.
+      enum: [LEFT, RIGHT, AMBIDEXTROUS, OTHER]
+    PlayerDominantSide:
+      type: string
+      description: Preferred side or court position.
+      enum: [DEUCE, AD, LEFT, RIGHT, BOTH, OTHER]
+    EventLevel:
+      type: [string, 'null']
+      description: Top-level classification tier for an event.
+      enum: [WORLD_TOUR, CONTINENTAL, NATIONAL, REGIONAL, CLUB, SCHOOL, COMMUNITY, OTHER, null]
+    EventGrade:
+      type: [string, 'null']
+      description: Grade within a level, often tied to ranking points.
+      enum: [SUPER_1000, SUPER_750, SUPER_500, SUPER_300, GOLD, SILVER, BRONZE, MAJOR, DIVISION_1, DIVISION_2, OPEN, OTHER, null]
+    EventAgeGroup:
+      type: [string, 'null']
+      description: Target age bracket for participants.
+      enum: [U11, U13, U15, U17, U19, U21, SENIOR, ADULT, VETERAN, MASTER, OPEN, OTHER, null]
     RatingEvent:
       type: object
       properties:

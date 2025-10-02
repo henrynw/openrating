@@ -33,9 +33,30 @@ const EventTypeEnum = z.enum([
 const MetadataSchema = z.record(z.string(), z.unknown()).optional();
 
 const EventClassificationSchema = z.object({
-  level: z.string().nullable().optional(),
-  grade: z.string().nullable().optional(),
-  age_group: z.string().nullable().optional(),
+  level: z.enum(['WORLD_TOUR', 'CONTINENTAL', 'NATIONAL', 'REGIONAL', 'CLUB', 'SCHOOL', 'COMMUNITY', 'OTHER'])
+    .nullable()
+    .optional(),
+  grade: z
+    .enum([
+      'SUPER_1000',
+      'SUPER_750',
+      'SUPER_500',
+      'SUPER_300',
+      'GOLD',
+      'SILVER',
+      'BRONZE',
+      'MAJOR',
+      'DIVISION_1',
+      'DIVISION_2',
+      'OPEN',
+      'OTHER',
+    ])
+    .nullable()
+    .optional(),
+  age_group: z
+    .enum(['U11', 'U13', 'U15', 'U17', 'U19', 'U21', 'SENIOR', 'ADULT', 'VETERAN', 'MASTER', 'OPEN', 'OTHER'])
+    .nullable()
+    .optional(),
   tour: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
 });

@@ -1,8 +1,14 @@
 import type { LadderKey } from './common.js';
 
+export type PlayerDiscipline = 'SINGLES' | 'DOUBLES' | 'MIXED';
+
+export type PlayerHandedness = 'LEFT' | 'RIGHT' | 'AMBIDEXTROUS' | 'OTHER';
+
+export type PlayerDominantSide = 'DEUCE' | 'AD' | 'LEFT' | 'RIGHT' | 'BOTH' | 'OTHER';
+
 export interface PlayerRankingSnapshot {
   source: string;
-  discipline?: string | null;
+  discipline?: PlayerDiscipline | null;
   position?: number | null;
   points?: number | null;
   asOf?: string | null;
@@ -10,7 +16,7 @@ export interface PlayerRankingSnapshot {
 }
 
 export interface PlayerCompetitiveProfile {
-  discipline?: string | null;
+  discipline?: PlayerDiscipline | null;
   rankingPoints?: number | null;
   rankingPosition?: number | null;
   totalMatches?: number | null;
@@ -19,8 +25,8 @@ export interface PlayerCompetitiveProfile {
 }
 
 export interface PlayerAttributes {
-  handedness?: string | null;
-  dominantSide?: string | null;
+  handedness?: PlayerHandedness | null;
+  dominantSide?: PlayerDominantSide | null;
   heightCm?: number | null;
   weightKg?: number | null;
   birthDate?: string | null;

@@ -1,10 +1,24 @@
 import type { MatchInput } from '../../engine/types.js';
 
+export type MatchStatus =
+  | 'SCHEDULED'
+  | 'IN_PROGRESS'
+  | 'COMPLETED'
+  | 'RETIRED'
+  | 'WALKOVER'
+  | 'CANCELLED';
+
+export type MatchSegmentSide = 'A' | 'B' | 'HOME' | 'AWAY';
+
+export type MatchParticipantRole = 'STARTER' | 'SUBSTITUTE' | 'RESERVE' | 'LEAD' | 'OTHER';
+
+export type MatchParticipantStatus = 'ACTIVE' | 'STARTER' | 'BENCH' | 'WITHDRAWN' | 'INACTIVE' | 'OTHER';
+
 export interface MatchParticipant {
   playerId: string;
-  role?: string | null;
+  role?: MatchParticipantRole | null;
   seed?: number | null;
-  status?: string | null;
+  status?: MatchParticipantStatus | null;
   externalRef?: string | null;
   metadata?: Record<string, unknown> | null;
 }
@@ -15,14 +29,14 @@ export interface MatchTiming {
   completedAt?: string | null;
   durationSeconds?: number | null;
   timeZone?: string | null;
-  status?: string | null;
+  status?: MatchStatus | null;
 }
 
 export interface MatchSegment {
   sequence?: number | null;
   phase?: string | null;
   label?: string | null;
-  side?: string | null;
+  side?: MatchSegmentSide | null;
   value?: number | null;
   unit?: string | null;
   elapsedSeconds?: number | null;
@@ -30,8 +44,15 @@ export interface MatchSegment {
   metadata?: Record<string, unknown> | null;
 }
 
-export type MatchMetricValue = number | Record<string, unknown>;
-export type MatchStatistics = Record<string, MatchMetricValue> | null;
+export interface MatchMetric {
+  value: number;
+  unit?: string | null;
+  breakdown?: Record<string, number> | null;
+  source?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export type MatchStatistics = Record<string, MatchMetric> | null;
 
 export interface MatchSideSummary {
   side: 'A' | 'B';
