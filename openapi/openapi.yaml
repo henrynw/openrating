@@ -766,6 +766,10 @@ components:
             birth_year: { type: integer }
             country_code: { type: string }
             region_id: { type: string }
+            competitive_profile:
+              $ref: '#/components/schemas/PlayerCompetitiveProfile'
+            attributes:
+              $ref: '#/components/schemas/PlayerAttributes'
         - anyOf:
             - required: [organization_id]
             - required: [organization_slug]
@@ -795,6 +799,10 @@ components:
               type: [string, 'null']
             region_id:
               type: [string, 'null']
+            competitive_profile:
+              $ref: '#/components/schemas/PlayerCompetitiveProfile'
+            attributes:
+              $ref: '#/components/schemas/PlayerAttributes'
         - anyOf:
             - required: [organization_id]
             - required: [organization_slug]
@@ -825,6 +833,10 @@ components:
           type: [string, 'null']
         external_ref:
           type: [string, 'null']
+        competitive_profile:
+          $ref: '#/components/schemas/PlayerCompetitiveProfile'
+        attributes:
+          $ref: '#/components/schemas/PlayerAttributes'
     PlayerListResponse:
       type: object
       properties:
@@ -834,6 +846,68 @@ components:
             $ref: '#/components/schemas/PlayerResponse'
         next_cursor:
           type: [string, 'null']
+    PlayerCompetitiveProfile:
+      type: [object, 'null']
+      description: Summary of competitive history used to seed or calibrate ratings.
+      properties:
+        discipline:
+          type: [string, 'null']
+          description: Discipline or ladder the ranking applies to (e.g. SINGLES, DOUBLES).
+        ranking_points:
+          type: [number, 'null']
+        ranking_position:
+          type: [integer, 'null']
+          minimum: 1
+        total_matches:
+          type: [integer, 'null']
+          minimum: 0
+        as_of:
+          type: [string, 'null']
+          format: date-time
+        external_rankings:
+          type: [array, 'null']
+          items:
+            $ref: '#/components/schemas/PlayerRankingSnapshot'
+    PlayerRankingSnapshot:
+      type: object
+      required: [source]
+      properties:
+        source: { type: string }
+        discipline:
+          type: [string, 'null']
+        position:
+          type: [integer, 'null']
+          minimum: 1
+        points:
+          type: [number, 'null']
+        as_of:
+          type: [string, 'null']
+          format: date-time
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+    PlayerAttributes:
+      type: [object, 'null']
+      description: Biographical and biometric details that influence competition context.
+      properties:
+        handedness:
+          type: [string, 'null']
+          description: Dominant playing hand (e.g. RIGHT, LEFT, AMBIDEXTROUS).
+        dominant_side:
+          type: [string, 'null']
+          description: Preferred side or court position for team formats.
+        height_cm:
+          type: [number, 'null']
+        weight_kg:
+          type: [number, 'null']
+        birth_date:
+          type: [string, 'null']
+          format: date
+        residence:
+          type: [string, 'null']
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
     MatchSubmit:
       type: object
       required: [provider_id, sport, discipline, format, start_time, sides, games]
@@ -857,8 +931,16 @@ components:
           format: uuid
           description: Optional event identifier that groups the match with a tournament or competition
         start_time: { type: string, format: date-time }
+        timing:
+          $ref: '#/components/schemas/MatchTiming'
         venue_region_id: { type: string }
         tier: { type: string, enum: [SANCTIONED, LEAGUE, SOCIAL, EXHIBITION] }
+        statistics:
+          $ref: '#/components/schemas/MatchStatistics'
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchSegment'
         sides:
           type: object
           properties:
@@ -870,6 +952,10 @@ components:
                   minItems: 1
                   maxItems: 2
                   items: { type: string }
+                participants:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MatchParticipant'
             B:
               type: object
               properties:
@@ -878,6 +964,10 @@ components:
                   minItems: 1
                   maxItems: 2
                   items: { type: string }
+                participants:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MatchParticipant'
         games:
           type: array
           items:
@@ -886,6 +976,12 @@ components:
               game_no: { type: integer }
               a: { type: integer }
               b: { type: integer }
+              segments:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MatchSegment'
+              statistics:
+                $ref: '#/components/schemas/MatchStatistics'
     MatchUpdate:
       type: object
       properties:
@@ -899,6 +995,14 @@ components:
         event_id:
           type: [string, 'null']
           format: uuid
+        timing:
+          $ref: '#/components/schemas/MatchTiming'
+        statistics:
+          $ref: '#/components/schemas/MatchStatistics'
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchSegment'
     MatchSubmitResponse:
       type: object
       properties:
@@ -984,6 +1088,14 @@ components:
           type: [string, 'null']
         event_id:
           type: [string, 'null']
+        timing:
+          $ref: '#/components/schemas/MatchTiming'
+        statistics:
+          $ref: '#/components/schemas/MatchStatistics'
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchSegment'
         sides:
           type: object
           additionalProperties:
@@ -992,6 +1104,10 @@ components:
               players:
                 type: array
                 items: { type: string }
+              participants:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MatchParticipant'
         games:
           type: array
           items:
@@ -1000,6 +1116,90 @@ components:
               game_no: { type: integer }
               a: { type: integer }
               b: { type: integer }
+              segments:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MatchSegment'
+              statistics:
+                $ref: '#/components/schemas/MatchStatistics'
+    MatchTiming:
+      type: object
+      description: Key timestamps and duration information for a match.
+      properties:
+        scheduled_start:
+          type: [string, 'null']
+          format: date-time
+        actual_start:
+          type: [string, 'null']
+          format: date-time
+        completed_at:
+          type: [string, 'null']
+          format: date-time
+        duration_seconds:
+          type: [integer, 'null']
+          minimum: 0
+        time_zone:
+          type: [string, 'null']
+          description: IANA time zone identifier capturing the competition locale.
+        status:
+          type: [string, 'null']
+          description: Terminal state of the match (e.g. COMPLETED, RETIRED, WALKOVER, CANCELLED).
+    MatchSegment:
+      type: object
+      description: Time-ordered scoring or momentum events captured during play.
+      properties:
+        sequence:
+          type: [integer, 'null']
+          minimum: 1
+          description: Position of the segment within the match or game.
+        phase:
+          type: [string, 'null']
+          description: Optional phase identifier such as GAME_1, TIEBREAK, or OVERTIME.
+        label:
+          type: [string, 'null']
+        side:
+          type: [string, 'null']
+          description: Identifier of the side credited for the event (e.g. A, B, HOME, AWAY).
+        value:
+          type: [number, 'null']
+          description: Numeric magnitude for the segment (such as points won).
+        unit:
+          type: [string, 'null']
+        elapsed_seconds:
+          type: [number, 'null']
+        timestamp:
+          type: [string, 'null']
+          format: date-time
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+    MatchParticipant:
+      type: object
+      required: [player_id]
+      properties:
+        player_id: { type: string }
+        role:
+          type: [string, 'null']
+          description: Competition-specific role or lineup position (e.g. LEAD, SUBSTITUTE).
+        seed:
+          type: [integer, 'null']
+          minimum: 1
+        status:
+          type: [string, 'null']
+          description: Participation status such as ACTIVE, STARTER, or WITHDRAWN.
+        external_ref:
+          type: [string, 'null']
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+    MatchStatistics:
+      type: object
+      description: Collection of key-value metrics summarizing performance.
+      additionalProperties:
+        oneOf:
+          - type: number
+          - type: object
+            additionalProperties: true
     Event:
       type: object
       properties:
@@ -1019,6 +1219,19 @@ components:
         end_date:
           type: [string, 'null']
           format: date-time
+        classification:
+          $ref: '#/components/schemas/EventClassification'
+        sanctioning_body:
+          type: [string, 'null']
+        season:
+          type: [string, 'null']
+        purse:
+          type: [number, 'null']
+        purse_currency:
+          type: [string, 'null']
+          description: ISO-4217 code representing the purse currency.
+        media_links:
+          $ref: '#/components/schemas/EventMediaLinks'
         metadata:
           type: [object, 'null']
           additionalProperties: true
@@ -1047,6 +1260,18 @@ components:
         end_date:
           type: [string, 'null']
           format: date-time
+        classification:
+          $ref: '#/components/schemas/EventClassification'
+        sanctioning_body:
+          type: [string, 'null']
+        season:
+          type: [string, 'null']
+        purse:
+          type: [number, 'null']
+        purse_currency:
+          type: [string, 'null']
+        media_links:
+          $ref: '#/components/schemas/EventMediaLinks'
         metadata:
           type: [object, 'null']
           additionalProperties: true
@@ -1066,9 +1291,59 @@ components:
         end_date:
           type: [string, 'null']
           format: date-time
+        classification:
+          $ref: '#/components/schemas/EventClassification'
+        sanctioning_body:
+          type: [string, 'null']
+        season:
+          type: [string, 'null']
+        purse:
+          type: [number, 'null']
+        purse_currency:
+          type: [string, 'null']
+        media_links:
+          $ref: '#/components/schemas/EventMediaLinks'
         metadata:
           type: [object, 'null']
           additionalProperties: true
+    EventClassification:
+      type: object
+      description: Structured hierarchy data describing the competitive level of an event.
+      properties:
+        level:
+          type: [string, 'null']
+          description: High-level tour or competition grade (e.g. WORLD_TOUR, NATIONAL, CLUB).
+        grade:
+          type: [string, 'null']
+          description: Fine-grained grade within the level (e.g. SUPER_750, MAJOR, DIVISION_1).
+        age_group:
+          type: [string, 'null']
+          description: Target age bracket if applicable (e.g. U19, SENIOR).
+        tour:
+          type: [string, 'null']
+          description: Named series or tour identifier.
+        category:
+          type: [string, 'null']
+          description: Discipline-specific category, draw, or bracket label.
+    EventMediaLinks:
+      type: object
+      description: Links to event resources across digital channels.
+      properties:
+        website:
+          type: [string, 'null']
+          format: uri
+        registration:
+          type: [string, 'null']
+          format: uri
+        live_scoring:
+          type: [string, 'null']
+          format: uri
+        streaming:
+          type: [string, 'null']
+          format: uri
+        social:
+          type: [object, 'null']
+          additionalProperties: { type: string, format: uri }
     EventListResponse:
       type: object
       properties:
