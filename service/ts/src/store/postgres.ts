@@ -28,6 +28,8 @@ import type {
   PlayerCreateInput,
   PlayerUpdateInput,
   PlayerRecord,
+  PlayerCompetitiveProfile,
+  PlayerAttributes,
   RatingStore,
   RecordMatchParams,
   RecordMatchResult,
@@ -39,6 +41,10 @@ import type {
   MatchListResult,
   MatchSummary,
   MatchGameSummary,
+  MatchTiming,
+  MatchSegment,
+  MatchStatistics,
+  MatchParticipant,
   MatchSideSummary,
   OrganizationCreateInput,
   OrganizationListQuery,
@@ -60,6 +66,8 @@ import type {
   EventCreateInput,
   EventUpdateInput,
   EventRecord,
+  EventClassification,
+  EventMediaLinks,
   EventListQuery,
   EventListResult,
   EventParticipantUpsertInput,
@@ -158,6 +166,12 @@ type EventRow = {
   description: string | null;
   startDate: Date | null;
   endDate: Date | null;
+  classification: unknown | null;
+  sanctioningBody: string | null;
+  season: string | null;
+  purse: number | null;
+  purseCurrency: string | null;
+  mediaLinks: unknown | null;
   metadata: unknown | null;
   createdAt: Date;
   updatedAt: Date;
@@ -242,6 +256,8 @@ export class PostgresStore implements RatingStore {
     birthYear: number | null;
     countryCode: string | null;
     regionId: string | null;
+    competitiveProfile: unknown | null;
+    attributes: unknown | null;
   }): PlayerRecord {
     return {
       playerId: row.playerId,
@@ -256,6 +272,8 @@ export class PostgresStore implements RatingStore {
       birthYear: row.birthYear ?? undefined,
       countryCode: row.countryCode ?? undefined,
       regionId: row.regionId ?? undefined,
+      competitiveProfile: (row.competitiveProfile as PlayerCompetitiveProfile | null) ?? null,
+      attributes: (row.attributes as PlayerAttributes | null) ?? null,
     };
   }
 
@@ -269,6 +287,12 @@ export class PostgresStore implements RatingStore {
       description: row.description,
       startDate: row.startDate ? row.startDate.toISOString() : null,
       endDate: row.endDate ? row.endDate.toISOString() : null,
+      classification: (row.classification as EventClassification | null) ?? null,
+      sanctioningBody: row.sanctioningBody,
+      season: row.season,
+      purse: row.purse,
+      purseCurrency: row.purseCurrency,
+      mediaLinks: (row.mediaLinks as EventMediaLinks | null) ?? null,
       metadata: (row.metadata as Record<string, unknown> | null) ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
@@ -298,6 +322,12 @@ export class PostgresStore implements RatingStore {
         description: events.description,
         startDate: events.startDate,
         endDate: events.endDate,
+        classification: events.classification,
+        sanctioningBody: events.sanctioningBody,
+        season: events.season,
+        purse: events.purse,
+        purseCurrency: events.purseCurrency,
+        mediaLinks: events.mediaLinks,
         metadata: events.metadata,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
@@ -319,6 +349,12 @@ export class PostgresStore implements RatingStore {
         description: events.description,
         startDate: events.startDate,
         endDate: events.endDate,
+        classification: events.classification,
+        sanctioningBody: events.sanctioningBody,
+        season: events.season,
+        purse: events.purse,
+        purseCurrency: events.purseCurrency,
+        mediaLinks: events.mediaLinks,
         metadata: events.metadata,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
@@ -528,6 +564,10 @@ export class PostgresStore implements RatingStore {
         venueId: matches.venueId,
         regionId: matches.regionId,
         eventId: matches.eventId,
+        timing: matches.timing,
+        statistics: matches.statistics,
+        segments: matches.segments,
+        sideParticipants: matches.sideParticipants,
       })
       .from(matches)
       .where(eq(matches.matchId, matchId))
@@ -556,6 +596,8 @@ export class PostgresStore implements RatingStore {
         gameNo: matchGames.gameNo,
         scoreA: matchGames.scoreA,
         scoreB: matchGames.scoreB,
+        statistics: matchGames.statistics,
+        segments: matchGames.segments,
       })
       .from(matchGames)
       .where(eq(matchGames.matchId, matchId))
@@ -563,6 +605,8 @@ export class PostgresStore implements RatingStore {
         gameNo: number;
         scoreA: number;
         scoreB: number;
+        statistics: unknown | null;
+        segments: unknown | null;
       }>;
 
     const sideMap = new Map<string, string[]>();
@@ -576,11 +620,16 @@ export class PostgresStore implements RatingStore {
       gameNo: row.gameNo,
       a: row.scoreA,
       b: row.scoreB,
+      statistics: (row.statistics as MatchStatistics) ?? null,
+      segments: (row.segments as MatchSegment[] | null) ?? null,
     }));
+
+    const sideParticipants = (matchRow.sideParticipants as Record<'A' | 'B', MatchParticipant[] | null | undefined> | null) ?? null;
 
     const sides: MatchSideSummary[] = ['A', 'B'].map((side) => ({
       side: side as 'A' | 'B',
       players: (sideMap.get(side) ?? []).filter((player): player is string => Boolean(player)),
+      participants: sideParticipants?.[side as 'A' | 'B'] ?? null,
     }));
 
     return {
@@ -594,6 +643,9 @@ export class PostgresStore implements RatingStore {
       venueId: matchRow.venueId ?? null,
       regionId: matchRow.regionId ?? null,
       eventId: matchRow.eventId ?? null,
+      timing: (matchRow.timing as MatchTiming | null) ?? null,
+      statistics: (matchRow.statistics as MatchStatistics) ?? null,
+      segments: (matchRow.segments as MatchSegment[] | null) ?? null,
       sides,
       games,
     };
@@ -1071,6 +1123,12 @@ export class PostgresStore implements RatingStore {
         description: input.description ?? null,
         startDate: input.startDate ? new Date(input.startDate) : null,
         endDate: input.endDate ? new Date(input.endDate) : null,
+        classification: input.classification ?? null,
+        sanctioningBody: input.sanctioningBody ?? null,
+        season: input.season ?? null,
+        purse: input.purse ?? null,
+        purseCurrency: input.purseCurrency ?? null,
+        mediaLinks: input.mediaLinks ?? null,
         metadata: input.metadata ?? null,
         createdAt: now(),
         updatedAt: now(),
@@ -1084,6 +1142,12 @@ export class PostgresStore implements RatingStore {
         description: events.description,
         startDate: events.startDate,
         endDate: events.endDate,
+        classification: events.classification,
+        sanctioningBody: events.sanctioningBody,
+        season: events.season,
+        purse: events.purse,
+        purseCurrency: events.purseCurrency,
+        mediaLinks: events.mediaLinks,
         metadata: events.metadata,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
@@ -1116,6 +1180,12 @@ export class PostgresStore implements RatingStore {
     if (input.description !== undefined) payload.description = input.description;
     if (input.startDate !== undefined) payload.startDate = input.startDate ? new Date(input.startDate) : null;
     if (input.endDate !== undefined) payload.endDate = input.endDate ? new Date(input.endDate) : null;
+    if (input.classification !== undefined) payload.classification = input.classification ?? null;
+    if (input.sanctioningBody !== undefined) payload.sanctioningBody = input.sanctioningBody ?? null;
+    if (input.season !== undefined) payload.season = input.season ?? null;
+    if (input.purse !== undefined) payload.purse = input.purse ?? null;
+    if (input.purseCurrency !== undefined) payload.purseCurrency = input.purseCurrency ?? null;
+    if (input.mediaLinks !== undefined) payload.mediaLinks = input.mediaLinks ?? null;
     if (input.metadata !== undefined) payload.metadata = input.metadata ?? null;
     if (input.slug !== undefined) payload.slug = slug;
 
@@ -1132,6 +1202,12 @@ export class PostgresStore implements RatingStore {
         description: events.description,
         startDate: events.startDate,
         endDate: events.endDate,
+        classification: events.classification,
+        sanctioningBody: events.sanctioningBody,
+        season: events.season,
+        purse: events.purse,
+        purseCurrency: events.purseCurrency,
+        mediaLinks: events.mediaLinks,
         metadata: events.metadata,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
@@ -1170,6 +1246,12 @@ export class PostgresStore implements RatingStore {
         description: events.description,
         startDate: events.startDate,
         endDate: events.endDate,
+        classification: events.classification,
+        sanctioningBody: events.sanctioningBody,
+        season: events.season,
+        purse: events.purse,
+        purseCurrency: events.purseCurrency,
+        mediaLinks: events.mediaLinks,
         metadata: events.metadata,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
@@ -1294,6 +1376,8 @@ export class PostgresStore implements RatingStore {
       birthYear: input.birthYear,
       countryCode: input.countryCode,
       regionId,
+      competitiveProfile: input.competitiveProfile ?? null,
+      attributes: input.attributes ?? null,
       createdAt: now(),
       updatedAt: now(),
     });
@@ -1311,6 +1395,8 @@ export class PostgresStore implements RatingStore {
       countryCode: input.countryCode,
       regionId: regionId ?? undefined,
       externalRef: input.externalRef,
+      competitiveProfile: input.competitiveProfile ?? null,
+      attributes: input.attributes ?? null,
     } satisfies PlayerRecord;
   }
 
@@ -1328,6 +1414,8 @@ export class PostgresStore implements RatingStore {
       birthYear: players.birthYear,
       countryCode: players.countryCode,
       regionId: players.regionId,
+      competitiveProfile: players.competitiveProfile,
+      attributes: players.attributes,
     } as const;
 
     const existingRows = await this.db
@@ -1358,6 +1446,12 @@ export class PostgresStore implements RatingStore {
     if (input.sex !== undefined) updates.sex = input.sex ?? null;
     if (input.birthYear !== undefined) updates.birthYear = input.birthYear ?? null;
     if (input.countryCode !== undefined) updates.countryCode = input.countryCode ?? null;
+    if (input.competitiveProfile !== undefined) {
+      updates.competitiveProfile = input.competitiveProfile ?? null;
+    }
+    if (input.attributes !== undefined) {
+      updates.attributes = input.attributes ?? null;
+    }
 
     if (input.regionId !== undefined) {
       if (!input.regionId) {
@@ -1561,6 +1655,14 @@ export class PostgresStore implements RatingStore {
       submissionRegionId ?? ladderRegionId ?? null
     );
 
+    const gameExtras = new Map<number, { segments?: MatchSegment[] | null; statistics?: MatchStatistics }>();
+    for (const detail of params.gameDetails ?? []) {
+      gameExtras.set(detail.gameNo, {
+        segments: detail.segments ?? null,
+        statistics: detail.statistics ?? null,
+      });
+    }
+
     const ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
 
     await this.db.transaction(async (tx: any) => {
@@ -1577,6 +1679,10 @@ export class PostgresStore implements RatingStore {
         regionId: submissionRegionId ?? ladderRegionId ?? null,
         eventId,
         startTime: new Date(params.submissionMeta.startTime),
+        timing: params.timing ?? null,
+        statistics: params.statistics ?? null,
+        segments: params.segments ?? null,
+        sideParticipants: params.sideParticipants ?? null,
         rawPayload: params.submissionMeta.rawPayload as object,
         createdAt: now(),
       });
@@ -1606,11 +1712,14 @@ export class PostgresStore implements RatingStore {
       }
 
       for (const game of params.match.games) {
+        const extras = gameExtras.get(game.game_no);
         await tx.insert(matchGames).values({
           matchId,
           gameNo: game.game_no,
           scoreA: game.a,
           scoreB: game.b,
+          statistics: extras?.statistics ?? null,
+          segments: extras?.segments ?? null,
         });
       }
 
@@ -1754,6 +1863,16 @@ export class PostgresStore implements RatingStore {
         updates.eventId = input.eventId;
         ensureEventId = input.eventId;
       }
+    }
+
+    if (input.timing !== undefined) {
+      updates.timing = input.timing ?? null;
+    }
+    if (input.statistics !== undefined) {
+      updates.statistics = input.statistics ?? null;
+    }
+    if (input.segments !== undefined) {
+      updates.segments = input.segments ?? null;
     }
 
     if (Object.keys(updates).length) {
@@ -2285,6 +2404,8 @@ export class PostgresStore implements RatingStore {
         countryCode: players.countryCode,
         regionId: players.regionId,
         externalRef: players.externalRef,
+        competitiveProfile: players.competitiveProfile,
+        attributes: players.attributes,
       })
       .from(players)
       .orderBy(players.playerId)
@@ -2307,6 +2428,8 @@ export class PostgresStore implements RatingStore {
         countryCode: string | null;
         regionId: string | null;
         externalRef: string | null;
+        competitiveProfile: unknown | null;
+        attributes: unknown | null;
       }>;
 
     const hasMore = rows.length > limit;
@@ -2326,6 +2449,8 @@ export class PostgresStore implements RatingStore {
       countryCode: row.countryCode ?? undefined,
       regionId: row.regionId ?? undefined,
       externalRef: row.externalRef ?? undefined,
+      competitiveProfile: (row.competitiveProfile as PlayerCompetitiveProfile | null) ?? null,
+      attributes: (row.attributes as PlayerAttributes | null) ?? null,
     }));
 
     return { items, nextCursor };
@@ -2390,6 +2515,10 @@ export class PostgresStore implements RatingStore {
         venueId: matches.venueId,
         regionId: matches.regionId,
         eventId: matches.eventId,
+        timing: matches.timing,
+        statistics: matches.statistics,
+        segments: matches.segments,
+        sideParticipants: matches.sideParticipants,
       })
       .from(matches)
       .orderBy(desc(matches.startTime), desc(matches.matchId))
@@ -2410,6 +2539,10 @@ export class PostgresStore implements RatingStore {
       venueId: string | null;
       regionId: string | null;
       eventId: string | null;
+      timing: unknown | null;
+      statistics: unknown | null;
+      segments: unknown | null;
+      sideParticipants: unknown | null;
     }>;
 
     const hasMore = rows.length > limit;
@@ -2442,6 +2575,8 @@ export class PostgresStore implements RatingStore {
         gameNo: matchGames.gameNo,
         scoreA: matchGames.scoreA,
         scoreB: matchGames.scoreB,
+        statistics: matchGames.statistics,
+        segments: matchGames.segments,
       })
       .from(matchGames)
       .where(inArray(matchGames.matchId, matchIds))
@@ -2450,6 +2585,8 @@ export class PostgresStore implements RatingStore {
         gameNo: number;
         scoreA: number;
         scoreB: number;
+        statistics: unknown | null;
+        segments: unknown | null;
       }>;
 
     const sidesMap = new Map<string, Map<string, string[]>>();
@@ -2464,15 +2601,23 @@ export class PostgresStore implements RatingStore {
     const gamesMap = new Map<string, MatchGameSummary[]>();
     for (const row of gameRows) {
       const list = gamesMap.get(row.matchId) ?? [];
-      list.push({ gameNo: row.gameNo, a: row.scoreA, b: row.scoreB });
+      list.push({
+        gameNo: row.gameNo,
+        a: row.scoreA,
+        b: row.scoreB,
+        statistics: (row.statistics as MatchStatistics) ?? null,
+        segments: (row.segments as MatchSegment[] | null) ?? null,
+      });
       gamesMap.set(row.matchId, list);
     }
 
     const items: MatchSummary[] = page.map((row) => {
       const sideMap = sidesMap.get(row.matchId) ?? new Map<string, string[]>();
+      const participants = (row.sideParticipants as Record<'A' | 'B', MatchParticipant[] | null | undefined> | null) ?? null;
       const sides: MatchSideSummary[] = ['A', 'B'].map((side) => ({
         side: side as 'A' | 'B',
         players: sideMap.get(side) ?? [],
+        participants: participants?.[side as 'A' | 'B'] ?? null,
       }));
       const gameList = gamesMap.get(row.matchId) ?? [];
       return {
@@ -2486,6 +2631,9 @@ export class PostgresStore implements RatingStore {
         venueId: row.venueId ?? null,
         regionId: row.regionId ?? null,
         eventId: row.eventId ?? null,
+        timing: (row.timing as MatchTiming | null) ?? null,
+        statistics: (row.statistics as MatchStatistics) ?? null,
+        segments: (row.segments as MatchSegment[] | null) ?? null,
         sides,
         games: gameList,
       };

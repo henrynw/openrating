@@ -92,6 +92,12 @@ export const events = pgTable('events', {
   description: text('description'),
   startDate: timestamp('start_date', { withTimezone: true }),
   endDate: timestamp('end_date', { withTimezone: true }),
+  classification: jsonb('classification'),
+  sanctioningBody: text('sanctioning_body'),
+  season: text('season'),
+  purse: doublePrecision('purse'),
+  purseCurrency: text('purse_currency'),
+  mediaLinks: jsonb('media_links'),
   metadata: jsonb('metadata'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -116,6 +122,8 @@ export const players = pgTable('players', {
   regionId: text('region_id').references(() => regions.regionId, {
     onDelete: 'set null',
   }),
+  competitiveProfile: jsonb('competitive_profile'),
+  attributes: jsonb('attributes'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -165,6 +173,10 @@ export const matches = pgTable('matches', {
     onDelete: 'set null',
   }),
   startTime: timestamp('start_time', { withTimezone: true }).notNull(),
+  timing: jsonb('timing'),
+  statistics: jsonb('statistics'),
+  segments: jsonb('segments'),
+  sideParticipants: jsonb('side_participants'),
   rawPayload: jsonb('raw_payload').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -197,6 +209,8 @@ export const matchGames = pgTable('match_games', {
   gameNo: integer('game_no').notNull(),
   scoreA: integer('score_a').notNull(),
   scoreB: integer('score_b').notNull(),
+  statistics: jsonb('statistics'),
+  segments: jsonb('segments'),
 });
 
 export const playerRatings = pgTable('player_ratings', {

@@ -1,4 +1,10 @@
 import type { MatchInput, PairState, PairUpdate, PlayerState, UpdateResult } from '../../engine/types.js';
+import type {
+  MatchParticipant,
+  MatchSegment,
+  MatchStatistics,
+  MatchTiming,
+} from './matches.js';
 
 export interface LadderKey {
   organizationId: string;
@@ -30,6 +36,15 @@ export interface RecordMatchParams {
   eventId?: string | null;
   playerStates: Map<string, PlayerState>;
   pairUpdates: PairUpdate[];
+  timing?: MatchTiming | null;
+  statistics?: MatchStatistics;
+  segments?: MatchSegment[] | null;
+  sideParticipants?: Record<'A' | 'B', MatchParticipant[] | null | undefined> | null;
+  gameDetails?: Array<{
+    gameNo: number;
+    segments?: MatchSegment[] | null;
+    statistics?: MatchStatistics;
+  }>;
   submissionMeta: {
     providerId: string;
     organizationId: string;

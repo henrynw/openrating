@@ -18,6 +18,10 @@ import type {
   MatchListResult,
   MatchSummary,
   MatchGameSummary,
+  MatchTiming,
+  MatchSegment,
+  MatchStatistics,
+  MatchParticipant,
   MatchUpdateInput,
   OrganizationCreateInput,
   OrganizationUpdateInput,
@@ -29,6 +33,8 @@ import type {
   EventListQuery,
   EventListResult,
   EventRecord,
+  EventClassification,
+  EventMediaLinks,
   EventParticipantUpsertInput,
   EventParticipantRecord,
   EventParticipantListResult,
@@ -64,6 +70,12 @@ interface MemoryEventRecord {
   description?: string | null;
   startDate?: Date | null;
   endDate?: Date | null;
+  classification?: EventClassification | null;
+  sanctioningBody?: string | null;
+  season?: string | null;
+  purse?: number | null;
+  purseCurrency?: string | null;
+  mediaLinks?: EventMediaLinks | null;
   metadata?: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
@@ -168,6 +180,8 @@ const toPlayerRecord = (player: MemoryPlayerRecord): PlayerRecord => ({
   countryCode: player.countryCode,
   regionId: player.regionId,
   externalRef: player.externalRef,
+  competitiveProfile: player.competitiveProfile ?? null,
+  attributes: player.attributes ?? null,
 });
 
 const paginatePlayers = (
@@ -215,6 +229,15 @@ export class MemoryStore implements RatingStore {
     venueId?: string | null;
     regionId?: string | null;
     eventId?: string | null;
+    timing?: MatchTiming | null;
+    statistics?: MatchStatistics;
+    segments?: MatchSegment[] | null;
+    sideParticipants?: Record<'A' | 'B', MatchParticipant[] | null | undefined> | null;
+    gameDetails?: Array<{
+      gameNo: number;
+      segments?: MatchSegment[] | null;
+      statistics?: MatchStatistics;
+    }>;
   }> = [];
   private ratingEvents = new Map<string, Map<string, MemoryRatingEvent[]>>();
   private pairSynergies = new Map<string, MemoryPairSynergy>();
@@ -236,6 +259,8 @@ export class MemoryStore implements RatingStore {
       countryCode: input.countryCode,
       regionId: input.regionId,
       externalRef: input.externalRef,
+      competitiveProfile: input.competitiveProfile ?? null,
+      attributes: input.attributes ?? null,
       ratings: new Map(),
     };
     this.players.set(playerId, record);
@@ -264,6 +289,12 @@ export class MemoryStore implements RatingStore {
     if (input.birthYear !== undefined) player.birthYear = input.birthYear ?? undefined;
     if (input.countryCode !== undefined) player.countryCode = input.countryCode ?? undefined;
     if (input.regionId !== undefined) player.regionId = input.regionId ?? undefined;
+    if (input.competitiveProfile !== undefined) {
+      player.competitiveProfile = input.competitiveProfile ?? null;
+    }
+    if (input.attributes !== undefined) {
+      player.attributes = input.attributes ?? null;
+    }
 
     return toPlayerRecord(player);
   }
@@ -395,6 +426,11 @@ export class MemoryStore implements RatingStore {
       venueId: params.submissionMeta.venueId ?? null,
       regionId: params.submissionMeta.regionId ?? null,
       eventId,
+      timing: params.timing ?? null,
+      statistics: params.statistics ?? null,
+      segments: params.segments ?? null,
+      sideParticipants: params.sideParticipants ?? null,
+      gameDetails: params.gameDetails ?? [],
     });
 
     const ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
@@ -513,6 +549,18 @@ export class MemoryStore implements RatingStore {
       }
     }
 
+    if (input.timing !== undefined) {
+      match.timing = input.timing ?? null;
+    }
+
+    if (input.statistics !== undefined) {
+      match.statistics = input.statistics ?? null;
+    }
+
+    if (input.segments !== undefined) {
+      match.segments = input.segments ?? null;
+    }
+
     return {
       matchId: match.matchId,
       organizationId: match.organizationId,
@@ -524,11 +572,24 @@ export class MemoryStore implements RatingStore {
       venueId: match.venueId ?? null,
       regionId: match.regionId ?? null,
       eventId: match.eventId ?? null,
+      timing: match.timing ?? null,
+      statistics: match.statistics ?? null,
+      segments: match.segments ?? null,
       sides: ['A', 'B'].map((side) => ({
         side: side as 'A' | 'B',
         players: match.match.sides[side as 'A' | 'B'].players,
+        participants: match.sideParticipants?.[side as 'A' | 'B'] ?? null,
       })),
-      games: match.match.games.map((g) => ({ gameNo: g.game_no, a: g.a, b: g.b })),
+      games: match.match.games.map((g) => {
+        const details = match.gameDetails?.find((entry) => entry.gameNo === g.game_no);
+        return {
+          gameNo: g.game_no,
+          a: g.a,
+          b: g.b,
+          segments: details?.segments ?? null,
+          statistics: details?.statistics ?? null,
+        } satisfies MatchGameSummary;
+      }),
     } satisfies MatchSummary;
   }
 
@@ -860,11 +921,24 @@ export class MemoryStore implements RatingStore {
       venueId: entry.venueId ?? null,
       regionId: entry.regionId ?? null,
       eventId: entry.eventId ?? null,
+      timing: entry.timing ?? null,
+      statistics: entry.statistics ?? null,
+      segments: entry.segments ?? null,
       sides: ['A', 'B'].map((side) => ({
         side: side as 'A' | 'B',
         players: entry.match.sides[side as 'A' | 'B'].players,
+        participants: entry.sideParticipants?.[side as 'A' | 'B'] ?? null,
       })),
-      games: entry.match.games.map((g) => ({ gameNo: g.game_no, a: g.a, b: g.b })),
+      games: entry.match.games.map((g) => {
+        const details = entry.gameDetails?.find((item) => item.gameNo === g.game_no);
+        return {
+          gameNo: g.game_no,
+          a: g.a,
+          b: g.b,
+          segments: details?.segments ?? null,
+          statistics: details?.statistics ?? null,
+        } satisfies MatchGameSummary;
+      }),
     }));
 
     return { items, nextCursor };
@@ -971,6 +1045,12 @@ export class MemoryStore implements RatingStore {
       description: input.description ?? null,
       startDate: input.startDate ? new Date(input.startDate) : null,
       endDate: input.endDate ? new Date(input.endDate) : null,
+      classification: input.classification ?? null,
+      sanctioningBody: input.sanctioningBody ?? null,
+      season: input.season ?? null,
+      purse: input.purse ?? null,
+      purseCurrency: input.purseCurrency ?? null,
+      mediaLinks: input.mediaLinks ?? null,
       metadata: input.metadata ?? null,
       createdAt: now,
       updatedAt: now,
@@ -1009,6 +1089,24 @@ export class MemoryStore implements RatingStore {
     }
     if (input.endDate !== undefined) {
       event.endDate = input.endDate ? new Date(input.endDate) : null;
+    }
+    if (input.classification !== undefined) {
+      event.classification = input.classification ?? null;
+    }
+    if (input.sanctioningBody !== undefined) {
+      event.sanctioningBody = input.sanctioningBody ?? null;
+    }
+    if (input.season !== undefined) {
+      event.season = input.season ?? null;
+    }
+    if (input.purse !== undefined) {
+      event.purse = input.purse ?? null;
+    }
+    if (input.purseCurrency !== undefined) {
+      event.purseCurrency = input.purseCurrency ?? null;
+    }
+    if (input.mediaLinks !== undefined) {
+      event.mediaLinks = input.mediaLinks ?? null;
     }
     if (input.metadata !== undefined) event.metadata = input.metadata;
 
@@ -1201,6 +1299,12 @@ export class MemoryStore implements RatingStore {
       description: event.description ?? null,
       startDate: event.startDate ? event.startDate.toISOString() : null,
       endDate: event.endDate ? event.endDate.toISOString() : null,
+      classification: event.classification ?? null,
+      sanctioningBody: event.sanctioningBody ?? null,
+      season: event.season ?? null,
+      purse: event.purse ?? null,
+      purseCurrency: event.purseCurrency ?? null,
+      mediaLinks: event.mediaLinks ?? null,
       metadata: event.metadata ?? null,
       createdAt: event.createdAt.toISOString(),
       updatedAt: event.updatedAt.toISOString(),

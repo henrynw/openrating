@@ -7,10 +7,47 @@ import {
   requireAuth,
   requireScope,
 } from '../auth.js';
-import type { PlayerUpdateInput, RatingStore, OrganizationRecord } from '../store/index.js';
+import type {
+  PlayerUpdateInput,
+  RatingStore,
+  OrganizationRecord,
+  PlayerCompetitiveProfile,
+  PlayerAttributes,
+  PlayerRankingSnapshot,
+} from '../store/index.js';
 import { OrganizationLookupError, PlayerLookupError } from '../store/index.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
 import { toPlayerResponse } from './helpers/responders.js';
+
+const LooseRecordSchema = z.record(z.unknown());
+
+const PlayerRankingSnapshotSchema = z.object({
+  source: z.string(),
+  discipline: z.string().nullable().optional(),
+  position: z.number().int().min(1).nullable().optional(),
+  points: z.number().nullable().optional(),
+  as_of: z.string().datetime().nullable().optional(),
+  metadata: LooseRecordSchema.nullish(),
+});
+
+const PlayerCompetitiveProfileSchema = z.object({
+  discipline: z.string().nullable().optional(),
+  ranking_points: z.number().nullable().optional(),
+  ranking_position: z.number().int().min(1).nullable().optional(),
+  total_matches: z.number().int().min(0).nullable().optional(),
+  as_of: z.string().datetime().nullable().optional(),
+  external_rankings: z.array(PlayerRankingSnapshotSchema).nullable().optional(),
+});
+
+const PlayerAttributesSchema = z.object({
+  handedness: z.string().nullable().optional(),
+  dominant_side: z.string().nullable().optional(),
+  height_cm: z.number().nullable().optional(),
+  weight_kg: z.number().nullable().optional(),
+  birth_date: z.string().date().nullable().optional(),
+  residence: z.string().nullable().optional(),
+  metadata: LooseRecordSchema.nullish(),
+});
 
 const PlayerUpsertSchema = z
   .object({
@@ -26,6 +63,8 @@ const PlayerUpsertSchema = z
     birth_year: z.number().int().optional(),
     country_code: z.string().optional(),
     region_id: z.string().optional(),
+    competitive_profile: PlayerCompetitiveProfileSchema.nullable().optional(),
+    attributes: PlayerAttributesSchema.nullable().optional(),
   })
   .refine((data) => data.organization_id || data.organization_slug, {
     message: 'organization_id or organization_slug is required',
@@ -59,6 +98,8 @@ const PlayerUpdateSchema = z
     birth_year: z.number().int().nullable().optional(),
     country_code: z.string().nullable().optional(),
     region_id: z.string().nullable().optional(),
+    competitive_profile: PlayerCompetitiveProfileSchema.nullable().optional(),
+    attributes: PlayerAttributesSchema.nullable().optional(),
   })
   .refine((data) => data.organization_id || data.organization_slug, {
     message: 'organization_id or organization_slug is required',
@@ -75,12 +116,61 @@ const PlayerUpdateSchema = z
       data.sex !== undefined ||
       data.birth_year !== undefined ||
       data.country_code !== undefined ||
-      data.region_id !== undefined,
+      data.region_id !== undefined ||
+      data.competitive_profile !== undefined ||
+      data.attributes !== undefined,
     {
       message: 'At least one field is required',
       path: ['display_name'],
     }
   );
+
+type PlayerRankingSnapshotInput = z.infer<typeof PlayerRankingSnapshotSchema>;
+type PlayerCompetitiveProfileInput = z.infer<typeof PlayerCompetitiveProfileSchema>;
+type PlayerAttributesInput = z.infer<typeof PlayerAttributesSchema>;
+
+const mapRankingSnapshotInput = (snapshot: PlayerRankingSnapshotInput): PlayerRankingSnapshot => ({
+  source: snapshot.source,
+  discipline: snapshot.discipline ?? null,
+  position: snapshot.position ?? null,
+  points: snapshot.points ?? null,
+  asOf: snapshot.as_of ?? null,
+  metadata: snapshot.metadata ?? null,
+});
+
+const mapCompetitiveProfileInput = (
+  input: PlayerCompetitiveProfileInput | null | undefined
+): PlayerCompetitiveProfile | null | undefined => {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  const externalRankings = input.external_rankings
+    ? input.external_rankings.map(mapRankingSnapshotInput)
+    : null;
+  return {
+    discipline: input.discipline ?? null,
+    rankingPoints: input.ranking_points ?? null,
+    rankingPosition: input.ranking_position ?? null,
+    totalMatches: input.total_matches ?? null,
+    asOf: input.as_of ?? null,
+    externalRankings,
+  };
+};
+
+const mapPlayerAttributesInput = (
+  input: PlayerAttributesInput | null | undefined
+): PlayerAttributes | null | undefined => {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  return {
+    handedness: input.handedness ?? null,
+    dominantSide: input.dominant_side ?? null,
+    heightCm: input.height_cm ?? null,
+    weightKg: input.weight_kg ?? null,
+    birthDate: input.birth_date ?? null,
+    residence: input.residence ?? null,
+    metadata: input.metadata ?? null,
+  };
+};
 
 interface PlayerRouteDeps {
   store: RatingStore;
@@ -102,6 +192,9 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
         organization_slug: parsed.data.organization_slug,
       });
 
+      const competitiveProfile = mapCompetitiveProfileInput(parsed.data.competitive_profile);
+      const attributes = mapPlayerAttributesInput(parsed.data.attributes);
+
       const created = await store.createPlayer({
         organizationId: organization.organizationId,
         displayName: parsed.data.display_name,
@@ -114,6 +207,8 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
         birthYear: parsed.data.birth_year,
         countryCode: parsed.data.country_code,
         regionId: parsed.data.region_id,
+        ...(competitiveProfile !== undefined ? { competitiveProfile } : {}),
+        ...(attributes !== undefined ? { attributes } : {}),
       });
 
       return res.send(toPlayerResponse(created, organization.slug));
@@ -190,6 +285,12 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
       if (parsed.data.birth_year !== undefined) updateInput.birthYear = parsed.data.birth_year;
       if (parsed.data.country_code !== undefined) updateInput.countryCode = parsed.data.country_code;
       if (parsed.data.region_id !== undefined) updateInput.regionId = parsed.data.region_id;
+      if (parsed.data.competitive_profile !== undefined) {
+        updateInput.competitiveProfile = mapCompetitiveProfileInput(parsed.data.competitive_profile) ?? null;
+      }
+      if (parsed.data.attributes !== undefined) {
+        updateInput.attributes = mapPlayerAttributesInput(parsed.data.attributes) ?? null;
+      }
 
       const updated = await store.updatePlayer(req.params.player_id, organization.organizationId, updateInput);
 

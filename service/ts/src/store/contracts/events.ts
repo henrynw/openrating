@@ -8,6 +8,22 @@ export type EventType =
   | 'EXHIBITION'
   | 'CUSTOM';
 
+export interface EventClassification {
+  level?: string | null;
+  grade?: string | null;
+  ageGroup?: string | null;
+  tour?: string | null;
+  category?: string | null;
+}
+
+export interface EventMediaLinks {
+  website?: string | null;
+  registration?: string | null;
+  liveScoring?: string | null;
+  streaming?: string | null;
+  social?: Record<string, string> | null;
+}
+
 export interface EventRecord {
   eventId: string;
   organizationId: string;
@@ -17,6 +33,12 @@ export interface EventRecord {
   description?: string | null;
   startDate?: string | null;
   endDate?: string | null;
+  classification?: EventClassification | null;
+  sanctioningBody?: string | null;
+  season?: string | null;
+  purse?: number | null;
+  purseCurrency?: string | null;
+  mediaLinks?: EventMediaLinks | null;
   metadata?: Record<string, unknown> | null;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -30,6 +52,12 @@ export interface EventCreateInput {
   description?: string | null;
   startDate?: string | null;
   endDate?: string | null;
+  classification?: EventClassification | null;
+  sanctioningBody?: string | null;
+  season?: string | null;
+  purse?: number | null;
+  purseCurrency?: string | null;
+  mediaLinks?: EventMediaLinks | null;
   metadata?: Record<string, unknown> | null;
 }
 
@@ -40,6 +68,12 @@ export interface EventUpdateInput {
   description?: string | null;
   startDate?: string | null;
   endDate?: string | null;
+  classification?: EventClassification | null;
+  sanctioningBody?: string | null;
+  season?: string | null;
+  purse?: number | null;
+  purseCurrency?: string | null;
+  mediaLinks?: EventMediaLinks | null;
   metadata?: Record<string, unknown> | null;
 }
 

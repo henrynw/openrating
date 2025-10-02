@@ -11,7 +11,15 @@ import {
 } from '../auth.js';
 import { updateMatch } from '../engine/rating.js';
 import type { MatchInput } from '../engine/types.js';
-import type { LadderKey, MatchUpdateInput, RatingStore, OrganizationRecord } from '../store/index.js';
+import type {
+  LadderKey,
+  MatchUpdateInput,
+  RatingStore,
+  OrganizationRecord,
+  MatchSegment,
+  MatchParticipant,
+  MatchStatistics,
+} from '../store/index.js';
 import { MatchLookupError, OrganizationLookupError, PlayerLookupError } from '../store/index.js';
 import { normalizeMatchSubmission } from '../formats/index.js';
 import { normalizeRegion, normalizeTier, isDefaultRegion } from '../store/helpers.js';
@@ -19,6 +27,51 @@ import type { OrganizationIdentifierInput } from './helpers/organization-resolve
 import { toMatchSummaryResponse } from './helpers/responders.js';
 import { buildPairKey, sortPairPlayers } from '../store/helpers.js';
 import type { PairState } from '../engine/types.js';
+
+const LooseRecordSchema = z.record(z.unknown());
+
+const MatchStatisticsSchema = z.union([
+  z.record(z.union([z.number(), z.record(z.unknown())])),
+  z.null(),
+]);
+
+const MatchSegmentSchema = z.object({
+  sequence: z.number().int().min(1).nullable().optional(),
+  phase: z.string().nullable().optional(),
+  label: z.string().nullable().optional(),
+  side: z.string().nullable().optional(),
+  value: z.number().nullable().optional(),
+  unit: z.string().nullable().optional(),
+  elapsed_seconds: z.number().nullable().optional(),
+  timestamp: z.string().datetime().nullable().optional(),
+  metadata: LooseRecordSchema.nullable().optional(),
+});
+
+const MatchParticipantSchema = z.object({
+  player_id: z.string(),
+  role: z.string().nullable().optional(),
+  seed: z.number().int().min(1).nullable().optional(),
+  status: z.string().nullable().optional(),
+  external_ref: z.string().nullable().optional(),
+  metadata: LooseRecordSchema.nullable().optional(),
+});
+
+const MatchTimingSchema = z.object({
+  scheduled_start: z.string().datetime().nullable().optional(),
+  actual_start: z.string().datetime().nullable().optional(),
+  completed_at: z.string().datetime().nullable().optional(),
+  duration_seconds: z.number().int().min(0).nullable().optional(),
+  time_zone: z.string().nullable().optional(),
+  status: z.string().nullable().optional(),
+});
+
+const MatchGameSchema = z.object({
+  game_no: z.number().int(),
+  a: z.number().int(),
+  b: z.number().int(),
+  segments: z.array(MatchSegmentSchema).nullable().optional(),
+  statistics: MatchStatisticsSchema.optional(),
+});
 
 const MatchSubmitSchema = z
   .object({
@@ -33,11 +86,20 @@ const MatchSubmitSchema = z
     venue_region_id: z.string().optional(),
     tier: z.enum(['SANCTIONED', 'LEAGUE', 'SOCIAL', 'EXHIBITION']).optional(),
     event_id: z.string().uuid().optional(),
+    timing: MatchTimingSchema.nullable().optional(),
+    statistics: MatchStatisticsSchema.optional(),
+    segments: z.array(MatchSegmentSchema).nullable().optional(),
     sides: z.object({
-      A: z.object({ players: z.array(z.string()).min(1).max(4) }),
-      B: z.object({ players: z.array(z.string()).min(1).max(4) }),
+      A: z.object({
+        players: z.array(z.string()).min(1).max(2),
+        participants: z.array(MatchParticipantSchema).nullable().optional(),
+      }),
+      B: z.object({
+        players: z.array(z.string()).min(1).max(2),
+        participants: z.array(MatchParticipantSchema).nullable().optional(),
+      }),
     }),
-    games: z.array(z.object({ game_no: z.number().int(), a: z.number().int(), b: z.number().int() })),
+    games: z.array(MatchGameSchema),
     winner: z.enum(['A', 'B']).optional(),
     mov_weight: z.number().optional(),
   })
@@ -70,7 +132,115 @@ const MatchUpdateSchema = z.object({
   venue_id: z.string().nullable().optional(),
   venue_region_id: z.string().nullable().optional(),
   event_id: z.string().uuid().nullable().optional(),
+  timing: MatchTimingSchema.nullable().optional(),
+  statistics: MatchStatisticsSchema.optional(),
+  segments: z.array(MatchSegmentSchema).nullable().optional(),
 });
+
+type MatchTimingInput = z.infer<typeof MatchTimingSchema>;
+type MatchSegmentInput = z.infer<typeof MatchSegmentSchema>;
+type MatchParticipantInput = z.infer<typeof MatchParticipantSchema>;
+type MatchStatisticsInput = z.infer<typeof MatchStatisticsSchema>;
+type MatchGameInput = z.infer<typeof MatchGameSchema>;
+
+const mapMatchTimingInput = (
+  input: MatchTimingInput | null | undefined
+): MatchUpdateInput['timing'] => {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  return {
+    scheduledStart: input.scheduled_start ?? null,
+    actualStart: input.actual_start ?? null,
+    completedAt: input.completed_at ?? null,
+    durationSeconds: input.duration_seconds ?? null,
+    timeZone: input.time_zone ?? null,
+    status: input.status ?? null,
+  };
+};
+
+const mapMatchSegmentInput = (segment: MatchSegmentInput) => ({
+  sequence: segment.sequence ?? null,
+  phase: segment.phase ?? null,
+  label: segment.label ?? null,
+  side: segment.side ?? null,
+  value: segment.value ?? null,
+  unit: segment.unit ?? null,
+  elapsedSeconds: segment.elapsed_seconds ?? null,
+  timestamp: segment.timestamp ?? null,
+  metadata: segment.metadata ?? null,
+});
+
+const mapMatchSegmentsInput = (
+  segments: MatchSegmentInput[] | null | undefined
+): MatchSegment[] | null | undefined => {
+  if (segments === undefined) return undefined;
+  if (segments === null) return null;
+  return segments.map(mapMatchSegmentInput);
+};
+
+const mapMatchParticipantInput = (participant: MatchParticipantInput): MatchParticipant => ({
+  playerId: participant.player_id,
+  role: participant.role ?? null,
+  seed: participant.seed ?? null,
+  status: participant.status ?? null,
+  externalRef: participant.external_ref ?? null,
+  metadata: participant.metadata ?? null,
+});
+
+const mapMatchParticipantsInput = (
+  participants: MatchParticipantInput[] | null | undefined
+): MatchParticipant[] | null | undefined => {
+  if (participants === undefined) return undefined;
+  if (participants === null) return null;
+  return participants.map(mapMatchParticipantInput);
+};
+
+const mapMatchStatisticsInput = (
+  statistics: MatchStatisticsInput | undefined
+): MatchStatistics | null | undefined => {
+  if (statistics === undefined) return undefined;
+  if (statistics === null) return null;
+  return statistics;
+};
+
+const mapSideParticipantsInput = (
+  sides: {
+    A: { participants?: MatchParticipantInput[] | null };
+    B: { participants?: MatchParticipantInput[] | null };
+  }
+): Record<'A' | 'B', MatchParticipant[] | null | undefined> | undefined => {
+  const participantsA = mapMatchParticipantsInput(sides.A.participants);
+  const participantsB = mapMatchParticipantsInput(sides.B.participants);
+  if (participantsA === undefined && participantsB === undefined) {
+    return undefined;
+  }
+  return {
+    A: participantsA,
+    B: participantsB,
+  };
+};
+
+const mapGameDetailsInput = (games: MatchGameInput[]) => {
+  const details: Array<{
+    gameNo: number;
+    segments?: MatchSegment[] | null;
+    statistics?: MatchStatistics | null;
+  }> = [];
+
+  for (const game of games) {
+    const segments = mapMatchSegmentsInput(game.segments ?? undefined);
+    const statistics = mapMatchStatisticsInput(game.statistics);
+    if (segments !== undefined || statistics !== undefined) {
+      details.push({
+        gameNo: game.game_no,
+        ...(segments !== undefined ? { segments } : {}),
+        ...(statistics !== undefined ? { statistics } : {}),
+      });
+    }
+  }
+
+  return details.length ? details : undefined;
+};
 
 interface MatchRouteDeps {
   store: RatingStore;
@@ -99,13 +269,23 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
     }
 
+    const normalizedSides: MatchInput['sides'] = {
+      A: { players: parsed.data.sides.A.players },
+      B: { players: parsed.data.sides.B.players },
+    };
+    const normalizedGames: MatchInput['games'] = parsed.data.games.map((game) => ({
+      game_no: game.game_no,
+      a: game.a,
+      b: game.b,
+    }));
+
     const normalization = normalizeMatchSubmission({
       sport: parsed.data.sport,
       discipline: parsed.data.discipline,
       format: parsed.data.format,
       tier: parsed.data.tier,
-      sides: parsed.data.sides,
-      games: parsed.data.games,
+      sides: normalizedSides,
+      games: normalizedGames,
     });
 
     if (!normalization.ok) {
@@ -121,6 +301,12 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         organization_id: parsed.data.organization_id,
         organization_slug: parsed.data.organization_slug,
       });
+
+      const timing = mapMatchTimingInput(parsed.data.timing);
+      const statistics = mapMatchStatisticsInput(parsed.data.statistics);
+      const segments = mapMatchSegmentsInput(parsed.data.segments);
+      const sideParticipants = mapSideParticipantsInput(parsed.data.sides);
+      const gameDetails = mapGameDetailsInput(parsed.data.games);
 
       const ladderKey = buildLadderKey(organization.organizationId, normalization.match, {
         tier: parsed.data.tier,
@@ -175,6 +361,11 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         result,
         eventId: parsed.data.event_id ?? null,
         playerStates: players,
+        ...(timing !== undefined ? { timing } : {}),
+        ...(statistics !== undefined ? { statistics } : {}),
+        ...(segments !== undefined ? { segments } : {}),
+        ...(sideParticipants !== undefined ? { sideParticipants } : {}),
+        ...(gameDetails !== undefined ? { gameDetails } : {}),
         submissionMeta: {
           providerId: parsed.data.provider_id,
           organizationId: organization.organizationId,
@@ -310,6 +501,18 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       }
       if (parsed.data.event_id !== undefined) {
         updateInput.eventId = parsed.data.event_id;
+      }
+      const timingUpdate = mapMatchTimingInput(parsed.data.timing);
+      if (timingUpdate !== undefined) {
+        updateInput.timing = timingUpdate;
+      }
+      const statisticsUpdate = mapMatchStatisticsInput(parsed.data.statistics);
+      if (statisticsUpdate !== undefined) {
+        updateInput.statistics = statisticsUpdate;
+      }
+      const segmentsUpdate = mapMatchSegmentsInput(parsed.data.segments);
+      if (segmentsUpdate !== undefined) {
+        updateInput.segments = segmentsUpdate;
       }
 
       const updated = await store.updateMatch(req.params.match_id, organization.organizationId, updateInput);

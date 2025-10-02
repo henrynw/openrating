@@ -1,5 +1,33 @@
 import type { LadderKey } from './common.js';
 
+export interface PlayerRankingSnapshot {
+  source: string;
+  discipline?: string | null;
+  position?: number | null;
+  points?: number | null;
+  asOf?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface PlayerCompetitiveProfile {
+  discipline?: string | null;
+  rankingPoints?: number | null;
+  rankingPosition?: number | null;
+  totalMatches?: number | null;
+  asOf?: string | null;
+  externalRankings?: PlayerRankingSnapshot[] | null;
+}
+
+export interface PlayerAttributes {
+  handedness?: string | null;
+  dominantSide?: string | null;
+  heightCm?: number | null;
+  weightKg?: number | null;
+  birthDate?: string | null;
+  residence?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
 export interface PlayerCreateInput {
   organizationId: string;
   displayName: string;
@@ -12,6 +40,8 @@ export interface PlayerCreateInput {
   birthYear?: number;
   countryCode?: string;
   regionId?: string;
+  competitiveProfile?: PlayerCompetitiveProfile | null;
+  attributes?: PlayerAttributes | null;
 }
 
 export interface PlayerUpdateInput {
@@ -25,6 +55,8 @@ export interface PlayerUpdateInput {
   birthYear?: number | null;
   countryCode?: string | null;
   regionId?: string | null;
+  competitiveProfile?: PlayerCompetitiveProfile | null;
+  attributes?: PlayerAttributes | null;
 }
 
 export interface PlayerRecord {
@@ -40,6 +72,8 @@ export interface PlayerRecord {
   countryCode?: string;
   regionId?: string;
   externalRef?: string;
+  competitiveProfile?: PlayerCompetitiveProfile | null;
+  attributes?: PlayerAttributes | null;
 }
 
 export interface PlayerListQuery {
