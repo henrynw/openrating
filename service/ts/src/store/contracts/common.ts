@@ -33,6 +33,7 @@ export interface RecordMatchParams {
   match: MatchInput;
   result: UpdateResult;
   eventId?: string | null;
+  competitionId?: string | null;
   playerStates: Map<string, PlayerState>;
   pairUpdates: PairUpdate[];
   timing?: MatchTiming | null;

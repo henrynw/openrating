@@ -37,6 +37,13 @@ import type {
   EventParticipantRecord,
   EventParticipantListResult,
 } from './events.js';
+import type {
+  CompetitionCreateInput,
+  CompetitionUpdateInput,
+  CompetitionRecord,
+  CompetitionListQuery,
+  CompetitionListResult,
+} from './competitions.js';
 
 export interface RatingStore {
   createPlayer(input: PlayerCreateInput): Promise<PlayerRecord>;
@@ -69,6 +76,11 @@ export interface RatingStore {
   listEvents(query: EventListQuery): Promise<EventListResult>;
   getEventById(eventId: string): Promise<EventRecord | null>;
   getEventBySlug(organizationId: string, slug: string): Promise<EventRecord | null>;
+  createCompetition(input: CompetitionCreateInput): Promise<CompetitionRecord>;
+  updateCompetition(competitionId: string, input: CompetitionUpdateInput): Promise<CompetitionRecord>;
+  listCompetitions(query: CompetitionListQuery): Promise<CompetitionListResult>;
+  getCompetitionById(competitionId: string): Promise<CompetitionRecord | null>;
+  getCompetitionBySlug(eventId: string, slug: string): Promise<CompetitionRecord | null>;
   upsertEventParticipant(input: EventParticipantUpsertInput): Promise<EventParticipantRecord>;
   listEventParticipants(eventId: string): Promise<EventParticipantListResult>;
   ensureEventParticipants(eventId: string, playerIds: string[]): Promise<void>;

@@ -438,6 +438,11 @@ paths:
           schema: { type: string }
           description: Filter matches belonging to a specific event
         - in: query
+          name: competition_id
+          required: false
+          schema: { type: string }
+          description: Filter matches belonging to a specific competition
+        - in: query
           name: limit
           required: false
           schema:
@@ -800,6 +805,102 @@ paths:
                 $ref: '#/components/schemas/EventParticipantListResponse'
         '404':
           description: Event not found
+  /v1/events/{event_id}/competitions:
+    post:
+      tags: [Competitions]
+      summary: Create a competition within an event
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompetitionCreate'
+      responses:
+        '201':
+          description: Competition created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  competition:
+                    $ref: '#/components/schemas/Competition'
+        '400':
+          description: Invalid request
+        '404':
+          description: Event not found
+    get:
+      tags: [Competitions]
+      summary: List competitions for an event
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Competitions for the event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompetitionListResponse'
+        '404':
+          description: Event not found
+
+  /v1/competitions/{competition_id}:
+    get:
+      tags: [Competitions]
+      summary: Retrieve a competition
+      parameters:
+        - in: path
+          name: competition_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Competition details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  competition:
+                    $ref: '#/components/schemas/Competition'
+        '404':
+          description: Competition not found
+    patch:
+      tags: [Competitions]
+      summary: Update a competition
+      parameters:
+        - in: path
+          name: competition_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompetitionUpdate'
+      responses:
+        '200':
+          description: Updated competition
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  competition:
+                    $ref: '#/components/schemas/Competition'
+        '400':
+          description: Invalid request
+        '404':
+          description: Competition not found
 
 components:
   schemas:
@@ -988,6 +1089,10 @@ components:
           type: string
           format: uuid
           description: Optional event identifier that groups the match with a tournament or competition
+        competition_id:
+          type: string
+          format: uuid
+          description: Optional competition identifier nested under the parent event
         start_time: { type: string, format: date-time }
         timing:
           $ref: '#/components/schemas/MatchTiming'
@@ -1053,6 +1158,9 @@ components:
         event_id:
           type: [string, 'null']
           format: uuid
+        competition_id:
+          type: [string, 'null']
+          format: uuid
         timing:
           $ref: '#/components/schemas/MatchTiming'
         statistics:
@@ -1069,6 +1177,8 @@ components:
         organization_slug:
           type: [string, 'null']
         event_id:
+          type: [string, 'null']
+        competition_id:
           type: [string, 'null']
         ratings:
           type: array
@@ -1149,6 +1259,10 @@ components:
         region_id:
           type: [string, 'null']
         event_id:
+          type: [string, 'null']
+        competition_id:
+          type: [string, 'null']
+        competition_slug:
           type: [string, 'null']
         timing:
           $ref: '#/components/schemas/MatchTiming'
@@ -1312,6 +1426,11 @@ components:
         metadata:
           type: [object, 'null']
           additionalProperties: true
+        competitions:
+          type: array
+          description: Nested competitions that belong to this event.
+          items:
+            $ref: '#/components/schemas/Competition'
         created_at:
           type: [string, 'null']
           format: date-time
@@ -1383,6 +1502,108 @@ components:
         metadata:
           type: [object, 'null']
           additionalProperties: true
+    Competition:
+      type: object
+      properties:
+        competition_id: { type: string }
+        event_id: { type: string }
+        event_slug: { type: string }
+        organization_id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        sport:
+          type: [string, 'null']
+          enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+        discipline:
+          type: [string, 'null']
+          enum: [SINGLES, DOUBLES, MIXED]
+        format:
+          type: [string, 'null']
+        tier:
+          type: [string, 'null']
+        status:
+          type: [string, 'null']
+        draw_size:
+          type: [integer, 'null']
+        start_date:
+          type: [string, 'null']
+          format: date-time
+        end_date:
+          type: [string, 'null']
+          format: date-time
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+        created_at:
+          type: [string, 'null']
+          format: date-time
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+    CompetitionCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        slug: { type: string }
+        sport:
+          type: [string, 'null']
+          enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+        discipline:
+          type: [string, 'null']
+          enum: [SINGLES, DOUBLES, MIXED]
+        format:
+          type: [string, 'null']
+        tier:
+          type: [string, 'null']
+        status:
+          type: [string, 'null']
+        draw_size:
+          type: [integer, 'null']
+        start_date:
+          type: [string, 'null']
+          format: date-time
+        end_date:
+          type: [string, 'null']
+          format: date-time
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+    CompetitionUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        slug: { type: string }
+        sport:
+          type: [string, 'null']
+          enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+        discipline:
+          type: [string, 'null']
+          enum: [SINGLES, DOUBLES, MIXED]
+        format:
+          type: [string, 'null']
+        tier:
+          type: [string, 'null']
+        status:
+          type: [string, 'null']
+        draw_size:
+          type: [integer, 'null']
+        start_date:
+          type: [string, 'null']
+          format: date-time
+        end_date:
+          type: [string, 'null']
+          format: date-time
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+    CompetitionListResponse:
+      type: object
+      properties:
+        competitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Competition'
     EventClassification:
       type: object
       description: Structured hierarchy data describing the competitive level of an event.

@@ -182,6 +182,8 @@ export const toMatchSummaryResponse = (match: MatchSummary, organizationSlug: st
     venue_id: match.venueId,
     region_id: match.regionId,
     event_id: match.eventId ?? null,
+    competition_id: match.competitionId ?? null,
+    competition_slug: match.competitionSlug ?? null,
     sides,
     games: match.games.map(serializeMatchGame),
   };

@@ -6,3 +6,4 @@ export * from './contracts/organizations.js';
 export * from './contracts/store.js';
 export * from './errors.js';
 export * from './contracts/events.js';
+export * from './contracts/competitions.js';

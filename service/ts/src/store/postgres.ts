@@ -9,6 +9,7 @@ import {
   matchSides,
   matches,
   organizations,
+  competitions,
   playerRatings,
   playerRatingHistory,
   players,
@@ -73,6 +74,11 @@ import type {
   EventParticipantUpsertInput,
   EventParticipantRecord,
   EventParticipantListResult,
+  CompetitionCreateInput,
+  CompetitionUpdateInput,
+  CompetitionRecord,
+  CompetitionListQuery,
+  CompetitionListResult,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
 import { buildLadderId, isDefaultRegion, toDbRegionId, DEFAULT_REGION } from './helpers.js';
@@ -182,6 +188,25 @@ type EventParticipantRow = {
   playerId: string;
   seed: number | null;
   status: string | null;
+  metadata: unknown | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type CompetitionRow = {
+  competitionId: string;
+  eventId: string;
+  organizationId: string;
+  name: string;
+  slug: string;
+  sport: string | null;
+  discipline: string | null;
+  format: string | null;
+  tier: string | null;
+  status: string | null;
+  drawSize: number | null;
+  startDate: Date | null;
+  endDate: Date | null;
   metadata: unknown | null;
   createdAt: Date;
   updatedAt: Date;
@@ -299,6 +324,27 @@ export class PostgresStore implements RatingStore {
     } satisfies EventRecord;
   }
 
+  private toCompetitionRecord(row: CompetitionRow): CompetitionRecord {
+    return {
+      competitionId: row.competitionId,
+      eventId: row.eventId,
+      organizationId: row.organizationId,
+      name: row.name,
+      slug: row.slug,
+      sport: (row.sport ?? null) as CompetitionRecord['sport'],
+      discipline: (row.discipline ?? null) as CompetitionRecord['discipline'],
+      format: row.format ?? null,
+      tier: row.tier ?? null,
+      status: row.status ?? null,
+      drawSize: row.drawSize ?? null,
+      startDate: row.startDate ? row.startDate.toISOString() : null,
+      endDate: row.endDate ? row.endDate.toISOString() : null,
+      metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    } satisfies CompetitionRecord;
+  }
+
   private toEventParticipantRecord(row: EventParticipantRow): EventParticipantRecord {
     return {
       eventId: row.eventId,
@@ -365,6 +411,58 @@ export class PostgresStore implements RatingStore {
       )
       .limit(1);
     return (rows as EventRow[]).at(0) ?? null;
+  }
+
+  private async getCompetitionRowById(competitionId: string, client = this.db): Promise<CompetitionRow | null> {
+    const rows = await client
+      .select({
+        competitionId: competitions.competitionId,
+        eventId: competitions.eventId,
+        organizationId: competitions.organizationId,
+        name: competitions.name,
+        slug: competitions.slug,
+        sport: competitions.sport,
+        discipline: competitions.discipline,
+        format: competitions.format,
+        tier: competitions.tier,
+        status: competitions.status,
+        drawSize: competitions.drawSize,
+        startDate: competitions.startDate,
+        endDate: competitions.endDate,
+        metadata: competitions.metadata,
+        createdAt: competitions.createdAt,
+        updatedAt: competitions.updatedAt,
+      })
+      .from(competitions)
+      .where(eq(competitions.competitionId, competitionId))
+      .limit(1);
+    return (rows as CompetitionRow[]).at(0) ?? null;
+  }
+
+  private async getCompetitionRowBySlug(eventId: string, slug: string, client = this.db): Promise<CompetitionRow | null> {
+    const rows = await client
+      .select({
+        competitionId: competitions.competitionId,
+        eventId: competitions.eventId,
+        organizationId: competitions.organizationId,
+        name: competitions.name,
+        slug: competitions.slug,
+        sport: competitions.sport,
+        discipline: competitions.discipline,
+        format: competitions.format,
+        tier: competitions.tier,
+        status: competitions.status,
+        drawSize: competitions.drawSize,
+        startDate: competitions.startDate,
+        endDate: competitions.endDate,
+        metadata: competitions.metadata,
+        createdAt: competitions.createdAt,
+        updatedAt: competitions.updatedAt,
+      })
+      .from(competitions)
+      .where(and(eq(competitions.eventId, eventId), eq(competitions.slug, slug)))
+      .limit(1);
+    return (rows as CompetitionRow[]).at(0) ?? null;
   }
 
   private async requireEventOrganization(eventId: string): Promise<string> {
@@ -564,12 +662,15 @@ export class PostgresStore implements RatingStore {
         venueId: matches.venueId,
         regionId: matches.regionId,
         eventId: matches.eventId,
+        competitionId: matches.competitionId,
+        competitionSlug: competitions.slug,
         timing: matches.timing,
         statistics: matches.statistics,
         segments: matches.segments,
         sideParticipants: matches.sideParticipants,
       })
       .from(matches)
+      .leftJoin(competitions, eq(competitions.competitionId, matches.competitionId))
       .where(eq(matches.matchId, matchId))
       .limit(1);
 
@@ -645,6 +746,8 @@ export class PostgresStore implements RatingStore {
       venueId: matchRow.venueId ?? null,
       regionId: matchRow.regionId ?? null,
       eventId: matchRow.eventId ?? null,
+      competitionId: matchRow.competitionId ?? null,
+      competitionSlug: (matchRow.competitionSlug as string | null) ?? null,
       timing: (matchRow.timing as MatchTiming | null) ?? null,
       statistics: (matchRow.statistics as MatchStatistics) ?? null,
       segments: (matchRow.segments as MatchSegment[] | null) ?? null,
@@ -1287,6 +1390,166 @@ export class PostgresStore implements RatingStore {
     return row ? this.toEventRecord(row) : null;
   }
 
+  async createCompetition(input: CompetitionCreateInput): Promise<CompetitionRecord> {
+    await this.assertOrganizationExists(input.organizationId);
+    const event = await this.getEventRowById(input.eventId);
+    if (!event) {
+      throw new EventLookupError(`Event not found: ${input.eventId}`);
+    }
+    if (event.organizationId !== input.organizationId) {
+      throw new EventLookupError(
+        `Event ${input.eventId} does not belong to organization ${input.organizationId}`
+      );
+    }
+
+    const slug = slugify(input.slug ?? input.name);
+    const existing = await this.getCompetitionRowBySlug(input.eventId, slug);
+    if (existing) {
+      throw new EventLookupError(`Competition slug already in use: ${slug}`);
+    }
+
+    const [row] = await this.db
+      .insert(competitions)
+      .values({
+        competitionId: randomUUID(),
+        eventId: input.eventId,
+        organizationId: input.organizationId,
+        name: input.name,
+        slug,
+        sport: input.sport ?? null,
+        discipline: input.discipline ?? null,
+        format: input.format ?? null,
+        tier: input.tier ?? null,
+        status: input.status ?? null,
+        drawSize: input.drawSize ?? null,
+        startDate: input.startDate ? new Date(input.startDate) : null,
+        endDate: input.endDate ? new Date(input.endDate) : null,
+        metadata: input.metadata ?? null,
+        createdAt: now(),
+        updatedAt: now(),
+      })
+      .returning({
+        competitionId: competitions.competitionId,
+        eventId: competitions.eventId,
+        organizationId: competitions.organizationId,
+        name: competitions.name,
+        slug: competitions.slug,
+        sport: competitions.sport,
+        discipline: competitions.discipline,
+        format: competitions.format,
+        tier: competitions.tier,
+        status: competitions.status,
+        drawSize: competitions.drawSize,
+        startDate: competitions.startDate,
+        endDate: competitions.endDate,
+        metadata: competitions.metadata,
+        createdAt: competitions.createdAt,
+        updatedAt: competitions.updatedAt,
+      });
+
+    return this.toCompetitionRecord(row as CompetitionRow);
+  }
+
+  async updateCompetition(competitionId: string, input: CompetitionUpdateInput): Promise<CompetitionRecord> {
+    const existing = await this.getCompetitionRowById(competitionId);
+    if (!existing) {
+      throw new EventLookupError(`Competition not found: ${competitionId}`);
+    }
+
+    let slug = existing.slug;
+    if (input.slug !== undefined || input.name !== undefined) {
+      const candidate = slugify(input.slug ?? input.name ?? existing.name);
+      if (candidate !== existing.slug) {
+        const dup = await this.getCompetitionRowBySlug(existing.eventId, candidate);
+        if (dup) {
+          throw new EventLookupError(`Competition slug already in use: ${candidate}`);
+        }
+        slug = candidate;
+      }
+    }
+
+    const payload: Record<string, unknown> = { updatedAt: now() };
+    if (input.name !== undefined) payload.name = input.name;
+    if (input.sport !== undefined) payload.sport = input.sport ?? null;
+    if (input.discipline !== undefined) payload.discipline = input.discipline ?? null;
+    if (input.format !== undefined) payload.format = input.format ?? null;
+    if (input.tier !== undefined) payload.tier = input.tier ?? null;
+    if (input.status !== undefined) payload.status = input.status ?? null;
+    if (input.drawSize !== undefined) payload.drawSize = input.drawSize ?? null;
+    if (input.startDate !== undefined) {
+      payload.startDate = input.startDate ? new Date(input.startDate) : null;
+    }
+    if (input.endDate !== undefined) {
+      payload.endDate = input.endDate ? new Date(input.endDate) : null;
+    }
+    if (input.metadata !== undefined) payload.metadata = input.metadata ?? null;
+    if (slug !== existing.slug) payload.slug = slug;
+
+    const [row] = await this.db
+      .update(competitions)
+      .set(payload)
+      .where(eq(competitions.competitionId, competitionId))
+      .returning({
+        competitionId: competitions.competitionId,
+        eventId: competitions.eventId,
+        organizationId: competitions.organizationId,
+        name: competitions.name,
+        slug: competitions.slug,
+        sport: competitions.sport,
+        discipline: competitions.discipline,
+        format: competitions.format,
+        tier: competitions.tier,
+        status: competitions.status,
+        drawSize: competitions.drawSize,
+        startDate: competitions.startDate,
+        endDate: competitions.endDate,
+        metadata: competitions.metadata,
+        createdAt: competitions.createdAt,
+        updatedAt: competitions.updatedAt,
+      });
+
+    return this.toCompetitionRecord(row as CompetitionRow);
+  }
+
+  async listCompetitions(query: CompetitionListQuery): Promise<CompetitionListResult> {
+    const rows = await this.db
+      .select({
+        competitionId: competitions.competitionId,
+        eventId: competitions.eventId,
+        organizationId: competitions.organizationId,
+        name: competitions.name,
+        slug: competitions.slug,
+        sport: competitions.sport,
+        discipline: competitions.discipline,
+        format: competitions.format,
+        tier: competitions.tier,
+        status: competitions.status,
+        drawSize: competitions.drawSize,
+        startDate: competitions.startDate,
+        endDate: competitions.endDate,
+        metadata: competitions.metadata,
+        createdAt: competitions.createdAt,
+        updatedAt: competitions.updatedAt,
+      })
+      .from(competitions)
+      .where(eq(competitions.eventId, query.eventId))
+      .orderBy(competitions.slug);
+
+    return {
+      items: (rows as CompetitionRow[]).map((row) => this.toCompetitionRecord(row)),
+    } satisfies CompetitionListResult;
+  }
+
+  async getCompetitionById(competitionId: string): Promise<CompetitionRecord | null> {
+    const row = await this.getCompetitionRowById(competitionId);
+    return row ? this.toCompetitionRecord(row) : null;
+  }
+
+  async getCompetitionBySlug(eventId: string, slug: string): Promise<CompetitionRecord | null> {
+    const row = await this.getCompetitionRowBySlug(eventId, slug);
+    return row ? this.toCompetitionRecord(row) : null;
+  }
+
   async upsertEventParticipant(input: EventParticipantUpsertInput): Promise<EventParticipantRecord> {
     const organizationId = await this.requireEventOrganization(input.eventId);
     await this.assertPlayerInOrganization(input.playerId, organizationId);
@@ -1707,7 +1970,34 @@ export class PostgresStore implements RatingStore {
     params.match.sides.A.players.forEach((id) => playerIds.add(id));
     params.match.sides.B.players.forEach((id) => playerIds.add(id));
 
-    const eventId = params.eventId ?? null;
+    let eventId = params.eventId ?? null;
+    let competitionId = params.competitionId ?? null;
+
+    if (competitionId) {
+      const competition = await this.getCompetitionRowById(competitionId);
+      if (!competition) {
+        throw new EventLookupError(`Competition not found: ${competitionId}`);
+      }
+      if (competition.organizationId !== params.submissionMeta.organizationId) {
+        throw new EventLookupError(
+          `Competition ${competitionId} does not belong to organization ${params.submissionMeta.organizationId}`
+        );
+      }
+      if (eventId && competition.eventId !== eventId) {
+        throw new EventLookupError('Competition does not belong to provided event');
+      }
+      if (competition.sport && competition.sport !== params.match.sport) {
+        throw new EventLookupError('Competition sport does not match submitted match sport');
+      }
+      if (competition.discipline && competition.discipline !== params.match.discipline) {
+        throw new EventLookupError('Competition discipline does not match submitted match discipline');
+      }
+      if (competition.format && competition.format !== params.match.format) {
+        throw new EventLookupError('Competition format does not match submitted match format');
+      }
+      eventId = competition.eventId;
+    }
+
     if (eventId) {
       await this.assertEventBelongsToOrg(eventId, params.submissionMeta.organizationId);
     }
@@ -1747,6 +2037,7 @@ export class PostgresStore implements RatingStore {
         venueId,
         regionId: submissionRegionId ?? ladderRegionId ?? null,
         eventId,
+        competitionId,
         startTime: new Date(params.submissionMeta.startTime),
         timing: params.timing ?? null,
         statistics: params.statistics ?? null,
@@ -1927,10 +2218,25 @@ export class PostgresStore implements RatingStore {
     if (input.eventId !== undefined) {
       if (!input.eventId) {
         updates.eventId = null;
+        updates.competitionId = null;
       } else {
         await this.assertEventBelongsToOrg(input.eventId, organizationId);
         updates.eventId = input.eventId;
         ensureEventId = input.eventId;
+      }
+    }
+
+    if (input.competitionId !== undefined) {
+      if (!input.competitionId) {
+        updates.competitionId = null;
+      } else {
+        const competition = await this.getCompetitionRowById(input.competitionId);
+        if (!competition || competition.organizationId !== organizationId) {
+          throw new EventLookupError(`Competition not found for organization ${organizationId}`);
+        }
+        updates.competitionId = input.competitionId;
+        updates.eventId = competition.eventId;
+        ensureEventId = competition.eventId;
       }
     }
 
@@ -2579,6 +2885,10 @@ export class PostgresStore implements RatingStore {
       filters.push(eq(matches.eventId, query.eventId));
     }
 
+    if (query.competitionId) {
+      filters.push(eq(matches.competitionId, query.competitionId));
+    }
+
     const condition = combineFilters(filters);
 
     let matchQuery = this.db
@@ -2595,12 +2905,15 @@ export class PostgresStore implements RatingStore {
         venueId: matches.venueId,
         regionId: matches.regionId,
         eventId: matches.eventId,
+        competitionId: matches.competitionId,
+        competitionSlug: competitions.slug,
         timing: matches.timing,
         statistics: matches.statistics,
         segments: matches.segments,
         sideParticipants: matches.sideParticipants,
       })
       .from(matches)
+      .leftJoin(competitions, eq(competitions.competitionId, matches.competitionId))
       .orderBy(desc(matches.startTime), desc(matches.matchId))
       .limit(limit + 1);
 
@@ -2621,6 +2934,8 @@ export class PostgresStore implements RatingStore {
       venueId: string | null;
       regionId: string | null;
       eventId: string | null;
+      competitionId: string | null;
+      competitionSlug: string | null;
       timing: unknown | null;
       statistics: unknown | null;
       segments: unknown | null;
@@ -2715,6 +3030,8 @@ export class PostgresStore implements RatingStore {
         venueId: row.venueId ?? null,
         regionId: row.regionId ?? null,
         eventId: row.eventId ?? null,
+        competitionId: row.competitionId ?? null,
+        competitionSlug: row.competitionSlug ?? null,
         timing: (row.timing as MatchTiming | null) ?? null,
         statistics: (row.statistics as MatchStatistics) ?? null,
         segments: (row.segments as MatchSegment[] | null) ?? null,

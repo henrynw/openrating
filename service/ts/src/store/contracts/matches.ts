@@ -79,6 +79,8 @@ export interface MatchSummary {
   format: string;
   tier?: string;
   eventId?: string | null;
+  competitionId?: string | null;
+  competitionSlug?: string | null;
   startTime: string;
   venueId?: string | null;
   regionId?: string | null;
@@ -94,6 +96,7 @@ export interface MatchListQuery {
   sport?: string;
   playerId?: string;
   eventId?: string;
+  competitionId?: string;
   cursor?: string;
   limit?: number;
   startAfter?: string;
@@ -110,6 +113,7 @@ export interface MatchUpdateInput {
   venueId?: string | null;
   regionId?: string | null;
   eventId?: string | null;
+  competitionId?: string | null;
   timing?: MatchTiming | null;
   statistics?: MatchStatistics;
   segments?: MatchSegment[] | null;

@@ -49,6 +49,11 @@ import type {
   LeaderboardMoversQuery,
   LeaderboardMoversResult,
   LeaderboardMoverEntry,
+  CompetitionCreateInput,
+  CompetitionUpdateInput,
+  CompetitionRecord,
+  CompetitionListQuery,
+  CompetitionListResult,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
 import { buildLadderId, DEFAULT_REGION } from './helpers.js';
@@ -86,6 +91,25 @@ interface MemoryEventParticipant {
   playerId: string;
   seed?: number | null;
   status?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface MemoryCompetitionRecord {
+  competitionId: string;
+  eventId: string;
+  organizationId: string;
+  name: string;
+  slug: string;
+  sport?: string | null;
+  discipline?: string | null;
+  format?: string | null;
+  tier?: string | null;
+  status?: string | null;
+  drawSize?: number | null;
+  startDate?: Date | null;
+  endDate?: Date | null;
   metadata?: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
@@ -214,12 +238,15 @@ export class MemoryStore implements RatingStore {
   private events = new Map<string, MemoryEventRecord>();
   private eventsBySlug = new Map<string, string>();
   private eventParticipants = new Map<string, Map<string, MemoryEventParticipant>>();
+  private competitions = new Map<string, MemoryCompetitionRecord>();
+  private competitionsBySlug = new Map<string, string>();
   private players = new Map<string, MemoryPlayerRecord>();
   private matches: Array<{
     matchId: string;
     ladderId: string;
     providerId: string;
     externalRef?: string | null;
+    competitionId?: string | null;
     match: MatchInput;
     result: UpdateResult;
     startTime: Date;
@@ -447,6 +474,24 @@ export class MemoryStore implements RatingStore {
     }
 
     let eventId: string | null = params.eventId ?? null;
+    let competitionId: string | null = params.competitionId ?? null;
+
+    if (competitionId) {
+      const competition = this.competitions.get(competitionId);
+      if (!competition) {
+        throw new EventLookupError(`Competition not found: ${competitionId}`);
+      }
+      if (competition.organizationId !== params.ladderKey.organizationId) {
+        throw new EventLookupError(
+          `Competition ${competitionId} does not belong to organization ${params.ladderKey.organizationId}`
+        );
+      }
+      if (eventId && competition.eventId !== eventId) {
+        throw new EventLookupError('Competition does not belong to provided event');
+      }
+      eventId = competition.eventId;
+    }
+
     if (eventId) {
       const event = this.events.get(eventId);
       if (!event) {
@@ -462,6 +507,7 @@ export class MemoryStore implements RatingStore {
       ladderId,
       providerId: params.submissionMeta.providerId,
       externalRef: params.submissionMeta.externalRef ?? null,
+      competitionId,
       match: params.match,
       result: params.result,
       startTime: new Date(params.submissionMeta.startTime),
@@ -596,6 +642,23 @@ export class MemoryStore implements RatingStore {
       }
     }
 
+    if (input.competitionId !== undefined) {
+      if (!input.competitionId) {
+        match.competitionId = null;
+      } else {
+        const competition = this.competitions.get(input.competitionId);
+        if (!competition || competition.organizationId !== organizationId) {
+          throw new EventLookupError(`Competition not found for organization ${organizationId}`);
+        }
+        match.competitionId = input.competitionId;
+        match.eventId = competition.eventId;
+        await this.ensureEventParticipants(competition.eventId, [
+          ...match.match.sides.A.players,
+          ...match.match.sides.B.players,
+        ]);
+      }
+    }
+
     if (input.timing !== undefined) {
       match.timing = input.timing ?? null;
     }
@@ -607,6 +670,8 @@ export class MemoryStore implements RatingStore {
     if (input.segments !== undefined) {
       match.segments = input.segments ?? null;
     }
+
+    const competition = match.competitionId ? this.competitions.get(match.competitionId) : undefined;
 
     return {
       matchId: match.matchId,
@@ -621,6 +686,8 @@ export class MemoryStore implements RatingStore {
       venueId: match.venueId ?? null,
       regionId: match.regionId ?? null,
       eventId: match.eventId ?? null,
+      competitionId: match.competitionId ?? null,
+      competitionSlug: competition?.slug ?? null,
       timing: match.timing ?? null,
       statistics: match.statistics ?? null,
       segments: match.segments ?? null,
@@ -649,6 +716,8 @@ export class MemoryStore implements RatingStore {
       return null;
     }
 
+    const competition = match.competitionId ? this.competitions.get(match.competitionId) : undefined;
+
     return {
       matchId: match.matchId,
       providerId: match.providerId,
@@ -662,6 +731,8 @@ export class MemoryStore implements RatingStore {
       venueId: match.venueId ?? null,
       regionId: match.regionId ?? null,
       eventId: match.eventId ?? null,
+       competitionId: match.competitionId ?? null,
+      competitionSlug: competition?.slug ?? null,
       timing: match.timing ?? null,
       statistics: match.statistics ?? null,
       segments: match.segments ?? null,
@@ -978,6 +1049,10 @@ export class MemoryStore implements RatingStore {
       matches = matches.filter((entry) => entry.eventId === query.eventId);
     }
 
+    if (query.competitionId) {
+      matches = matches.filter((entry) => entry.competitionId === query.competitionId);
+    }
+
     matches.sort((a, b) => {
       const diff = b.startTime.getTime() - a.startTime.getTime();
       if (diff !== 0) return diff;
@@ -1013,6 +1088,10 @@ export class MemoryStore implements RatingStore {
       venueId: entry.venueId ?? null,
       regionId: entry.regionId ?? null,
       eventId: entry.eventId ?? null,
+      competitionId: entry.competitionId ?? null,
+      competitionSlug: entry.competitionId
+        ? this.competitions.get(entry.competitionId)?.slug ?? null
+        : null,
       timing: entry.timing ?? null,
       statistics: entry.statistics ?? null,
       segments: entry.segments ?? null,
@@ -1255,6 +1334,109 @@ export class MemoryStore implements RatingStore {
     return this.getEventById(eventId);
   }
 
+  async createCompetition(input: CompetitionCreateInput): Promise<CompetitionRecord> {
+    const event = this.events.get(input.eventId);
+    if (!event) {
+      throw new EventLookupError(`Event not found: ${input.eventId}`);
+    }
+    if (event.organizationId !== input.organizationId) {
+      throw new EventLookupError(
+        `Event ${input.eventId} does not belong to organization ${input.organizationId}`
+      );
+    }
+
+    const competitionId = randomUUID();
+    const baseSlug = input.slug ?? input.name;
+    const slug = slugify(baseSlug);
+    const slugKey = `${input.eventId}::${slug}`;
+    if (this.competitionsBySlug.has(slugKey)) {
+      throw new EventLookupError(`Competition slug already in use: ${slug}`);
+    }
+
+    const now = new Date();
+    const record: MemoryCompetitionRecord = {
+      competitionId,
+      eventId: input.eventId,
+      organizationId: input.organizationId,
+      name: input.name,
+      slug,
+      sport: input.sport ?? null,
+      discipline: input.discipline ?? null,
+      format: input.format ?? null,
+      tier: input.tier ?? null,
+      status: input.status ?? null,
+      drawSize: input.drawSize ?? null,
+      startDate: input.startDate ? new Date(input.startDate) : null,
+      endDate: input.endDate ? new Date(input.endDate) : null,
+      metadata: input.metadata ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.competitions.set(competitionId, record);
+    this.competitionsBySlug.set(slugKey, competitionId);
+
+    return this.toCompetitionRecord(record);
+  }
+
+  async updateCompetition(competitionId: string, input: CompetitionUpdateInput): Promise<CompetitionRecord> {
+    const competition = this.competitions.get(competitionId);
+    if (!competition) {
+      throw new EventLookupError(`Competition not found: ${competitionId}`);
+    }
+
+    if (input.slug !== undefined || input.name !== undefined) {
+      const nextSlug = slugify(input.slug ?? input.name ?? competition.name);
+      if (nextSlug !== competition.slug) {
+        const slugKey = `${competition.eventId}::${nextSlug}`;
+        if (this.competitionsBySlug.has(slugKey)) {
+          throw new EventLookupError(`Competition slug already in use: ${nextSlug}`);
+        }
+        this.competitionsBySlug.delete(`${competition.eventId}::${competition.slug}`);
+        this.competitionsBySlug.set(slugKey, competitionId);
+        competition.slug = nextSlug;
+      }
+    }
+
+    if (input.name !== undefined) competition.name = input.name;
+    if (input.sport !== undefined) competition.sport = input.sport ?? null;
+    if (input.discipline !== undefined) competition.discipline = input.discipline ?? null;
+    if (input.format !== undefined) competition.format = input.format ?? null;
+    if (input.tier !== undefined) competition.tier = input.tier ?? null;
+    if (input.status !== undefined) competition.status = input.status ?? null;
+    if (input.drawSize !== undefined) competition.drawSize = input.drawSize ?? null;
+    if (input.startDate !== undefined) {
+      competition.startDate = input.startDate ? new Date(input.startDate) : null;
+    }
+    if (input.endDate !== undefined) {
+      competition.endDate = input.endDate ? new Date(input.endDate) : null;
+    }
+    if (input.metadata !== undefined) competition.metadata = input.metadata ?? null;
+
+    competition.updatedAt = new Date();
+
+    return this.toCompetitionRecord(competition);
+  }
+
+  async listCompetitions(query: CompetitionListQuery): Promise<CompetitionListResult> {
+    const items = Array.from(this.competitions.values())
+      .filter((competition) => competition.eventId === query.eventId)
+      .map((competition) => this.toCompetitionRecord(competition));
+    return { items };
+  }
+
+  async getCompetitionById(competitionId: string): Promise<CompetitionRecord | null> {
+    const competition = this.competitions.get(competitionId);
+    if (!competition) return null;
+    return this.toCompetitionRecord(competition);
+  }
+
+  async getCompetitionBySlug(eventId: string, slug: string): Promise<CompetitionRecord | null> {
+    const id = this.competitionsBySlug.get(`${eventId}::${slug}`);
+    if (!id) return null;
+    return this.getCompetitionById(id);
+  }
+
   async upsertEventParticipant(input: EventParticipantUpsertInput): Promise<EventParticipantRecord> {
     const event = this.events.get(input.eventId);
     if (!event) {
@@ -1401,6 +1583,27 @@ export class MemoryStore implements RatingStore {
       createdAt: event.createdAt.toISOString(),
       updatedAt: event.updatedAt.toISOString(),
     };
+  }
+
+  private toCompetitionRecord(competition: MemoryCompetitionRecord): CompetitionRecord {
+    return {
+      competitionId: competition.competitionId,
+      eventId: competition.eventId,
+      organizationId: competition.organizationId,
+      name: competition.name,
+      slug: competition.slug,
+      sport: (competition.sport ?? null) as CompetitionRecord['sport'],
+      discipline: (competition.discipline ?? null) as CompetitionRecord['discipline'],
+      format: competition.format ?? null,
+      tier: competition.tier ?? null,
+      status: competition.status ?? null,
+      drawSize: competition.drawSize ?? null,
+      startDate: competition.startDate ? competition.startDate.toISOString() : null,
+      endDate: competition.endDate ? competition.endDate.toISOString() : null,
+      metadata: competition.metadata ?? null,
+      createdAt: competition.createdAt.toISOString(),
+      updatedAt: competition.updatedAt.toISOString(),
+    } satisfies CompetitionRecord;
   }
 
   private parseLadderId(ladderId: string) {

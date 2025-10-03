@@ -106,6 +106,31 @@ export const events = pgTable('events', {
   organizationSlugIdx: uniqueIndex('events_org_slug_idx').on(table.organizationId, table.slug),
 }));
 
+export const competitions = pgTable('competitions', {
+  competitionId: text('competition_id').primaryKey(),
+  eventId: text('event_id').references(() => events.eventId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  organizationId: text('organization_id').references(() => organizations.organizationId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  name: text('name').notNull(),
+  slug: text('slug').notNull(),
+  sport: text('sport'),
+  discipline: text('discipline'),
+  format: text('format'),
+  tier: text('tier'),
+  status: text('status'),
+  drawSize: integer('draw_size'),
+  startDate: timestamp('start_date', { withTimezone: true }),
+  endDate: timestamp('end_date', { withTimezone: true }),
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table: any) => ({
+  eventSlugIdx: uniqueIndex('competitions_event_slug_idx').on(table.eventId, table.slug),
+}));
+
 export const players = pgTable('players', {
   playerId: text('player_id').primaryKey(),
   organizationId: text('organization_id').references(() => organizations.organizationId, {
@@ -173,6 +198,7 @@ export const matches = pgTable('matches', {
   eventId: text('event_id').references(() => events.eventId, {
     onDelete: 'set null',
   }),
+  competitionId: text('competition_id').references(() => competitions.competitionId),
   startTime: timestamp('start_time', { withTimezone: true }).notNull(),
   timing: jsonb('timing'),
   statistics: jsonb('statistics'),

@@ -19,6 +19,7 @@ import type {
   MatchSegment,
   MatchParticipant,
   MatchStatistics,
+  CompetitionRecord,
 } from '../store/index.js';
 import { MatchLookupError, OrganizationLookupError, PlayerLookupError } from '../store/index.js';
 import { normalizeMatchSubmission } from '../formats/index.js';
@@ -96,6 +97,7 @@ const MatchSubmitSchema = z
     venue_region_id: z.string().optional(),
     tier: z.enum(['SANCTIONED', 'LEAGUE', 'SOCIAL', 'EXHIBITION']).optional(),
     event_id: z.string().uuid().optional(),
+    competition_id: z.string().uuid().optional(),
     timing: MatchTimingSchema.nullable().optional(),
     statistics: MatchStatisticsSchema.optional(),
     segments: z.array(MatchSegmentSchema).nullable().optional(),
@@ -125,6 +127,7 @@ const MatchListQuerySchema = z
     sport: z.string().optional(),
     player_id: z.string().optional(),
     event_id: z.string().optional(),
+    competition_id: z.string().optional(),
     cursor: z.string().optional(),
     limit: z.coerce.number().int().min(1).max(200).optional(),
     start_after: z.string().datetime().optional(),
@@ -142,6 +145,7 @@ const MatchUpdateSchema = z.object({
   venue_id: z.string().nullable().optional(),
   venue_region_id: z.string().nullable().optional(),
   event_id: z.string().uuid().nullable().optional(),
+  competition_id: z.string().uuid().nullable().optional(),
   timing: MatchTimingSchema.nullable().optional(),
   statistics: MatchStatisticsSchema.optional(),
   segments: z.array(MatchSegmentSchema).nullable().optional(),
@@ -321,6 +325,33 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         organization_slug: parsed.data.organization_slug,
       });
 
+      let eventId: string | null = parsed.data.event_id ?? null;
+      let competition: CompetitionRecord | null = null;
+
+      if (parsed.data.competition_id) {
+        competition = await store.getCompetitionById(parsed.data.competition_id);
+        if (!competition) {
+          return res.status(404).send({ error: 'competition_not_found' });
+        }
+        if (competition.organizationId !== organization.organizationId) {
+          return res.status(403).send({ error: 'competition_access_denied' });
+        }
+        if (eventId && competition.eventId !== eventId) {
+          return res.status(400).send({ error: 'invalid_competition', message: 'Competition does not belong to the specified event' });
+        }
+        eventId = competition.eventId;
+
+        if (competition.sport && competition.sport !== normalization.match.sport) {
+          return res.status(400).send({ error: 'invalid_competition', message: 'Competition sport does not match submission' });
+        }
+        if (competition.discipline && competition.discipline !== normalization.match.discipline) {
+          return res.status(400).send({ error: 'invalid_competition', message: 'Competition discipline does not match submission' });
+        }
+        if (competition.format && competition.format !== normalization.match.format) {
+          return res.status(400).send({ error: 'invalid_competition', message: 'Competition format does not match submission' });
+        }
+      }
+
       const timing = mapMatchTimingInput(parsed.data.timing);
       const statistics = mapMatchStatisticsInput(parsed.data.statistics);
       const segments = mapMatchSegmentsInput(parsed.data.segments);
@@ -378,7 +409,8 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         ladderKey,
         match: normalization.match,
         result,
-        eventId: parsed.data.event_id ?? null,
+        eventId,
+        competitionId: competition?.competitionId ?? parsed.data.competition_id ?? null,
         playerStates: players,
         ...(timing !== undefined ? { timing } : {}),
         ...(statistics !== undefined ? { statistics } : {}),
@@ -405,7 +437,8 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         match_id: matchId,
         organization_id: organization.organizationId,
         organization_slug: organization.slug,
-        event_id: parsed.data.event_id ?? null,
+        event_id: eventId,
+        competition_id: competition?.competitionId ?? parsed.data.competition_id ?? null,
         ratings: result.perPlayer.map((p) => {
           const ratingEventId = ratingEventByPlayer.get(p.playerId);
           if (!ratingEventId) {
@@ -445,8 +478,18 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
     }
 
-    const { organization_id, organization_slug, sport, player_id, event_id, cursor, limit, start_after, start_before } =
-      parsed.data;
+    const {
+      organization_id,
+      organization_slug,
+      sport,
+      player_id,
+      event_id,
+      competition_id,
+      cursor,
+      limit,
+      start_after,
+      start_before,
+    } = parsed.data;
 
     if (!(
       hasScope(req, 'matches:write') ||
@@ -471,6 +514,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         sport: sport ?? undefined,
         playerId: player_id ?? undefined,
         eventId: event_id ?? undefined,
+        competitionId: competition_id ?? undefined,
         cursor,
         limit,
         startAfter: start_after ?? undefined,
@@ -557,6 +601,21 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       }
       if (parsed.data.event_id !== undefined) {
         updateInput.eventId = parsed.data.event_id;
+      }
+      if (parsed.data.competition_id !== undefined) {
+        if (parsed.data.competition_id === null) {
+          updateInput.competitionId = null;
+        } else {
+          const competition = await store.getCompetitionById(parsed.data.competition_id);
+          if (!competition) {
+            return res.status(404).send({ error: 'competition_not_found' });
+          }
+          if (competition.organizationId !== organization.organizationId) {
+            return res.status(403).send({ error: 'competition_access_denied' });
+          }
+          updateInput.competitionId = competition.competitionId;
+          updateInput.eventId = competition.eventId;
+        }
       }
       const timingUpdate = mapMatchTimingInput(parsed.data.timing);
       if (timingUpdate !== undefined) {

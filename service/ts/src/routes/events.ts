@@ -15,9 +15,11 @@ import type {
   EventParticipantRecord,
   EventClassification,
   EventMediaLinks,
+  CompetitionRecord,
 } from '../store/index.js';
 import { EventLookupError, OrganizationLookupError, PlayerLookupError } from '../store/index.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
+import { toCompetitionResponse } from './helpers/competition-serializer.js';
 
 const EventTypeEnum = z.enum([
   'TOURNAMENT',
@@ -182,9 +184,14 @@ const serializeEventMediaLinks = (links?: EventMediaLinks | null) => {
   };
 };
 
-const toEventResponse = (event: EventRecord, organization: OrganizationRecord) => {
+const toEventResponse = (
+  event: EventRecord,
+  organization: OrganizationRecord,
+  options: { competitions?: CompetitionRecord[] } = {}
+) => {
   const classification = serializeEventClassification(event.classification);
   const mediaLinks = serializeEventMediaLinks(event.mediaLinks);
+  const competitions = options.competitions ?? [];
 
   const response: Record<string, unknown> = {
     event_id: event.eventId,
@@ -203,6 +210,7 @@ const toEventResponse = (event: EventRecord, organization: OrganizationRecord) =
     metadata: event.metadata ?? null,
     created_at: event.createdAt ?? null,
     updated_at: event.updatedAt ?? null,
+    competitions: competitions.map((competition) => toCompetitionResponse(competition, event)),
   };
 
   if (classification !== undefined) response.classification = classification;
@@ -271,7 +279,7 @@ export const registerEventRoutes = (app: Express, deps: EventRouteDeps) => {
         metadata: parsed.data.metadata ?? null,
       });
 
-      return res.status(201).send({ event: toEventResponse(event, organization) });
+      return res.status(201).send({ event: toEventResponse(event, organization, { competitions: [] }) });
     } catch (err) {
       if (err instanceof OrganizationLookupError) {
         return res.status(400).send({ error: 'invalid_organization', message: err.message });
@@ -323,8 +331,20 @@ export const registerEventRoutes = (app: Express, deps: EventRouteDeps) => {
         q: q ?? undefined,
       });
 
+      const competitionsByEvent = new Map<string, CompetitionRecord[]>();
+      await Promise.all(
+        result.items.map(async (event) => {
+          const competitions = await store.listCompetitions({ eventId: event.eventId });
+          competitionsByEvent.set(event.eventId, competitions.items);
+        })
+      );
+
       return res.send({
-        events: result.items.map((event) => toEventResponse(event, organization)),
+        events: result.items.map((event) =>
+          toEventResponse(event, organization, {
+            competitions: competitionsByEvent.get(event.eventId) ?? [],
+          })
+        ),
         next_cursor: result.nextCursor ?? null,
       });
     } catch (err) {
@@ -356,7 +376,11 @@ export const registerEventRoutes = (app: Express, deps: EventRouteDeps) => {
         errorMessage: 'Insufficient grants to read events',
       });
 
-      return res.send({ event: toEventResponse(event, organization) });
+      const competitions = await store.listCompetitions({ eventId: event.eventId });
+
+      return res.send({
+        event: toEventResponse(event, organization, { competitions: competitions.items }),
+      });
     } catch (err) {
       if (err instanceof AuthorizationError) {
         return res.status(err.status).send({ error: err.code, message: err.message });
@@ -413,7 +437,11 @@ export const registerEventRoutes = (app: Express, deps: EventRouteDeps) => {
         metadata: parsed.data.metadata ?? null,
       });
 
-      return res.send({ event: toEventResponse(updated, organization) });
+      const competitions = await store.listCompetitions({ eventId: updated.eventId });
+
+      return res.send({
+        event: toEventResponse(updated, organization, { competitions: competitions.items }),
+      });
     } catch (err) {
       if (err instanceof EventLookupError) {
         return res.status(404).send({ error: 'event_not_found', message: err.message });
@@ -494,10 +522,11 @@ export const registerEventRoutes = (app: Express, deps: EventRouteDeps) => {
         errorMessage: 'Insufficient grants to read event participants',
       });
 
+      const competitions = await store.listCompetitions({ eventId: event.eventId });
       const participants = await store.listEventParticipants(event.eventId);
 
       return res.send({
-        event: toEventResponse(event, organization),
+        event: toEventResponse(event, organization, { competitions: competitions.items }),
         participants: participants.items.map(toParticipantResponse),
       });
     } catch (err) {
