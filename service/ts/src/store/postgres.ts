@@ -21,7 +21,7 @@ import {
   pairSynergies,
   pairSynergyHistory,
   events,
-  eventParticipants,
+  competitionParticipants,
 } from '../db/schema.js';
 import type {
   EnsurePlayersResult,
@@ -71,14 +71,14 @@ import type {
   EventMediaLinks,
   EventListQuery,
   EventListResult,
-  EventParticipantUpsertInput,
-  EventParticipantRecord,
-  EventParticipantListResult,
   CompetitionCreateInput,
   CompetitionUpdateInput,
   CompetitionRecord,
   CompetitionListQuery,
   CompetitionListResult,
+  CompetitionParticipantUpsertInput,
+  CompetitionParticipantRecord,
+  CompetitionParticipantListResult,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
 import { buildLadderId, isDefaultRegion, toDbRegionId, DEFAULT_REGION } from './helpers.js';
@@ -172,22 +172,8 @@ type EventRow = {
   description: string | null;
   startDate: Date | null;
   endDate: Date | null;
-  classification: unknown | null;
   sanctioningBody: string | null;
   season: string | null;
-  purse: number | null;
-  purseCurrency: string | null;
-  mediaLinks: unknown | null;
-  metadata: unknown | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type EventParticipantRow = {
-  eventId: string;
-  playerId: string;
-  seed: number | null;
-  status: string | null;
   metadata: unknown | null;
   createdAt: Date;
   updatedAt: Date;
@@ -207,6 +193,20 @@ type CompetitionRow = {
   drawSize: number | null;
   startDate: Date | null;
   endDate: Date | null;
+  classification: unknown | null;
+  purse: number | null;
+  purseCurrency: string | null;
+  mediaLinks: unknown | null;
+  metadata: unknown | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type CompetitionParticipantRow = {
+  competitionId: string;
+  playerId: string;
+  seed: number | null;
+  status: string | null;
   metadata: unknown | null;
   createdAt: Date;
   updatedAt: Date;
@@ -312,12 +312,8 @@ export class PostgresStore implements RatingStore {
       description: row.description,
       startDate: row.startDate ? row.startDate.toISOString() : null,
       endDate: row.endDate ? row.endDate.toISOString() : null,
-      classification: (row.classification as EventClassification | null) ?? null,
       sanctioningBody: row.sanctioningBody,
       season: row.season,
-      purse: row.purse,
-      purseCurrency: row.purseCurrency,
-      mediaLinks: (row.mediaLinks as EventMediaLinks | null) ?? null,
       metadata: (row.metadata as Record<string, unknown> | null) ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
@@ -339,22 +335,28 @@ export class PostgresStore implements RatingStore {
       drawSize: row.drawSize ?? null,
       startDate: row.startDate ? row.startDate.toISOString() : null,
       endDate: row.endDate ? row.endDate.toISOString() : null,
+      classification: (row.classification as EventClassification | null) ?? null,
+      purse: row.purse,
+      purseCurrency: row.purseCurrency,
+      mediaLinks: (row.mediaLinks as EventMediaLinks | null) ?? null,
       metadata: (row.metadata as Record<string, unknown> | null) ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     } satisfies CompetitionRecord;
   }
 
-  private toEventParticipantRecord(row: EventParticipantRow): EventParticipantRecord {
+  private toCompetitionParticipantRecord(
+    row: CompetitionParticipantRow
+  ): CompetitionParticipantRecord {
     return {
-      eventId: row.eventId,
+      competitionId: row.competitionId,
       playerId: row.playerId,
       seed: row.seed,
       status: row.status,
       metadata: (row.metadata as Record<string, unknown> | null) ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
-    } satisfies EventParticipantRecord;
+    } satisfies CompetitionParticipantRecord;
   }
 
   private async getEventRowById(eventId: string, client = this.db): Promise<EventRow | null> {
@@ -368,12 +370,8 @@ export class PostgresStore implements RatingStore {
         description: events.description,
         startDate: events.startDate,
         endDate: events.endDate,
-        classification: events.classification,
         sanctioningBody: events.sanctioningBody,
         season: events.season,
-        purse: events.purse,
-        purseCurrency: events.purseCurrency,
-        mediaLinks: events.mediaLinks,
         metadata: events.metadata,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
@@ -395,12 +393,8 @@ export class PostgresStore implements RatingStore {
         description: events.description,
         startDate: events.startDate,
         endDate: events.endDate,
-        classification: events.classification,
         sanctioningBody: events.sanctioningBody,
         season: events.season,
-        purse: events.purse,
-        purseCurrency: events.purseCurrency,
-        mediaLinks: events.mediaLinks,
         metadata: events.metadata,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
@@ -429,6 +423,10 @@ export class PostgresStore implements RatingStore {
         drawSize: competitions.drawSize,
         startDate: competitions.startDate,
         endDate: competitions.endDate,
+        classification: competitions.classification,
+        purse: competitions.purse,
+        purseCurrency: competitions.purseCurrency,
+        mediaLinks: competitions.mediaLinks,
         metadata: competitions.metadata,
         createdAt: competitions.createdAt,
         updatedAt: competitions.updatedAt,
@@ -455,6 +453,10 @@ export class PostgresStore implements RatingStore {
         drawSize: competitions.drawSize,
         startDate: competitions.startDate,
         endDate: competitions.endDate,
+        classification: competitions.classification,
+        purse: competitions.purse,
+        purseCurrency: competitions.purseCurrency,
+        mediaLinks: competitions.mediaLinks,
         metadata: competitions.metadata,
         createdAt: competitions.createdAt,
         updatedAt: competitions.updatedAt,
@@ -463,14 +465,6 @@ export class PostgresStore implements RatingStore {
       .where(and(eq(competitions.eventId, eventId), eq(competitions.slug, slug)))
       .limit(1);
     return (rows as CompetitionRow[]).at(0) ?? null;
-  }
-
-  private async requireEventOrganization(eventId: string): Promise<string> {
-    const row = await this.getEventRowById(eventId);
-    if (!row) {
-      throw new EventLookupError(`Event not found: ${eventId}`);
-    }
-    return row.organizationId;
   }
 
   private async assertEventBelongsToOrg(eventId: string, organizationId: string, client = this.db) {
@@ -484,15 +478,15 @@ export class PostgresStore implements RatingStore {
     }
   }
 
-  private async ensureEventParticipantsTx(
+  private async ensureCompetitionParticipantsTx(
     client: any,
-    eventId: string,
+    competitionId: string,
     playerIds: string[]
   ): Promise<void> {
     if (!playerIds.length) return;
     const uniqueIds = Array.from(new Set(playerIds));
     const rows = uniqueIds.map((playerId) => ({
-      eventId,
+      competitionId,
       playerId,
       seed: null,
       status: null,
@@ -502,7 +496,7 @@ export class PostgresStore implements RatingStore {
     }));
 
     await client
-      .insert(eventParticipants)
+      .insert(competitionParticipants)
       .values(rows)
       .onConflictDoNothing();
   }
@@ -1228,12 +1222,8 @@ export class PostgresStore implements RatingStore {
         description: input.description ?? null,
         startDate: input.startDate ? new Date(input.startDate) : null,
         endDate: input.endDate ? new Date(input.endDate) : null,
-        classification: input.classification ?? null,
         sanctioningBody: input.sanctioningBody ?? null,
         season: input.season ?? null,
-        purse: input.purse ?? null,
-        purseCurrency: input.purseCurrency ?? null,
-        mediaLinks: input.mediaLinks ?? null,
         metadata: input.metadata ?? null,
         createdAt: now(),
         updatedAt: now(),
@@ -1247,12 +1237,8 @@ export class PostgresStore implements RatingStore {
         description: events.description,
         startDate: events.startDate,
         endDate: events.endDate,
-        classification: events.classification,
         sanctioningBody: events.sanctioningBody,
         season: events.season,
-        purse: events.purse,
-        purseCurrency: events.purseCurrency,
-        mediaLinks: events.mediaLinks,
         metadata: events.metadata,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
@@ -1285,12 +1271,8 @@ export class PostgresStore implements RatingStore {
     if (input.description !== undefined) payload.description = input.description;
     if (input.startDate !== undefined) payload.startDate = input.startDate ? new Date(input.startDate) : null;
     if (input.endDate !== undefined) payload.endDate = input.endDate ? new Date(input.endDate) : null;
-    if (input.classification !== undefined) payload.classification = input.classification ?? null;
     if (input.sanctioningBody !== undefined) payload.sanctioningBody = input.sanctioningBody ?? null;
     if (input.season !== undefined) payload.season = input.season ?? null;
-    if (input.purse !== undefined) payload.purse = input.purse ?? null;
-    if (input.purseCurrency !== undefined) payload.purseCurrency = input.purseCurrency ?? null;
-    if (input.mediaLinks !== undefined) payload.mediaLinks = input.mediaLinks ?? null;
     if (input.metadata !== undefined) payload.metadata = input.metadata ?? null;
     if (input.slug !== undefined) payload.slug = slug;
 
@@ -1307,12 +1289,8 @@ export class PostgresStore implements RatingStore {
         description: events.description,
         startDate: events.startDate,
         endDate: events.endDate,
-        classification: events.classification,
         sanctioningBody: events.sanctioningBody,
         season: events.season,
-        purse: events.purse,
-        purseCurrency: events.purseCurrency,
-        mediaLinks: events.mediaLinks,
         metadata: events.metadata,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
@@ -1351,12 +1329,8 @@ export class PostgresStore implements RatingStore {
         description: events.description,
         startDate: events.startDate,
         endDate: events.endDate,
-        classification: events.classification,
         sanctioningBody: events.sanctioningBody,
         season: events.season,
-        purse: events.purse,
-        purseCurrency: events.purseCurrency,
-        mediaLinks: events.mediaLinks,
         metadata: events.metadata,
         createdAt: events.createdAt,
         updatedAt: events.updatedAt,
@@ -1424,6 +1398,10 @@ export class PostgresStore implements RatingStore {
         drawSize: input.drawSize ?? null,
         startDate: input.startDate ? new Date(input.startDate) : null,
         endDate: input.endDate ? new Date(input.endDate) : null,
+        classification: input.classification ?? null,
+        purse: input.purse ?? null,
+        purseCurrency: input.purseCurrency ?? null,
+        mediaLinks: input.mediaLinks ?? null,
         metadata: input.metadata ?? null,
         createdAt: now(),
         updatedAt: now(),
@@ -1442,6 +1420,10 @@ export class PostgresStore implements RatingStore {
         drawSize: competitions.drawSize,
         startDate: competitions.startDate,
         endDate: competitions.endDate,
+        classification: competitions.classification,
+        purse: competitions.purse,
+        purseCurrency: competitions.purseCurrency,
+        mediaLinks: competitions.mediaLinks,
         metadata: competitions.metadata,
         createdAt: competitions.createdAt,
         updatedAt: competitions.updatedAt,
@@ -1482,6 +1464,10 @@ export class PostgresStore implements RatingStore {
     if (input.endDate !== undefined) {
       payload.endDate = input.endDate ? new Date(input.endDate) : null;
     }
+    if (input.classification !== undefined) payload.classification = input.classification ?? null;
+    if (input.purse !== undefined) payload.purse = input.purse ?? null;
+    if (input.purseCurrency !== undefined) payload.purseCurrency = input.purseCurrency ?? null;
+    if (input.mediaLinks !== undefined) payload.mediaLinks = input.mediaLinks ?? null;
     if (input.metadata !== undefined) payload.metadata = input.metadata ?? null;
     if (slug !== existing.slug) payload.slug = slug;
 
@@ -1503,6 +1489,10 @@ export class PostgresStore implements RatingStore {
         drawSize: competitions.drawSize,
         startDate: competitions.startDate,
         endDate: competitions.endDate,
+        classification: competitions.classification,
+        purse: competitions.purse,
+        purseCurrency: competitions.purseCurrency,
+        mediaLinks: competitions.mediaLinks,
         metadata: competitions.metadata,
         createdAt: competitions.createdAt,
         updatedAt: competitions.updatedAt,
@@ -1527,6 +1517,10 @@ export class PostgresStore implements RatingStore {
         drawSize: competitions.drawSize,
         startDate: competitions.startDate,
         endDate: competitions.endDate,
+        classification: competitions.classification,
+        purse: competitions.purse,
+        purseCurrency: competitions.purseCurrency,
+        mediaLinks: competitions.mediaLinks,
         metadata: competitions.metadata,
         createdAt: competitions.createdAt,
         updatedAt: competitions.updatedAt,
@@ -1550,15 +1544,21 @@ export class PostgresStore implements RatingStore {
     return row ? this.toCompetitionRecord(row) : null;
   }
 
-  async upsertEventParticipant(input: EventParticipantUpsertInput): Promise<EventParticipantRecord> {
-    const organizationId = await this.requireEventOrganization(input.eventId);
-    await this.assertPlayerInOrganization(input.playerId, organizationId);
+  async upsertCompetitionParticipant(
+    input: CompetitionParticipantUpsertInput
+  ): Promise<CompetitionParticipantRecord> {
+    const competition = await this.getCompetitionRowById(input.competitionId);
+    if (!competition) {
+      throw new EventLookupError(`Competition not found: ${input.competitionId}`);
+    }
+
+    await this.assertPlayerInOrganization(input.playerId, competition.organizationId);
 
     const nowTs = now();
     const [row] = await this.db
-      .insert(eventParticipants)
+      .insert(competitionParticipants)
       .values({
-        eventId: input.eventId,
+        competitionId: input.competitionId,
         playerId: input.playerId,
         seed: input.seed ?? null,
         status: input.status ?? null,
@@ -1567,7 +1567,7 @@ export class PostgresStore implements RatingStore {
         updatedAt: nowTs,
       })
       .onConflictDoUpdate({
-        target: [eventParticipants.eventId, eventParticipants.playerId],
+        target: [competitionParticipants.competitionId, competitionParticipants.playerId],
         set: {
           seed: input.seed ?? null,
           status: input.status ?? null,
@@ -1576,51 +1576,62 @@ export class PostgresStore implements RatingStore {
         },
       })
       .returning({
-        eventId: eventParticipants.eventId,
-        playerId: eventParticipants.playerId,
-        seed: eventParticipants.seed,
-        status: eventParticipants.status,
-        metadata: eventParticipants.metadata,
-        createdAt: eventParticipants.createdAt,
-        updatedAt: eventParticipants.updatedAt,
+        competitionId: competitionParticipants.competitionId,
+        playerId: competitionParticipants.playerId,
+        seed: competitionParticipants.seed,
+        status: competitionParticipants.status,
+        metadata: competitionParticipants.metadata,
+        createdAt: competitionParticipants.createdAt,
+        updatedAt: competitionParticipants.updatedAt,
       });
 
-    return this.toEventParticipantRecord(row as EventParticipantRow);
+    return this.toCompetitionParticipantRecord(row as CompetitionParticipantRow);
   }
 
-  async listEventParticipants(eventId: string): Promise<EventParticipantListResult> {
+  async listCompetitionParticipants(
+    competitionId: string
+  ): Promise<CompetitionParticipantListResult> {
+    const competition = await this.getCompetitionRowById(competitionId);
+    if (!competition) {
+      throw new EventLookupError(`Competition not found: ${competitionId}`);
+    }
+
     const rows = (await this.db
       .select({
-        eventId: eventParticipants.eventId,
-        playerId: eventParticipants.playerId,
-        seed: eventParticipants.seed,
-        status: eventParticipants.status,
-        metadata: eventParticipants.metadata,
-        createdAt: eventParticipants.createdAt,
-        updatedAt: eventParticipants.updatedAt,
+        competitionId: competitionParticipants.competitionId,
+        playerId: competitionParticipants.playerId,
+        seed: competitionParticipants.seed,
+        status: competitionParticipants.status,
+        metadata: competitionParticipants.metadata,
+        createdAt: competitionParticipants.createdAt,
+        updatedAt: competitionParticipants.updatedAt,
       })
-      .from(eventParticipants)
-      .where(eq(eventParticipants.eventId, eventId))
-      .orderBy(eventParticipants.playerId)) as EventParticipantRow[];
+      .from(competitionParticipants)
+      .where(eq(competitionParticipants.competitionId, competitionId))
+      .orderBy(competitionParticipants.playerId)) as CompetitionParticipantRow[];
 
-    return { items: rows.map((row) => this.toEventParticipantRecord(row)) };
+    return { items: rows.map((row) => this.toCompetitionParticipantRecord(row)) };
   }
 
-  async ensureEventParticipants(eventId: string, playerIds: string[]): Promise<void> {
+  async ensureCompetitionParticipants(competitionId: string, playerIds: string[]): Promise<void> {
     if (!playerIds.length) return;
-    const organizationId = await this.requireEventOrganization(eventId);
+    const competition = await this.getCompetitionRowById(competitionId);
+    if (!competition) {
+      throw new EventLookupError(`Competition not found: ${competitionId}`);
+    }
+
     const uniqueIds = Array.from(new Set(playerIds));
     const validRows = (await this.db
       .select({ playerId: players.playerId })
       .from(players)
       .where(
-        and(eq(players.organizationId, organizationId), inArray(players.playerId, uniqueIds))
+        and(eq(players.organizationId, competition.organizationId), inArray(players.playerId, uniqueIds))
       )) as Array<{ playerId: string }>;
 
     const validIds = validRows.map((row) => row.playerId);
     if (!validIds.length) return;
 
-    await this.ensureEventParticipantsTx(this.db, eventId, validIds);
+    await this.ensureCompetitionParticipantsTx(this.db, competitionId, validIds);
   }
 
   async createPlayer(input: PlayerCreateInput): Promise<PlayerRecord> {
@@ -2156,8 +2167,8 @@ export class PostgresStore implements RatingStore {
         });
       }
 
-      if (eventId) {
-        await this.ensureEventParticipantsTx(tx, eventId, Array.from(playerIds));
+      if (competitionId) {
+        await this.ensureCompetitionParticipantsTx(tx, competitionId, Array.from(playerIds));
       }
     });
 
@@ -2186,7 +2197,7 @@ export class PostgresStore implements RatingStore {
     }
 
     const updates: Record<string, any> = {};
-    let ensureEventId: string | null = null;
+    let ensureCompetitionId: string | null = null;
 
     if (input.startTime !== undefined) {
       const date = new Date(input.startTime);
@@ -2222,7 +2233,6 @@ export class PostgresStore implements RatingStore {
       } else {
         await this.assertEventBelongsToOrg(input.eventId, organizationId);
         updates.eventId = input.eventId;
-        ensureEventId = input.eventId;
       }
     }
 
@@ -2236,7 +2246,7 @@ export class PostgresStore implements RatingStore {
         }
         updates.competitionId = input.competitionId;
         updates.eventId = competition.eventId;
-        ensureEventId = competition.eventId;
+        ensureCompetitionId = input.competitionId;
       }
     }
 
@@ -2262,14 +2272,14 @@ export class PostgresStore implements RatingStore {
       }
     }
 
-    if (ensureEventId) {
+    if (ensureCompetitionId) {
       const playerRows = (await this.db
         .select({ playerId: matchSidePlayers.playerId })
         .from(matchSidePlayers)
         .innerJoin(matchSides, eq(matchSides.id, matchSidePlayers.matchSideId))
         .where(eq(matchSides.matchId, matchId))) as Array<{ playerId: string }>;
       const playerIds = playerRows.map((row) => row.playerId);
-      await this.ensureEventParticipants(ensureEventId, playerIds);
+      await this.ensureCompetitionParticipants(ensureCompetitionId, playerIds);
     }
 
     const summary = await this.getMatchSummaryById(matchId);

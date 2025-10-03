@@ -71,12 +71,8 @@ export interface EventRecord {
   description?: string | null;
   startDate?: string | null;
   endDate?: string | null;
-  classification?: EventClassification | null;
   sanctioningBody?: string | null;
   season?: string | null;
-  purse?: number | null;
-  purseCurrency?: string | null;
-  mediaLinks?: EventMediaLinks | null;
   metadata?: Record<string, unknown> | null;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -90,12 +86,8 @@ export interface EventCreateInput {
   description?: string | null;
   startDate?: string | null;
   endDate?: string | null;
-  classification?: EventClassification | null;
   sanctioningBody?: string | null;
   season?: string | null;
-  purse?: number | null;
-  purseCurrency?: string | null;
-  mediaLinks?: EventMediaLinks | null;
   metadata?: Record<string, unknown> | null;
 }
 
@@ -106,12 +98,8 @@ export interface EventUpdateInput {
   description?: string | null;
   startDate?: string | null;
   endDate?: string | null;
-  classification?: EventClassification | null;
   sanctioningBody?: string | null;
   season?: string | null;
-  purse?: number | null;
-  purseCurrency?: string | null;
-  mediaLinks?: EventMediaLinks | null;
   metadata?: Record<string, unknown> | null;
 }
 
@@ -126,26 +114,4 @@ export interface EventListQuery {
 export interface EventListResult {
   items: EventRecord[];
   nextCursor?: string;
-}
-
-export interface EventParticipantRecord {
-  eventId: string;
-  playerId: string;
-  seed?: number | null;
-  status?: string | null;
-  metadata?: Record<string, unknown> | null;
-  createdAt?: string | null;
-  updatedAt?: string | null;
-}
-
-export interface EventParticipantUpsertInput {
-  eventId: string;
-  playerId: string;
-  seed?: number | null;
-  status?: string | null;
-  metadata?: Record<string, unknown> | null;
-}
-
-export interface EventParticipantListResult {
-  items: EventParticipantRecord[];
 }

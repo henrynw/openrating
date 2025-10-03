@@ -33,9 +33,6 @@ import type {
   EventRecord,
   EventListQuery,
   EventListResult,
-  EventParticipantUpsertInput,
-  EventParticipantRecord,
-  EventParticipantListResult,
 } from './events.js';
 import type {
   CompetitionCreateInput,
@@ -43,6 +40,9 @@ import type {
   CompetitionRecord,
   CompetitionListQuery,
   CompetitionListResult,
+  CompetitionParticipantUpsertInput,
+  CompetitionParticipantRecord,
+  CompetitionParticipantListResult,
 } from './competitions.js';
 
 export interface RatingStore {
@@ -81,8 +81,8 @@ export interface RatingStore {
   listCompetitions(query: CompetitionListQuery): Promise<CompetitionListResult>;
   getCompetitionById(competitionId: string): Promise<CompetitionRecord | null>;
   getCompetitionBySlug(eventId: string, slug: string): Promise<CompetitionRecord | null>;
-  upsertEventParticipant(input: EventParticipantUpsertInput): Promise<EventParticipantRecord>;
-  listEventParticipants(eventId: string): Promise<EventParticipantListResult>;
-  ensureEventParticipants(eventId: string, playerIds: string[]): Promise<void>;
+  upsertCompetitionParticipant(input: CompetitionParticipantUpsertInput): Promise<CompetitionParticipantRecord>;
+  listCompetitionParticipants(competitionId: string): Promise<CompetitionParticipantListResult>;
+  ensureCompetitionParticipants(competitionId: string, playerIds: string[]): Promise<void>;
   runNightlyStabilization(options?: NightlyStabilizationOptions): Promise<void>;
 }

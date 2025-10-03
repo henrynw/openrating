@@ -93,12 +93,8 @@ export const events = pgTable('events', {
   description: text('description'),
   startDate: timestamp('start_date', { withTimezone: true }),
   endDate: timestamp('end_date', { withTimezone: true }),
-  classification: jsonb('classification'),
   sanctioningBody: text('sanctioning_body'),
   season: text('season'),
-  purse: doublePrecision('purse'),
-  purseCurrency: text('purse_currency'),
-  mediaLinks: jsonb('media_links'),
   metadata: jsonb('metadata'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -124,6 +120,10 @@ export const competitions = pgTable('competitions', {
   drawSize: integer('draw_size'),
   startDate: timestamp('start_date', { withTimezone: true }),
   endDate: timestamp('end_date', { withTimezone: true }),
+  classification: jsonb('classification'),
+  purse: doublePrecision('purse'),
+  purseCurrency: text('purse_currency'),
+  mediaLinks: jsonb('media_links'),
   metadata: jsonb('metadata'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -278,8 +278,8 @@ export const playerRatingHistory = pgTable('player_rating_history', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const eventParticipants = pgTable('event_participants', {
-  eventId: text('event_id').references(() => events.eventId, {
+export const competitionParticipants = pgTable('competition_participants', {
+  competitionId: text('competition_id').references(() => competitions.competitionId, {
     onDelete: 'cascade',
   }).notNull(),
   playerId: text('player_id').references(() => players.playerId, {
@@ -291,7 +291,7 @@ export const eventParticipants = pgTable('event_participants', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table: any) => ({
-  pk: primaryKey(table.eventId, table.playerId),
+  pk: primaryKey(table.competitionId, table.playerId),
 }));
 
 export const pairSynergies = pgTable('pair_synergies', {

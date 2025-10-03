@@ -761,50 +761,6 @@ paths:
                     $ref: '#/components/schemas/Event'
         '404':
           description: Event not found
-  /v1/events/{event_id}/participants:
-    post:
-      tags: [Events]
-      summary: Upsert an event participant
-      parameters:
-        - in: path
-          name: event_id
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/EventParticipantRequest'
-      responses:
-        '201':
-          description: Participant ensured
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  participant:
-                    $ref: '#/components/schemas/EventParticipant'
-        '404':
-          description: Event not found
-    get:
-      tags: [Events]
-      summary: List participants for an event
-      parameters:
-        - in: path
-          name: event_id
-          required: true
-          schema: { type: string }
-      responses:
-        '200':
-          description: Event participants
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EventParticipantListResponse'
-        '404':
-          description: Event not found
   /v1/events/{event_id}/competitions:
     post:
       tags: [Competitions]
@@ -899,6 +855,51 @@ paths:
                     $ref: '#/components/schemas/Competition'
         '400':
           description: Invalid request
+        '404':
+          description: Competition not found
+
+  /v1/competitions/{competition_id}/participants:
+    post:
+      tags: [Competitions]
+      summary: Upsert a competition participant
+      parameters:
+        - in: path
+          name: competition_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompetitionParticipantRequest'
+      responses:
+        '201':
+          description: Participant ensured
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  participant:
+                    $ref: '#/components/schemas/CompetitionParticipant'
+        '404':
+          description: Competition not found
+    get:
+      tags: [Competitions]
+      summary: List participants for a competition
+      parameters:
+        - in: path
+          name: competition_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Competition participants
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompetitionParticipantListResponse'
         '404':
           description: Competition not found
 
@@ -1410,19 +1411,10 @@ components:
         end_date:
           type: [string, 'null']
           format: date-time
-        classification:
-          $ref: '#/components/schemas/EventClassification'
         sanctioning_body:
           type: [string, 'null']
         season:
           type: [string, 'null']
-        purse:
-          type: [number, 'null']
-        purse_currency:
-          type: [string, 'null']
-          description: ISO-4217 code representing the purse currency.
-        media_links:
-          $ref: '#/components/schemas/EventMediaLinks'
         metadata:
           type: [object, 'null']
           additionalProperties: true
@@ -1456,18 +1448,10 @@ components:
         end_date:
           type: [string, 'null']
           format: date-time
-        classification:
-          $ref: '#/components/schemas/EventClassification'
         sanctioning_body:
           type: [string, 'null']
         season:
           type: [string, 'null']
-        purse:
-          type: [number, 'null']
-        purse_currency:
-          type: [string, 'null']
-        media_links:
-          $ref: '#/components/schemas/EventMediaLinks'
         metadata:
           type: [object, 'null']
           additionalProperties: true
@@ -1487,18 +1471,10 @@ components:
         end_date:
           type: [string, 'null']
           format: date-time
-        classification:
-          $ref: '#/components/schemas/EventClassification'
         sanctioning_body:
           type: [string, 'null']
         season:
           type: [string, 'null']
-        purse:
-          type: [number, 'null']
-        purse_currency:
-          type: [string, 'null']
-        media_links:
-          $ref: '#/components/schemas/EventMediaLinks'
         metadata:
           type: [object, 'null']
           additionalProperties: true
@@ -1531,6 +1507,14 @@ components:
         end_date:
           type: [string, 'null']
           format: date-time
+        classification:
+          $ref: '#/components/schemas/EventClassification'
+        purse:
+          type: [number, 'null']
+        purse_currency:
+          type: [string, 'null']
+        media_links:
+          $ref: '#/components/schemas/EventMediaLinks'
         metadata:
           type: [object, 'null']
           additionalProperties: true
@@ -1566,6 +1550,14 @@ components:
         end_date:
           type: [string, 'null']
           format: date-time
+        classification:
+          $ref: '#/components/schemas/EventClassification'
+        purse:
+          type: [number, 'null']
+        purse_currency:
+          type: [string, 'null']
+        media_links:
+          $ref: '#/components/schemas/EventMediaLinks'
         metadata:
           type: [object, 'null']
           additionalProperties: true
@@ -1594,6 +1586,14 @@ components:
         end_date:
           type: [string, 'null']
           format: date-time
+        classification:
+          $ref: '#/components/schemas/EventClassification'
+        purse:
+          type: [number, 'null']
+        purse_currency:
+          type: [string, 'null']
+        media_links:
+          $ref: '#/components/schemas/EventMediaLinks'
         metadata:
           type: [object, 'null']
           additionalProperties: true
@@ -1604,6 +1604,45 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Competition'
+    CompetitionParticipant:
+      type: object
+      properties:
+        competition_id: { type: string }
+        player_id: { type: string }
+        seed:
+          type: [integer, 'null']
+        status:
+          type: [string, 'null']
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+        created_at:
+          type: [string, 'null']
+          format: date-time
+        updated_at:
+          type: [string, 'null']
+          format: date-time
+    CompetitionParticipantRequest:
+      type: object
+      required: [player_id]
+      properties:
+        player_id: { type: string }
+        seed:
+          type: [integer, 'null']
+        status:
+          type: [string, 'null']
+        metadata:
+          type: [object, 'null']
+          additionalProperties: true
+    CompetitionParticipantListResponse:
+      type: object
+      properties:
+        competition:
+          $ref: '#/components/schemas/Competition'
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompetitionParticipant'
     EventClassification:
       type: object
       description: Structured hierarchy data describing the competitive level of an event.
@@ -1651,45 +1690,6 @@ components:
             $ref: '#/components/schemas/Event'
         next_cursor:
           type: [string, 'null']
-    EventParticipant:
-      type: object
-      properties:
-        event_id: { type: string }
-        player_id: { type: string }
-        seed:
-          type: [integer, 'null']
-        status:
-          type: [string, 'null']
-        metadata:
-          type: [object, 'null']
-          additionalProperties: true
-        created_at:
-          type: [string, 'null']
-          format: date-time
-        updated_at:
-          type: [string, 'null']
-          format: date-time
-    EventParticipantRequest:
-      type: object
-      required: [player_id]
-      properties:
-        player_id: { type: string }
-        seed:
-          type: [integer, 'null']
-        status:
-          type: [string, 'null']
-        metadata:
-          type: [object, 'null']
-          additionalProperties: true
-    EventParticipantListResponse:
-      type: object
-      properties:
-        event:
-          $ref: '#/components/schemas/Event'
-        participants:
-          type: array
-          items:
-            $ref: '#/components/schemas/EventParticipant'
     MatchStatus:
       type: string
       description: Lifecycle status for a match.

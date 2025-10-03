@@ -35,9 +35,6 @@ import type {
   EventRecord,
   EventClassification,
   EventMediaLinks,
-  EventParticipantUpsertInput,
-  EventParticipantRecord,
-  EventParticipantListResult,
   RatingEventListQuery,
   RatingEventListResult,
   RatingEventRecord,
@@ -54,6 +51,9 @@ import type {
   CompetitionRecord,
   CompetitionListQuery,
   CompetitionListResult,
+  CompetitionParticipantUpsertInput,
+  CompetitionParticipantRecord,
+  CompetitionParticipantListResult,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
 import { buildLadderId, DEFAULT_REGION } from './helpers.js';
@@ -75,22 +75,8 @@ interface MemoryEventRecord {
   description?: string | null;
   startDate?: Date | null;
   endDate?: Date | null;
-  classification?: EventClassification | null;
   sanctioningBody?: string | null;
   season?: string | null;
-  purse?: number | null;
-  purseCurrency?: string | null;
-  mediaLinks?: EventMediaLinks | null;
-  metadata?: Record<string, unknown> | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-interface MemoryEventParticipant {
-  eventId: string;
-  playerId: string;
-  seed?: number | null;
-  status?: string | null;
   metadata?: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
@@ -110,6 +96,20 @@ interface MemoryCompetitionRecord {
   drawSize?: number | null;
   startDate?: Date | null;
   endDate?: Date | null;
+  classification?: EventClassification | null;
+  purse?: number | null;
+  purseCurrency?: string | null;
+  mediaLinks?: EventMediaLinks | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface MemoryCompetitionParticipant {
+  competitionId: string;
+  playerId: string;
+  seed?: number | null;
+  status?: string | null;
   metadata?: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
@@ -237,7 +237,7 @@ export class MemoryStore implements RatingStore {
   private organizationsBySlug = new Map<string, string>();
   private events = new Map<string, MemoryEventRecord>();
   private eventsBySlug = new Map<string, string>();
-  private eventParticipants = new Map<string, Map<string, MemoryEventParticipant>>();
+  private competitionParticipants = new Map<string, Map<string, MemoryCompetitionParticipant>>();
   private competitions = new Map<string, MemoryCompetitionRecord>();
   private competitionsBySlug = new Map<string, string>();
   private players = new Map<string, MemoryPlayerRecord>();
@@ -561,8 +561,8 @@ export class MemoryStore implements RatingStore {
       }
     }
 
-    if (eventId) {
-      await this.ensureEventParticipants(eventId, Array.from(playerIds));
+    if (competitionId) {
+      await this.ensureCompetitionParticipants(competitionId, Array.from(playerIds));
     }
 
     const pairTimestamp = new Date(params.submissionMeta.startTime ?? new Date().toISOString());
@@ -635,10 +635,6 @@ export class MemoryStore implements RatingStore {
           throw new EventLookupError(`Event not found for organization ${organizationId}`);
         }
         match.eventId = input.eventId;
-        await this.ensureEventParticipants(input.eventId, [
-          ...match.match.sides.A.players,
-          ...match.match.sides.B.players,
-        ]);
       }
     }
 
@@ -652,7 +648,7 @@ export class MemoryStore implements RatingStore {
         }
         match.competitionId = input.competitionId;
         match.eventId = competition.eventId;
-        await this.ensureEventParticipants(competition.eventId, [
+        await this.ensureCompetitionParticipants(input.competitionId, [
           ...match.match.sides.A.players,
           ...match.match.sides.B.players,
         ]);
@@ -1216,12 +1212,8 @@ export class MemoryStore implements RatingStore {
       description: input.description ?? null,
       startDate: input.startDate ? new Date(input.startDate) : null,
       endDate: input.endDate ? new Date(input.endDate) : null,
-      classification: input.classification ?? null,
       sanctioningBody: input.sanctioningBody ?? null,
       season: input.season ?? null,
-      purse: input.purse ?? null,
-      purseCurrency: input.purseCurrency ?? null,
-      mediaLinks: input.mediaLinks ?? null,
       metadata: input.metadata ?? null,
       createdAt: now,
       updatedAt: now,
@@ -1261,23 +1253,11 @@ export class MemoryStore implements RatingStore {
     if (input.endDate !== undefined) {
       event.endDate = input.endDate ? new Date(input.endDate) : null;
     }
-    if (input.classification !== undefined) {
-      event.classification = input.classification ?? null;
-    }
     if (input.sanctioningBody !== undefined) {
       event.sanctioningBody = input.sanctioningBody ?? null;
     }
     if (input.season !== undefined) {
       event.season = input.season ?? null;
-    }
-    if (input.purse !== undefined) {
-      event.purse = input.purse ?? null;
-    }
-    if (input.purseCurrency !== undefined) {
-      event.purseCurrency = input.purseCurrency ?? null;
-    }
-    if (input.mediaLinks !== undefined) {
-      event.mediaLinks = input.mediaLinks ?? null;
     }
     if (input.metadata !== undefined) event.metadata = input.metadata;
 
@@ -1368,6 +1348,10 @@ export class MemoryStore implements RatingStore {
       drawSize: input.drawSize ?? null,
       startDate: input.startDate ? new Date(input.startDate) : null,
       endDate: input.endDate ? new Date(input.endDate) : null,
+      classification: input.classification ?? null,
+      purse: input.purse ?? null,
+      purseCurrency: input.purseCurrency ?? null,
+      mediaLinks: input.mediaLinks ?? null,
       metadata: input.metadata ?? null,
       createdAt: now,
       updatedAt: now,
@@ -1411,6 +1395,18 @@ export class MemoryStore implements RatingStore {
     if (input.endDate !== undefined) {
       competition.endDate = input.endDate ? new Date(input.endDate) : null;
     }
+    if (input.classification !== undefined) {
+      competition.classification = input.classification ?? null;
+    }
+    if (input.purse !== undefined) {
+      competition.purse = input.purse ?? null;
+    }
+    if (input.purseCurrency !== undefined) {
+      competition.purseCurrency = input.purseCurrency ?? null;
+    }
+    if (input.mediaLinks !== undefined) {
+      competition.mediaLinks = input.mediaLinks ?? null;
+    }
     if (input.metadata !== undefined) competition.metadata = input.metadata ?? null;
 
     competition.updatedAt = new Date();
@@ -1437,21 +1433,25 @@ export class MemoryStore implements RatingStore {
     return this.getCompetitionById(id);
   }
 
-  async upsertEventParticipant(input: EventParticipantUpsertInput): Promise<EventParticipantRecord> {
-    const event = this.events.get(input.eventId);
-    if (!event) {
-      throw new EventLookupError(`Event not found: ${input.eventId}`);
+  async upsertCompetitionParticipant(
+    input: CompetitionParticipantUpsertInput
+  ): Promise<CompetitionParticipantRecord> {
+    const competition = this.competitions.get(input.competitionId);
+    if (!competition) {
+      throw new EventLookupError(`Competition not found: ${input.competitionId}`);
     }
 
     const player = this.players.get(input.playerId);
     if (!player) {
       throw new PlayerLookupError(`Player not found: ${input.playerId}`);
     }
-    if (player.organizationId !== event.organizationId) {
-      throw new PlayerLookupError(`Player ${input.playerId} does not belong to organization ${event.organizationId}`);
+    if (player.organizationId !== competition.organizationId) {
+      throw new PlayerLookupError(
+        `Player ${input.playerId} does not belong to organization ${competition.organizationId}`
+      );
     }
 
-    const bucket = this.getEventParticipantBucket(input.eventId, true)!;
+    const bucket = this.getCompetitionParticipantBucket(input.competitionId, true)!;
     const now = new Date();
     const existing = bucket.get(input.playerId);
     if (existing) {
@@ -1460,8 +1460,8 @@ export class MemoryStore implements RatingStore {
       if (input.metadata !== undefined) existing.metadata = input.metadata;
       existing.updatedAt = now;
       return {
-        eventId: existing.eventId,
-        playerId: existing.playerId,
+        competitionId: existing.competitionId,
+         playerId: existing.playerId,
         seed: existing.seed ?? null,
         status: existing.status ?? null,
         metadata: existing.metadata ?? null,
@@ -1470,8 +1470,8 @@ export class MemoryStore implements RatingStore {
       };
     }
 
-    const participant: MemoryEventParticipant = {
-      eventId: input.eventId,
+    const participant: MemoryCompetitionParticipant = {
+      competitionId: input.competitionId,
       playerId: input.playerId,
       seed: input.seed ?? null,
       status: input.status ?? null,
@@ -1482,7 +1482,7 @@ export class MemoryStore implements RatingStore {
     bucket.set(input.playerId, participant);
 
     return {
-      eventId: participant.eventId,
+      competitionId: participant.competitionId,
       playerId: participant.playerId,
       seed: participant.seed ?? null,
       status: participant.status ?? null,
@@ -1492,41 +1492,44 @@ export class MemoryStore implements RatingStore {
     };
   }
 
-  async listEventParticipants(eventId: string): Promise<EventParticipantListResult> {
-    const bucket = this.getEventParticipantBucket(eventId);
+  async listCompetitionParticipants(competitionId: string): Promise<CompetitionParticipantListResult> {
+    const bucket = this.getCompetitionParticipantBucket(competitionId);
     if (!bucket) {
       return { items: [] };
     }
-    const items: EventParticipantRecord[] = Array.from(bucket.values()).map((participant) => ({
-      eventId: participant.eventId,
-      playerId: participant.playerId,
-      seed: participant.seed ?? null,
-      status: participant.status ?? null,
-      metadata: participant.metadata ?? null,
-      createdAt: participant.createdAt.toISOString(),
-      updatedAt: participant.updatedAt.toISOString(),
-    }));
+    const items: CompetitionParticipantRecord[] = Array.from(
+      bucket.values(),
+      (participant): CompetitionParticipantRecord => ({
+        competitionId: participant.competitionId,
+        playerId: participant.playerId,
+        seed: participant.seed ?? null,
+        status: participant.status ?? null,
+        metadata: participant.metadata ?? null,
+        createdAt: participant.createdAt.toISOString(),
+        updatedAt: participant.updatedAt.toISOString(),
+      })
+    );
     items.sort((a, b) => a.playerId.localeCompare(b.playerId));
     return { items };
   }
 
-  async ensureEventParticipants(eventId: string, playerIds: string[]): Promise<void> {
+  async ensureCompetitionParticipants(competitionId: string, playerIds: string[]): Promise<void> {
     if (!playerIds.length) return;
-    const event = this.events.get(eventId);
-    if (!event) {
-      throw new EventLookupError(`Event not found: ${eventId}`);
+    const competition = this.competitions.get(competitionId);
+    if (!competition) {
+      throw new EventLookupError(`Competition not found: ${competitionId}`);
     }
 
     for (const playerId of playerIds) {
       const player = this.players.get(playerId);
-      if (!player || player.organizationId !== event.organizationId) {
+      if (!player || player.organizationId !== competition.organizationId) {
         continue;
       }
-      const bucket = this.getEventParticipantBucket(eventId, true)!;
+      const bucket = this.getCompetitionParticipantBucket(competitionId, true)!;
       if (!bucket.has(playerId)) {
         const now = new Date();
         bucket.set(playerId, {
-          eventId,
+          competitionId,
           playerId,
           seed: null,
           status: null,
@@ -1554,11 +1557,11 @@ export class MemoryStore implements RatingStore {
     return events;
   }
 
-  private getEventParticipantBucket(eventId: string, create = false) {
-    let bucket = this.eventParticipants.get(eventId);
+  private getCompetitionParticipantBucket(competitionId: string, create = false) {
+    let bucket = this.competitionParticipants.get(competitionId);
     if (!bucket && create) {
-      bucket = new Map<string, MemoryEventParticipant>();
-      this.eventParticipants.set(eventId, bucket);
+      bucket = new Map<string, MemoryCompetitionParticipant>();
+      this.competitionParticipants.set(competitionId, bucket);
     }
     return bucket;
   }
@@ -1573,12 +1576,8 @@ export class MemoryStore implements RatingStore {
       description: event.description ?? null,
       startDate: event.startDate ? event.startDate.toISOString() : null,
       endDate: event.endDate ? event.endDate.toISOString() : null,
-      classification: event.classification ?? null,
       sanctioningBody: event.sanctioningBody ?? null,
       season: event.season ?? null,
-      purse: event.purse ?? null,
-      purseCurrency: event.purseCurrency ?? null,
-      mediaLinks: event.mediaLinks ?? null,
       metadata: event.metadata ?? null,
       createdAt: event.createdAt.toISOString(),
       updatedAt: event.updatedAt.toISOString(),
