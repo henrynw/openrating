@@ -24,6 +24,8 @@ export interface RatingEventListQuery {
   matchId?: string;
   since?: string;
   until?: string;
+  organizationId?: string;
+  scope?: string | null;
   cursor?: string;
   limit?: number;
 }
@@ -34,7 +36,10 @@ export interface RatingEventListResult {
 }
 
 export interface RatingSnapshot {
-  organizationId: string;
+  sport: LadderKey['sport'];
+  discipline: LadderKey['discipline'];
+  scope?: string | null;
+  organizationId?: string | null;
   playerId: string;
   ladderId: string;
   asOf: string;
@@ -64,11 +69,10 @@ export interface LeaderboardEntry extends LeaderboardPlayerInfo {
 }
 
 export interface LeaderboardQuery {
-  organizationId: string;
   sport: LadderKey['sport'];
   discipline: LadderKey['discipline'];
-  tier?: string | null;
-  regionId?: string | null;
+  scope?: string | null;
+  organizationId?: string | null;
   limit?: number;
 }
 

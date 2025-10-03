@@ -373,10 +373,12 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       await enforceMatchWrite(req, {
         organizationId: organization.organizationId,
         sport: normalization.match.sport,
-        regionId: ladderKey.regionId,
+        regionId: ladderKey.regionId ?? 'GLOBAL',
       });
 
-      const { ladderId, players } = await store.ensurePlayers(uniquePlayerIds, ladderKey);
+      const { ladderId, players } = await store.ensurePlayers(uniquePlayerIds, ladderKey, {
+        organizationId: organization.organizationId,
+      });
 
       const pairDescriptors: Array<{ pairId: string; players: string[] }> = [];
       const collectPair = (sidePlayers: string[]) => {

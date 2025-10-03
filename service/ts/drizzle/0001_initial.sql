@@ -56,18 +56,14 @@ CREATE TABLE IF NOT EXISTS players (
 
 CREATE TABLE IF NOT EXISTS rating_ladders (
   ladder_id TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL REFERENCES organizations(organization_id) ON DELETE CASCADE,
   sport TEXT NOT NULL REFERENCES sports(sport_id) ON DELETE RESTRICT,
   discipline TEXT NOT NULL,
-  format TEXT NOT NULL,
-  tier TEXT NOT NULL DEFAULT 'UNSPECIFIED',
-  region_id TEXT REFERENCES regions(region_id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS rating_ladders_org_format_idx
-  ON rating_ladders (organization_id, sport, discipline, format, tier, COALESCE(region_id, 'GLOBAL'));
+CREATE UNIQUE INDEX IF NOT EXISTS rating_ladders_sport_discipline_idx
+  ON rating_ladders (sport, discipline);
 
 CREATE TABLE IF NOT EXISTS matches (
   match_id TEXT PRIMARY KEY,

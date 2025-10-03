@@ -138,29 +138,17 @@ type RatingEventRow = {
   organizationId: string;
 };
 
-type LadderMeta = {
-  tier: string;
-  regionId: string | null;
-};
-
 type PlayerLeaderboardRow = {
   playerId: string;
-  ladderId: string;
   mu: number;
   sigma: number;
   matchesCount: number;
-  updatedAt: Date;
   displayName: string;
   shortName: string | null;
   givenName: string | null;
   familyName: string | null;
   countryCode: string | null;
   playerRegionId: string | null;
-};
-
-type PlayerLeaderboardSelection = {
-  row: PlayerLeaderboardRow;
-  ladder: LadderMeta;
 };
 
 type EventRow = {
@@ -519,104 +507,6 @@ export class PostgresStore implements RatingStore {
       movWeight: row.movWeight ?? null,
       metadata: null,
     };
-  }
-
-  private async loadLaddersForQuery(params: {
-    organizationId: string;
-    sport: string;
-    discipline: string;
-    tier?: string | null;
-    regionId?: string | null;
-  }): Promise<Array<{ ladderId: string; tier: string; regionId: string | null }>> {
-    const filters: any[] = [
-      eq(ratingLadders.organizationId, params.organizationId),
-      eq(ratingLadders.sport, params.sport),
-      eq(ratingLadders.discipline, params.discipline),
-    ];
-
-    if (params.tier) {
-      filters.push(eq(ratingLadders.tier, params.tier));
-    }
-
-    if (params.regionId) {
-      const dbRegion = toDbRegionId(params.regionId);
-      filters.push(
-        dbRegion === null ? sql`${ratingLadders.regionId} IS NULL` : eq(ratingLadders.regionId, dbRegion)
-      );
-    }
-
-    const condition = combineFilters(filters);
-
-    const query = this.db
-      .select({
-        ladderId: ratingLadders.ladderId,
-        tier: ratingLadders.tier,
-        regionId: ratingLadders.regionId,
-      })
-      .from(ratingLadders);
-
-    return condition ? query.where(condition) : query;
-  }
-
-  private async loadBestRatingsForPlayers(
-    ladderMeta: Map<string, LadderMeta>,
-    organizationId: string
-  ): Promise<Map<string, PlayerLeaderboardSelection>> {
-    if (!ladderMeta.size) {
-      return new Map();
-    }
-
-    const ladderIds = Array.from(ladderMeta.keys());
-
-    const rows = (await this.db
-      .select({
-        playerId: playerRatings.playerId,
-        ladderId: playerRatings.ladderId,
-        mu: playerRatings.mu,
-        sigma: playerRatings.sigma,
-        matchesCount: playerRatings.matchesCount,
-        updatedAt: playerRatings.updatedAt,
-        displayName: players.displayName,
-        shortName: players.shortName,
-        givenName: players.givenName,
-        familyName: players.familyName,
-        countryCode: players.countryCode,
-        playerRegionId: players.regionId,
-      })
-      .from(playerRatings)
-      .innerJoin(players, eq(playerRatings.playerId, players.playerId))
-      .where(
-        and(
-          inArray(playerRatings.ladderId, ladderIds),
-          eq(players.organizationId, organizationId)
-        )
-      )) as PlayerLeaderboardRow[];
-
-    const best = new Map<string, PlayerLeaderboardSelection>();
-
-    for (const row of rows) {
-      const meta = ladderMeta.get(row.ladderId);
-      if (!meta) continue;
-      const existing = best.get(row.playerId);
-      if (!existing) {
-        best.set(row.playerId, { row, ladder: meta });
-        continue;
-      }
-
-      const currentTs = row.updatedAt?.getTime?.() ?? 0;
-      const existingTs = existing.row.updatedAt?.getTime?.() ?? 0;
-
-      if (currentTs > existingTs) {
-        best.set(row.playerId, { row, ladder: meta });
-        continue;
-      }
-
-      if (currentTs === existingTs && row.mu > existing.row.mu) {
-        best.set(row.playerId, { row, ladder: meta });
-      }
-    }
-
-    return best;
   }
 
   private async assertPlayerInOrganization(playerId: string, organizationId: string) {
@@ -1786,19 +1676,14 @@ export class PostgresStore implements RatingStore {
   private async ensureLadder(key: LadderKey) {
     const ladderId = buildLadderId(key);
 
-    await this.assertOrganizationExists(key.organizationId);
     await this.ensureSport(key.sport);
-    const regionId = await this.ensureRegion(key.regionId, key.organizationId);
 
     await this.db
       .insert(ratingLadders)
       .values({
         ladderId,
-        organizationId: key.organizationId,
         sport: key.sport,
         discipline: key.discipline,
-        tier: key.tier,
-        regionId: toDbRegionId(key.regionId) ?? regionId,
         createdAt: now(),
         updatedAt: now(),
       })
@@ -1807,11 +1692,15 @@ export class PostgresStore implements RatingStore {
     return ladderId;
   }
 
-  async ensurePlayers(ids: string[], ladderKey: LadderKey): Promise<EnsurePlayersResult> {
+  async ensurePlayers(
+    ids: string[],
+    ladderKey: LadderKey,
+    options: { organizationId: string }
+  ): Promise<EnsurePlayersResult> {
     const ladderId = await this.ensureLadder(ladderKey);
     if (ids.length === 0) return { ladderId, players: new Map() };
 
-    await this.assertOrganizationExists(ladderKey.organizationId);
+    await this.assertOrganizationExists(options.organizationId);
 
     const playerRows = (await this.db
       .select({
@@ -1828,11 +1717,11 @@ export class PostgresStore implements RatingStore {
     }
 
     const wrongOrg = playerRows
-      .filter((row) => row.organizationId !== ladderKey.organizationId)
+      .filter((row) => row.organizationId !== options.organizationId)
       .map((row) => row.playerId);
     if (wrongOrg.length) {
       throw new PlayerLookupError(
-        `Players not registered to organization ${ladderKey.organizationId}: ${wrongOrg.join(', ')}`,
+        `Players not registered to organization ${options.organizationId}: ${wrongOrg.join(', ')}`,
         { wrongOrganization: wrongOrg }
       );
     }
@@ -2013,7 +1902,6 @@ export class PostgresStore implements RatingStore {
       await this.assertEventBelongsToOrg(eventId, params.submissionMeta.organizationId);
     }
 
-    const ladderRegionId = await this.ensureRegion(params.ladderKey.regionId, params.ladderKey.organizationId);
     const submissionRegionId = await this.ensureRegion(
       params.submissionMeta.regionId ?? null,
       params.submissionMeta.organizationId
@@ -2021,7 +1909,7 @@ export class PostgresStore implements RatingStore {
     const venueId = await this.ensureVenue(
       params.submissionMeta.venueId ?? null,
       params.submissionMeta.organizationId,
-      submissionRegionId ?? ladderRegionId ?? null
+      submissionRegionId ?? null
     );
 
     const gameExtras = new Map<number, { segments?: MatchSegment[] | null; statistics?: MatchStatistics }>();
@@ -2046,7 +1934,7 @@ export class PostgresStore implements RatingStore {
         format: params.match.format,
         tier: params.match.tier ?? 'UNSPECIFIED',
         venueId,
-        regionId: submissionRegionId ?? ladderRegionId ?? null,
+        regionId: submissionRegionId ?? null,
         eventId,
         competitionId,
         startTime: new Date(params.submissionMeta.startTime),
@@ -2332,14 +2220,15 @@ export class PostgresStore implements RatingStore {
     const ladderId = buildLadderId(query.ladderKey);
     const limit = clampLimit(query.limit);
 
-    await this.assertOrganizationExists(query.ladderKey.organizationId);
-    await this.assertPlayerInOrganization(query.playerId, query.ladderKey.organizationId);
-
     const filters: any[] = [
       eq(playerRatingHistory.playerId, query.playerId),
       eq(playerRatingHistory.ladderId, ladderId),
-      eq(matches.organizationId, query.ladderKey.organizationId),
     ];
+
+    if (query.organizationId) {
+      await this.assertOrganizationExists(query.organizationId);
+      filters.push(eq(matches.organizationId, query.organizationId));
+    }
 
     if (query.matchId) {
       filters.push(eq(playerRatingHistory.matchId, query.matchId));
@@ -2415,18 +2304,28 @@ export class PostgresStore implements RatingStore {
   }
 
   async getRatingEvent(
-    identifiers: { ladderKey: LadderKey; playerId: string; ratingEventId: string }
+    identifiers: { ladderKey: LadderKey; playerId: string; ratingEventId: string; organizationId?: string | null }
   ): Promise<RatingEventRecord | null> {
     const ladderId = buildLadderId(identifiers.ladderKey);
-    await this.assertOrganizationExists(identifiers.ladderKey.organizationId);
-    await this.assertPlayerInOrganization(identifiers.playerId, identifiers.ladderKey.organizationId);
-
     const numericId = Number(identifiers.ratingEventId);
     if (!Number.isFinite(numericId)) {
       return null;
     }
 
-    const rows = (await this.db
+    const filters: any[] = [
+      eq(playerRatingHistory.id, numericId),
+      eq(playerRatingHistory.playerId, identifiers.playerId),
+      eq(playerRatingHistory.ladderId, ladderId),
+    ];
+
+    if (identifiers.organizationId) {
+      await this.assertOrganizationExists(identifiers.organizationId);
+      filters.push(eq(matches.organizationId, identifiers.organizationId));
+    }
+
+    const condition = combineFilters(filters);
+
+    let eventQuery = this.db
       .select({
         id: playerRatingHistory.id,
         playerId: playerRatingHistory.playerId,
@@ -2443,16 +2342,13 @@ export class PostgresStore implements RatingStore {
         organizationId: matches.organizationId,
       })
       .from(playerRatingHistory)
-      .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId))
-      .where(
-        and(
-          eq(playerRatingHistory.id, numericId),
-          eq(playerRatingHistory.playerId, identifiers.playerId),
-          eq(playerRatingHistory.ladderId, ladderId),
-          eq(matches.organizationId, identifiers.ladderKey.organizationId)
-        )
-      )
-      .limit(1)) as RatingEventRow[];
+      .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId));
+
+    if (condition) {
+      eventQuery = eventQuery.where(condition);
+    }
+
+    const rows = (await eventQuery.limit(1)) as RatingEventRow[];
 
     const row = rows.at(0);
     if (!row) return null;
@@ -2460,17 +2356,21 @@ export class PostgresStore implements RatingStore {
   }
 
   async getRatingSnapshot(
-    params: { playerId: string; ladderKey: LadderKey; asOf?: string }
+    params: { playerId: string; ladderKey: LadderKey; asOf?: string; organizationId?: string | null }
   ): Promise<RatingSnapshot | null> {
     const ladderId = buildLadderId(params.ladderKey);
-    await this.assertOrganizationExists(params.ladderKey.organizationId);
-    await this.assertPlayerInOrganization(params.playerId, params.ladderKey.organizationId);
+    if (params.organizationId) {
+      await this.assertOrganizationExists(params.organizationId);
+    }
 
     const filters: any[] = [
       eq(playerRatingHistory.playerId, params.playerId),
       eq(playerRatingHistory.ladderId, ladderId),
-      eq(matches.organizationId, params.ladderKey.organizationId),
     ];
+
+    if (params.organizationId) {
+      filters.push(eq(matches.organizationId, params.organizationId));
+    }
 
     let asOfDate: Date | null = null;
     if (params.asOf) {
@@ -2509,7 +2409,7 @@ export class PostgresStore implements RatingStore {
     }
 
     const [historyRow] = (await historyQuery) as RatingEventRow[];
-    const ratingRow = await this.db
+    let ratingQuery = this.db
       .select({
         mu: playerRatings.mu,
         sigma: playerRatings.sigma,
@@ -2520,11 +2420,15 @@ export class PostgresStore implements RatingStore {
       .where(
         and(
           eq(playerRatings.playerId, params.playerId),
-          eq(playerRatings.ladderId, ladderId),
-          eq(players.organizationId, params.ladderKey.organizationId)
+          eq(playerRatings.ladderId, ladderId)
         )
-      )
-      .limit(1);
+      );
+
+    if (params.organizationId) {
+      ratingQuery = ratingQuery.where(eq(players.organizationId, params.organizationId));
+    }
+
+    const ratingRow = await ratingQuery.limit(1);
 
     const latestRating = ratingRow.at(0);
     if (!historyRow && !latestRating) {
@@ -2543,7 +2447,10 @@ export class PostgresStore implements RatingStore {
         : latestRating?.updatedAt?.toISOString() ?? new Date().toISOString();
 
     return {
-      organizationId: params.ladderKey.organizationId,
+      sport: params.ladderKey.sport,
+      discipline: params.ladderKey.discipline,
+      scope: params.ladderKey.tier ?? null,
+      organizationId: params.organizationId ?? null,
       playerId: params.playerId,
       ladderId,
       asOf,
@@ -2554,100 +2461,111 @@ export class PostgresStore implements RatingStore {
   }
 
   async listLeaderboard(params: LeaderboardQuery): Promise<LeaderboardResult> {
-    await this.assertOrganizationExists(params.organizationId);
+    const ladderKey: LadderKey = {
+      sport: params.sport,
+      discipline: params.discipline,
+    };
+    const ladderId = await this.ensureLadder(ladderKey);
     const limit = clampLimit(params.limit);
 
-    const ladders = await this.loadLaddersForQuery(params);
-    if (!ladders.length) {
+    const playerFilters: any[] = [eq(playerRatings.ladderId, ladderId)];
+    if (params.organizationId) {
+      await this.assertOrganizationExists(params.organizationId);
+      playerFilters.push(eq(players.organizationId, params.organizationId));
+    }
+
+    const playerCondition = combineFilters(playerFilters);
+
+    let playerQuery = this.db
+      .select({
+        playerId: playerRatings.playerId,
+        mu: playerRatings.mu,
+        sigma: playerRatings.sigma,
+        matchesCount: playerRatings.matchesCount,
+        displayName: players.displayName,
+        shortName: players.shortName,
+        givenName: players.givenName,
+        familyName: players.familyName,
+        countryCode: players.countryCode,
+        playerRegionId: players.regionId,
+      })
+      .from(playerRatings)
+      .innerJoin(players, eq(playerRatings.playerId, players.playerId))
+      .orderBy(desc(playerRatings.mu), playerRatings.playerId)
+      .limit(limit);
+
+    if (playerCondition) {
+      playerQuery = playerQuery.where(playerCondition);
+    }
+
+    const playerRows = (await playerQuery) as PlayerLeaderboardRow[];
+    if (!playerRows.length) {
       return { items: [] } satisfies LeaderboardResult;
     }
 
-    const ladderMeta = new Map<string, LadderMeta>();
-    for (const ladder of ladders) {
-      ladderMeta.set(ladder.ladderId, { tier: ladder.tier, regionId: ladder.regionId });
+    const playerIds = playerRows.map((row) => row.playerId);
+
+    const historyFilters: any[] = [
+      eq(playerRatingHistory.ladderId, ladderId),
+      inArray(playerRatingHistory.playerId, playerIds),
+    ];
+    if (params.organizationId) {
+      historyFilters.push(eq(matches.organizationId, params.organizationId));
     }
 
-    const bestByPlayer = await this.loadBestRatingsForPlayers(ladderMeta, params.organizationId);
-    if (!bestByPlayer.size) {
-      return { items: [] } satisfies LeaderboardResult;
+    const historyCondition = combineFilters(historyFilters);
+
+    let historyQuery = this.db
+      .select({
+        playerId: playerRatingHistory.playerId,
+        delta: playerRatingHistory.delta,
+        matchId: playerRatingHistory.matchId,
+        createdAt: playerRatingHistory.createdAt,
+        id: playerRatingHistory.id,
+      })
+      .from(playerRatingHistory)
+      .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId))
+      .orderBy(desc(playerRatingHistory.createdAt), desc(playerRatingHistory.id));
+
+    if (historyCondition) {
+      historyQuery = historyQuery.where(historyCondition);
     }
 
-    const ranked = Array.from(bestByPlayer.values()).sort((a, b) => {
-      if (b.row.mu !== a.row.mu) {
-        return b.row.mu - a.row.mu;
-      }
-      return a.row.playerId.localeCompare(b.row.playerId);
-    });
+    const historyRows = (await historyQuery) as Array<{
+      playerId: string;
+      delta: number;
+      matchId: string | null;
+      createdAt: Date;
+      id: number;
+    }>;
 
-    const limited = ranked.slice(0, limit);
-    const playerIds = limited.map((entry) => entry.row.playerId);
-    const selectedByPlayer = new Map<string, PlayerLeaderboardSelection>(
-      limited.map((entry) => [entry.row.playerId, entry])
-    );
-    const selectedLadderIds = Array.from(new Set(limited.map((entry) => entry.row.ladderId)));
-
-    const latestEvents = new Map<string, { delta: number; matchId: string | null; createdAt: Date }>();
-
-    if (playerIds.length) {
-      const eventRows = (await this.db
-        .select({
-          playerId: playerRatingHistory.playerId,
-          ladderId: playerRatingHistory.ladderId,
-          delta: playerRatingHistory.delta,
-          matchId: playerRatingHistory.matchId,
-          createdAt: playerRatingHistory.createdAt,
-          id: playerRatingHistory.id,
-        })
-        .from(playerRatingHistory)
-        .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId))
-        .where(
-          and(
-            inArray(playerRatingHistory.ladderId, selectedLadderIds),
-            eq(matches.organizationId, params.organizationId),
-            inArray(playerRatingHistory.playerId, playerIds)
-          )
-        )
-        .orderBy(desc(playerRatingHistory.createdAt), desc(playerRatingHistory.id))) as Array<{
-          playerId: string;
-          ladderId: string;
-          delta: number;
-          matchId: string | null;
-          createdAt: Date;
-          id: number;
-        }>;
-
-      for (const row of eventRows) {
-        const selection = selectedByPlayer.get(row.playerId);
-        if (!selection || selection.row.ladderId !== row.ladderId) {
-          continue;
-        }
-        if (!latestEvents.has(row.playerId)) {
-          latestEvents.set(row.playerId, {
-            delta: row.delta,
-            matchId: row.matchId,
-            createdAt: row.createdAt,
-          });
-        }
-        if (latestEvents.size === playerIds.length) {
-          break;
-        }
+    const latestByPlayer = new Map<string, { delta: number; matchId: string | null; createdAt: Date }>();
+    for (const row of historyRows) {
+      if (latestByPlayer.has(row.playerId)) continue;
+      latestByPlayer.set(row.playerId, {
+        delta: row.delta,
+        matchId: row.matchId,
+        createdAt: row.createdAt,
+      });
+      if (latestByPlayer.size === playerIds.length) {
+        break;
       }
     }
 
-    const items = limited.map((entry, index) => {
-      const latest = latestEvents.get(entry.row.playerId);
+    const items: LeaderboardEntry[] = playerRows.map((row, index) => {
+      const latest = latestByPlayer.get(row.playerId);
       return {
         rank: index + 1,
-        playerId: entry.row.playerId,
-        displayName: entry.row.displayName,
-        shortName: entry.row.shortName ?? undefined,
-        givenName: entry.row.givenName ?? undefined,
-        familyName: entry.row.familyName ?? undefined,
-        countryCode: entry.row.countryCode ?? undefined,
-        regionId: entry.row.playerRegionId ?? undefined,
-        mu: entry.row.mu,
-        sigma: entry.row.sigma,
-        matches: entry.row.matchesCount,
+        playerId: row.playerId,
+        displayName: row.displayName,
+        shortName: row.shortName ?? undefined,
+        givenName: row.givenName ?? undefined,
+        familyName: row.familyName ?? undefined,
+        countryCode: row.countryCode ?? undefined,
+        regionId: row.playerRegionId ?? undefined,
+        mu: row.mu,
+        sigma: row.sigma,
+        matches: row.matchesCount,
         delta: latest?.delta ?? null,
         lastEventAt: latest?.createdAt ? latest.createdAt.toISOString() : null,
         lastMatchId: latest?.matchId ?? null,
@@ -2658,7 +2576,11 @@ export class PostgresStore implements RatingStore {
   }
 
   async listLeaderboardMovers(params: LeaderboardMoversQuery): Promise<LeaderboardMoversResult> {
-    await this.assertOrganizationExists(params.organizationId);
+    const ladderKey: LadderKey = {
+      sport: params.sport,
+      discipline: params.discipline,
+    };
+    const ladderId = await this.ensureLadder(ladderKey);
     const limit = clampLimit(params.limit);
 
     const since = new Date(params.since);
@@ -2666,19 +2588,18 @@ export class PostgresStore implements RatingStore {
       throw new Error('Invalid since timestamp');
     }
 
-    const ladders = await this.loadLaddersForQuery(params);
-    if (!ladders.length) {
-      return { items: [] } satisfies LeaderboardMoversResult;
+    const historyFilters: any[] = [
+      eq(playerRatingHistory.ladderId, ladderId),
+      gte(playerRatingHistory.createdAt, since),
+    ];
+    if (params.organizationId) {
+      await this.assertOrganizationExists(params.organizationId);
+      historyFilters.push(eq(matches.organizationId, params.organizationId));
     }
 
-    const ladderMeta = new Map<string, LadderMeta>();
-    for (const ladder of ladders) {
-      ladderMeta.set(ladder.ladderId, { tier: ladder.tier, regionId: ladder.regionId });
-    }
+    const historyCondition = combineFilters(historyFilters);
 
-    const ladderIds = Array.from(ladderMeta.keys());
-
-    const aggregateRows = (await this.db
+    let aggregateQuery = this.db
       .select({
         playerId: playerRatingHistory.playerId,
         change: sql<number>`sum(${playerRatingHistory.delta})`,
@@ -2686,14 +2607,13 @@ export class PostgresStore implements RatingStore {
         lastEventAt: sql<Date>`max(${playerRatingHistory.createdAt})`,
       })
       .from(playerRatingHistory)
-      .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId))
-      .where(
-        and(
-          inArray(playerRatingHistory.ladderId, ladderIds),
-          eq(matches.organizationId, params.organizationId),
-          gte(playerRatingHistory.createdAt, since)
-        )
-      )
+      .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId));
+
+    if (historyCondition) {
+      aggregateQuery = aggregateQuery.where(historyCondition);
+    }
+
+    const aggregateRows = (await aggregateQuery
       .groupBy(playerRatingHistory.playerId)
       .orderBy(sql`sum(${playerRatingHistory.delta}) DESC`, sql`max(${playerRatingHistory.createdAt}) DESC`)
       .limit(limit * 2)) as Array<{
@@ -2707,13 +2627,48 @@ export class PostgresStore implements RatingStore {
       return { items: [] } satisfies LeaderboardMoversResult;
     }
 
-    const bestByPlayer = await this.loadBestRatingsForPlayers(ladderMeta, params.organizationId);
+    const candidateIds = aggregateRows.map((row) => row.playerId);
+
+    const ratingFilters: any[] = [
+      eq(playerRatings.ladderId, ladderId),
+      inArray(playerRatings.playerId, candidateIds),
+    ];
+    if (params.organizationId) {
+      ratingFilters.push(eq(players.organizationId, params.organizationId));
+    }
+
+    const ratingCondition = combineFilters(ratingFilters);
+
+    let ratingQuery = this.db
+      .select({
+        playerId: playerRatings.playerId,
+        mu: playerRatings.mu,
+        sigma: playerRatings.sigma,
+        matchesCount: playerRatings.matchesCount,
+        displayName: players.displayName,
+        shortName: players.shortName,
+        givenName: players.givenName,
+        familyName: players.familyName,
+        countryCode: players.countryCode,
+        playerRegionId: players.regionId,
+      })
+      .from(playerRatings)
+      .innerJoin(players, eq(playerRatings.playerId, players.playerId));
+
+    if (ratingCondition) {
+      ratingQuery = ratingQuery.where(ratingCondition);
+    }
+
+    const ratingRows = (await ratingQuery) as PlayerLeaderboardRow[];
+    const ratingByPlayer = new Map<string, PlayerLeaderboardRow>(
+      ratingRows.map((row) => [row.playerId, row])
+    );
 
     const items: LeaderboardMoverEntry[] = [];
 
     for (const row of aggregateRows) {
-      const details = bestByPlayer.get(row.playerId);
-      if (!details) continue;
+      const rating = ratingByPlayer.get(row.playerId);
+      if (!rating) continue;
 
       const change = Number(row.change);
       if (!Number.isFinite(change) || change === 0) continue;
@@ -2733,16 +2688,16 @@ export class PostgresStore implements RatingStore {
       }
 
       items.push({
-        playerId: details.row.playerId,
-        displayName: details.row.displayName,
-        shortName: details.row.shortName ?? undefined,
-        givenName: details.row.givenName ?? undefined,
-        familyName: details.row.familyName ?? undefined,
-        countryCode: details.row.countryCode ?? undefined,
-        regionId: details.row.playerRegionId ?? undefined,
-        mu: details.row.mu,
-        sigma: details.row.sigma,
-        matches: details.row.matchesCount,
+        playerId: rating.playerId,
+        displayName: rating.displayName,
+        shortName: rating.shortName ?? undefined,
+        givenName: rating.givenName ?? undefined,
+        familyName: rating.familyName ?? undefined,
+        countryCode: rating.countryCode ?? undefined,
+        regionId: rating.playerRegionId ?? undefined,
+        mu: rating.mu,
+        sigma: rating.sigma,
+        matches: rating.matchesCount,
         change,
         events: eventsCount,
         lastEventAt,

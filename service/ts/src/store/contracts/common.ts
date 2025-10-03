@@ -7,11 +7,11 @@ import type {
 } from './matches.js';
 
 export interface LadderKey {
-  organizationId: string;
+  organizationId?: string;
   sport: MatchInput['sport'];
   discipline: MatchInput['discipline'];
-  tier: string;
-  regionId: string;
+  tier?: string;
+  regionId?: string;
 }
 
 export interface EnsurePlayersResult {

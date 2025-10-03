@@ -156,17 +156,10 @@ export const players = pgTable('players', {
 
 export const ratingLadders = pgTable('rating_ladders', {
   ladderId: text('ladder_id').primaryKey(),
-  organizationId: text('organization_id').references(() => organizations.organizationId, {
-    onDelete: 'cascade',
-  }).notNull(),
   sport: text('sport').references(() => sports.sportId, {
     onDelete: 'restrict',
   }).notNull(),
   discipline: text('discipline').notNull(),
-  tier: text('tier').notNull().default('UNSPECIFIED'),
-  regionId: text('region_id').references(() => regions.regionId, {
-    onDelete: 'set null',
-  }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });

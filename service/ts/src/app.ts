@@ -8,7 +8,6 @@ import { registerPlayerRoutes } from './routes/players.js';
 import { registerMatchRoutes } from './routes/matches.js';
 import { registerRatingRoutes } from './routes/ratings.js';
 import { createOrganizationResolver } from './routes/helpers/organization-resolver.js';
-import { registerLeaderboardRoutes } from './routes/leaderboards.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerCompetitionRoutes } from './routes/competitions.js';
 
@@ -24,7 +23,6 @@ export const createApp = (store: RatingStore): Express => {
   registerPlayerRoutes(app, { store, resolveOrganization });
   registerMatchRoutes(app, { store, resolveOrganization });
   registerRatingRoutes(app, { store, resolveOrganization });
-  registerLeaderboardRoutes(app, { store, resolveOrganization });
   registerEventRoutes(app, { store, resolveOrganization });
   registerCompetitionRoutes(app, { store });
 

@@ -49,7 +49,7 @@ export interface RatingStore {
   createPlayer(input: PlayerCreateInput): Promise<PlayerRecord>;
   updatePlayer(playerId: string, organizationId: string, input: PlayerUpdateInput): Promise<PlayerRecord>;
   getPlayer(playerId: string, organizationId: string): Promise<PlayerRecord | null>;
-  ensurePlayers(ids: string[], ladderKey: LadderKey): Promise<EnsurePlayersResult>;
+  ensurePlayers(ids: string[], ladderKey: LadderKey, options: { organizationId: string }): Promise<EnsurePlayersResult>;
   ensurePairSynergies(params: EnsurePairSynergiesParams): Promise<EnsurePairSynergiesResult>;
   recordMatch(params: RecordMatchParams): Promise<RecordMatchResult>;
   updateMatch(matchId: string, organizationId: string, input: MatchUpdateInput): Promise<MatchSummary>;
@@ -59,10 +59,10 @@ export interface RatingStore {
   listMatches(query: MatchListQuery): Promise<MatchListResult>;
   listRatingEvents(query: RatingEventListQuery): Promise<RatingEventListResult>;
   getRatingEvent(
-    identifiers: { ladderKey: LadderKey; playerId: string; ratingEventId: string }
+    identifiers: { ladderKey: LadderKey; playerId: string; ratingEventId: string; organizationId?: string | null }
   ): Promise<RatingEventRecord | null>;
   getRatingSnapshot(
-    params: { playerId: string; ladderKey: LadderKey; asOf?: string }
+    params: { playerId: string; ladderKey: LadderKey; asOf?: string; organizationId?: string | null }
   ): Promise<RatingSnapshot | null>;
   listLeaderboard(params: LeaderboardQuery): Promise<LeaderboardResult>;
   listLeaderboardMovers(params: LeaderboardMoversQuery): Promise<LeaderboardMoversResult>;
