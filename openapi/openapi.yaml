@@ -6,7 +6,7 @@ tags:
   - name: Leaderboards
     description: Global rating leaderboards and movers for each sport and discipline.
 servers:
-  - url: https://api.example.com/v1
+  - url: https://api.example.com
 paths:
   /health:
     get:
@@ -193,8 +193,9 @@ paths:
 
   /v1/ratings/{sport}/{discipline}/players/{player_id}/events:
     get:
-      tags: [Leaderboards]
+      tags: [Ratings]
       summary: List rating events for a player
+      operationId: listPlayerRatingEvents
       parameters:
         - in: path
           name: sport
@@ -260,8 +261,9 @@ paths:
 
   /v1/ratings/{sport}/{discipline}/players/{player_id}/events/{rating_event_id}:
     get:
-      tags: [Leaderboards]
+      tags: [Ratings]
       summary: Fetch a single rating event
+      operationId: getPlayerRatingEvent
       parameters:
         - in: path
           name: sport
@@ -307,6 +309,7 @@ paths:
     get:
       tags: [Ratings]
       summary: Retrieve a player rating snapshot at a point in time
+      operationId: getPlayerRatingSnapshot
       parameters:
         - in: path
           name: sport
@@ -353,6 +356,7 @@ paths:
     get:
       tags: [Ratings]
       summary: Retrieve the current rating for a player
+      operationId: getCurrentPlayerRating
       parameters:
         - in: path
           name: sport
@@ -524,12 +528,13 @@ paths:
           description: Match not found
   /v1/ratings/{sport}/{discipline}:
     get:
-      tags: [Ratings]
+      tags: [Leaderboards]
       summary: Fetch the current global leaderboard
       description: >-
         Returns the top players for the requested sport and discipline, including their current rating,
         latest delta, and ranking order. Optional query parameters allow consumers to view scoped cuts
         (for example, sanctioned-only or organization-only views).
+      operationId: listGlobalLeaderboard
       parameters:
         - in: path
           name: sport
@@ -570,11 +575,12 @@ paths:
 
   /v1/ratings/{sport}/{discipline}/movers:
     get:
-      tags: [Ratings]
+      tags: [Leaderboards]
       summary: List leaderboard movers since a point in time
       description: >-
         Returns the players with the largest rating change since the supplied timestamp for the requested
         ladder. Optional filters let consumers inspect scoped leaderboards such as sanctioned events only.
+      operationId: listGlobalLeaderboardMovers
       parameters:
         - in: path
           name: sport
