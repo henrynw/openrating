@@ -190,7 +190,7 @@ paths:
 
   /v1/ratings/{sport}/{discipline}/players/{player_id}/events:
     get:
-      tags: [Ratings]
+      tags: [Leaderboards]
       summary: List rating events for a player
       parameters:
         - in: path
@@ -257,7 +257,7 @@ paths:
 
   /v1/ratings/{sport}/{discipline}/players/{player_id}/events/{rating_event_id}:
     get:
-      tags: [Ratings]
+      tags: [Leaderboards]
       summary: Fetch a single rating event
       parameters:
         - in: path
