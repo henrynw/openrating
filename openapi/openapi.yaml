@@ -2,6 +2,9 @@ openapi: 3.1.0
 info:
   title: OpenRating API
   version: 1.0.0
+tags:
+  - name: Leaderboards
+    description: Global rating leaderboards and movers for each sport and discipline.
 servers:
   - url: https://api.example.com/v1
 paths:
