@@ -269,6 +269,15 @@ export class MemoryStore implements RatingStore {
     return record;
   }
 
+  async getPlayer(playerId: string, organizationId: string): Promise<PlayerRecord | null> {
+    const player = this.players.get(playerId);
+    if (!player) return null;
+    if (player.organizationId !== organizationId) {
+      return null;
+    }
+    return toPlayerRecord(player);
+  }
+
   async updatePlayer(playerId: string, organizationId: string, input: PlayerUpdateInput): Promise<PlayerRecord> {
     const player = this.players.get(playerId);
     if (!player) {
@@ -631,6 +640,47 @@ export class MemoryStore implements RatingStore {
         } satisfies MatchGameSummary;
       }),
     } satisfies MatchSummary;
+  }
+
+  async getMatch(matchId: string, organizationId: string): Promise<MatchSummary | null> {
+    const match = this.matches.find((entry) => entry.matchId === matchId);
+    if (!match) return null;
+    if (match.organizationId !== organizationId) {
+      return null;
+    }
+
+    return {
+      matchId: match.matchId,
+      providerId: match.providerId,
+      externalRef: match.externalRef ?? null,
+      organizationId: match.organizationId,
+      sport: match.sport,
+      discipline: match.discipline,
+      format: match.format,
+      tier: match.tier,
+      startTime: match.startTime.toISOString(),
+      venueId: match.venueId ?? null,
+      regionId: match.regionId ?? null,
+      eventId: match.eventId ?? null,
+      timing: match.timing ?? null,
+      statistics: match.statistics ?? null,
+      segments: match.segments ?? null,
+      sides: ['A', 'B'].map((side) => ({
+        side: side as 'A' | 'B',
+        players: match.match.sides[side as 'A' | 'B'].players,
+        participants: match.sideParticipants?.[side as 'A' | 'B'] ?? null,
+      })),
+      games: match.match.games.map((g) => {
+        const details = match.gameDetails?.find((entry) => entry.gameNo === g.game_no);
+        return {
+          gameNo: g.game_no,
+          a: g.a,
+          b: g.b,
+          segments: details?.segments ?? null,
+          statistics: details?.statistics ?? null,
+        } satisfies MatchGameSummary;
+      }),
+    };
   }
 
   async getPlayerRating(playerId: string, ladderKey: LadderKey): Promise<PlayerState | null> {

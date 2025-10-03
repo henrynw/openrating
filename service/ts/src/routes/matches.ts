@@ -147,6 +147,16 @@ const MatchUpdateSchema = z.object({
   segments: z.array(MatchSegmentSchema).nullable().optional(),
 });
 
+const MatchGetQuerySchema = z
+  .object({
+    organization_id: z.string().optional(),
+    organization_slug: z.string().optional(),
+  })
+  .refine((data) => data.organization_id || data.organization_slug, {
+    message: 'organization_id or organization_slug is required',
+    path: ['organization_id'],
+  });
+
 type MatchTimingInput = z.infer<typeof MatchTimingSchema>;
 type MatchSegmentInput = z.infer<typeof MatchSegmentSchema>;
 type MatchParticipantInput = z.infer<typeof MatchParticipantSchema>;
@@ -479,6 +489,42 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         return res.status(err.status).send({ error: err.code, message: err.message });
       }
       console.error('matches_list_error', err);
+      return res.status(500).send({ error: 'internal_error' });
+    }
+  });
+
+  app.get('/v1/matches/:match_id', requireAuth, async (req, res) => {
+    const parsed = MatchGetQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+    }
+
+    try {
+      const organization = await resolveOrganization({
+        organization_id: parsed.data.organization_id,
+        organization_slug: parsed.data.organization_slug,
+      });
+
+      await authorizeOrgAccess(req, organization.organizationId, {
+        permissions: ['matches:write', 'matches:read', 'ratings:read'],
+        errorCode: 'matches_read_denied',
+        errorMessage: 'Insufficient grants to read matches',
+      });
+
+      const match = await store.getMatch(req.params.match_id, organization.organizationId);
+      if (!match) {
+        return res.status(404).send({ error: 'match_not_found' });
+      }
+
+      return res.send(toMatchSummaryResponse(match, organization.slug));
+    } catch (err) {
+      if (err instanceof OrganizationLookupError) {
+        return res.status(400).send({ error: 'invalid_organization', message: err.message });
+      }
+      if (err instanceof AuthorizationError) {
+        return res.status(err.status).send({ error: err.code, message: err.message });
+      }
+      console.error('match_get_error', err);
       return res.status(500).send({ error: 'internal_error' });
     }
   });

@@ -41,10 +41,12 @@ import type {
 export interface RatingStore {
   createPlayer(input: PlayerCreateInput): Promise<PlayerRecord>;
   updatePlayer(playerId: string, organizationId: string, input: PlayerUpdateInput): Promise<PlayerRecord>;
+  getPlayer(playerId: string, organizationId: string): Promise<PlayerRecord | null>;
   ensurePlayers(ids: string[], ladderKey: LadderKey): Promise<EnsurePlayersResult>;
   ensurePairSynergies(params: EnsurePairSynergiesParams): Promise<EnsurePairSynergiesResult>;
   recordMatch(params: RecordMatchParams): Promise<RecordMatchResult>;
   updateMatch(matchId: string, organizationId: string, input: MatchUpdateInput): Promise<MatchSummary>;
+  getMatch(matchId: string, organizationId: string): Promise<MatchSummary | null>;
   getPlayerRating(playerId: string, ladderKey: LadderKey): Promise<PlayerState | null>;
   listPlayers(query: PlayerListQuery): Promise<PlayerListResult>;
   listMatches(query: MatchListQuery): Promise<MatchListResult>;

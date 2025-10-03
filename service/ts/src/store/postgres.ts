@@ -1402,6 +1402,33 @@ export class PostgresStore implements RatingStore {
     } satisfies PlayerRecord;
   }
 
+  async getPlayer(playerId: string, organizationId: string): Promise<PlayerRecord | null> {
+    const rows = await this.db
+      .select({
+        playerId: players.playerId,
+        organizationId: players.organizationId,
+        displayName: players.displayName,
+        shortName: players.shortName,
+        nativeName: players.nativeName,
+        externalRef: players.externalRef,
+        givenName: players.givenName,
+        familyName: players.familyName,
+        sex: players.sex,
+        birthYear: players.birthYear,
+        countryCode: players.countryCode,
+        regionId: players.regionId,
+        competitiveProfile: players.competitiveProfile,
+        attributes: players.attributes,
+      })
+      .from(players)
+      .where(and(eq(players.playerId, playerId), eq(players.organizationId, organizationId)))
+      .limit(1);
+
+    const row = rows.at(0);
+    if (!row) return null;
+    return this.toPlayerRecord(row as any);
+  }
+
   async updatePlayer(playerId: string, organizationId: string, input: PlayerUpdateInput): Promise<PlayerRecord> {
     const selection = {
       playerId: players.playerId,
@@ -1942,6 +1969,15 @@ export class PostgresStore implements RatingStore {
     const summary = await this.getMatchSummaryById(matchId);
     if (!summary) {
       throw new MatchLookupError(`Match not found: ${matchId}`);
+    }
+    return summary;
+  }
+
+  async getMatch(matchId: string, organizationId: string): Promise<MatchSummary | null> {
+    const summary = await this.getMatchSummaryById(matchId);
+    if (!summary) return null;
+    if (summary.organizationId !== organizationId) {
+      return null;
     }
     return summary;
   }

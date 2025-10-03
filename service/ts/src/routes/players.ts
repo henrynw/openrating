@@ -84,6 +84,16 @@ const PlayerListQuerySchema = z
     path: ['organization_id'],
   });
 
+const PlayerGetQuerySchema = z
+  .object({
+    organization_id: z.string().optional(),
+    organization_slug: z.string().optional(),
+  })
+  .refine((data) => data.organization_id || data.organization_slug, {
+    message: 'organization_id or organization_slug is required',
+    path: ['organization_id'],
+  });
+
 const PlayerUpdateSchema = z
   .object({
     organization_id: z.string().uuid().optional(),
@@ -252,6 +262,42 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
         return res.status(err.status).send({ error: err.code, message: err.message });
       }
       console.error('players_list_error', err);
+      return res.status(500).send({ error: 'internal_error' });
+    }
+  });
+
+  app.get('/v1/players/:player_id', requireAuth, async (req, res) => {
+    const parsed = PlayerGetQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+    }
+
+    try {
+      const organization = await resolveOrganization({
+        organization_id: parsed.data.organization_id,
+        organization_slug: parsed.data.organization_slug,
+      });
+
+      await authorizeOrgAccess(req, organization.organizationId, {
+        permissions: ['players:read', 'matches:write', 'matches:read', 'ratings:read'],
+        errorCode: 'players_read_denied',
+        errorMessage: 'Insufficient grants for players:read',
+      });
+
+      const player = await store.getPlayer(req.params.player_id, organization.organizationId);
+      if (!player) {
+        return res.status(404).send({ error: 'player_not_found' });
+      }
+
+      return res.send(toPlayerResponse(player, organization.slug, { forceNullDefaults: true }));
+    } catch (err) {
+      if (err instanceof OrganizationLookupError) {
+        return res.status(400).send({ error: 'invalid_organization', message: err.message });
+      }
+      if (err instanceof AuthorizationError) {
+        return res.status(err.status).send({ error: err.code, message: err.message });
+      }
+      console.error('player_get_error', err);
       return res.status(500).send({ error: 'internal_error' });
     }
   });

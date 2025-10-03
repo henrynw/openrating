@@ -137,6 +137,33 @@ paths:
               schema:
                 $ref: '#/components/schemas/PlayerListResponse'
   /v1/players/{player_id}:
+    get:
+      tags: [Players]
+      summary: Retrieve a single player
+      parameters:
+        - in: path
+          name: player_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: organization_id
+          required: false
+          schema: { type: string }
+          description: 'UUID of the organization (optional if organization_slug provided)'
+        - in: query
+          name: organization_slug
+          required: false
+          schema: { type: string }
+          description: 'Slug identifier for the organization'
+      responses:
+        '200':
+          description: Player details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerResponse'
+        '404':
+          description: Player not found
     patch:
       tags: [Players]
       summary: Update a player
@@ -438,6 +465,33 @@ paths:
                 $ref: '#/components/schemas/MatchListResponse'
 
   /v1/matches/{match_id}:
+    get:
+      tags: [Matches]
+      summary: Retrieve a single match
+      parameters:
+        - in: path
+          name: match_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: organization_id
+          required: false
+          schema: { type: string }
+          description: 'UUID of the organization (optional if organization_slug provided)'
+        - in: query
+          name: organization_slug
+          required: false
+          schema: { type: string }
+          description: 'Slug identifier for the organization'
+      responses:
+        '200':
+          description: Match summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchSummary'
+        '404':
+          description: Match not found
     patch:
       tags: [Matches]
       summary: Update match metadata
