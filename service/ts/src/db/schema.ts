@@ -330,6 +330,17 @@ export const pairSynergyHistory = pgTable('pair_synergy_history', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const ratingReplayQueue = pgTable('rating_replay_queue', {
+  ladderId: text('ladder_id')
+    .references(() => ratingLadders.ladderId, {
+      onDelete: 'cascade',
+    })
+    .primaryKey(),
+  earliestStartTime: timestamp('earliest_start_time', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const playerInsights = pgTable('player_insights', {
   playerId: text('player_id').references(() => players.playerId, {
     onDelete: 'cascade',

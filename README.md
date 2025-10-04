@@ -91,6 +91,12 @@ The CLI reads credentials from environment variables so provider secrets stay ou
 - For backfills, enqueue jobs for every player (or wipe the table) and let the worker regenerate snapshots; it’s safe to replay history.
 - To pause processing, stop the worker. Pending jobs remain in the queue until the worker resumes.
 
+### Rating replay & backfills
+- Match ingestion records the current ladder state. If you later insert a match with a `start_time` earlier than what has already been processed, the ladder is marked dirty and a replay entry is queued automatically.
+- Run `npm run replay -- queue` to process queued ladders. The command re-sorts matches by `start_time`, truncates rating history, and rebuilds player ratings + pair synergies inside a transaction. Use `--dry-run` to preview the work without mutating state.
+- To rebuild a specific ladder on demand (for example after bulk edits), run `npm run replay -- ladder BADMINTON:SINGLES`. You can optionally pass `--from <ISO timestamp>` to hint at the earliest affected match and `--dry-run` to inspect the plan first.
+- The CLI works in both Postgres and in-memory modes; in-memory runs are useful for local validation. Replays clear the corresponding queue entry on success so repeated runs are idempotent.
+
 ### Listing data
 - `POST /v1/organizations`: create a new organization (returns the canonical UUID).
 - `GET /v1/organizations`: search/paginate organizations by name or slug.

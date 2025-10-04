@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { P } from '../engine/params.js';
+import { updateMatch as runMatchUpdate } from '../engine/rating.js';
 import type {
   MatchInput,
   PairState,
@@ -48,6 +49,10 @@ import type {
   RatingEventRecord,
   RatingSnapshot,
   NightlyStabilizationOptions,
+  RatingReplayQueueOptions,
+  RatingReplayOptions,
+  RatingReplayReport,
+  RatingReplayReportItem,
   LeaderboardQuery,
   LeaderboardResult,
   LeaderboardEntry,
@@ -302,6 +307,8 @@ export class MemoryStore implements RatingStore {
   private playerInsightJobQueue: string[] = [];
   private pairSynergies = new Map<string, MemoryPairSynergy>();
   private pairSynergyHistory: MemoryPairSynergyHistory[] = [];
+  private latestStartByLadder = new Map<string, Date>();
+  private replayQueue = new Map<string, Date>();
 
   async createPlayer(input: PlayerCreateInput): Promise<PlayerRecord> {
     const playerId = randomUUID();
@@ -464,6 +471,13 @@ export class MemoryStore implements RatingStore {
     return map;
   }
 
+  private enqueueReplay(ladderId: string, startTime: Date) {
+    const existing = this.replayQueue.get(ladderId);
+    if (!existing || startTime < existing) {
+      this.replayQueue.set(ladderId, new Date(startTime));
+    }
+  }
+
   async recordMatch(params: RecordMatchParams): Promise<RecordMatchResult> {
     // Check for existing match with same provider + external_ref for idempotency
     if (params.submissionMeta.externalRef) {
@@ -548,6 +562,14 @@ export class MemoryStore implements RatingStore {
     const matchStartTime = parseTimestamp(params.submissionMeta.startTime) ?? new Date();
     const matchCompletedAt = parseTimestamp(params.timing?.completedAt ?? null);
     const appliedAtBase = matchCompletedAt ?? matchStartTime;
+
+    const latestStart = this.latestStartByLadder.get(ladderId);
+    if (latestStart && matchStartTime < latestStart) {
+      this.enqueueReplay(ladderId, matchStartTime);
+    }
+    if (!latestStart || matchStartTime > latestStart) {
+      this.latestStartByLadder.set(ladderId, new Date(matchStartTime));
+    }
 
     this.matches.push({
       matchId,
@@ -1051,6 +1073,290 @@ export class MemoryStore implements RatingStore {
         lastEventAt: entry.lastEventAt ? entry.lastEventAt.toISOString() : null,
       })),
     } satisfies LeaderboardMoversResult;
+  }
+
+  async processRatingReplayQueue(options: RatingReplayQueueOptions = {}): Promise<RatingReplayReport> {
+    const dryRun = options.dryRun ?? false;
+    const ordered = Array.from(this.replayQueue.entries()).sort(
+      (a, b) => a[1].getTime() - b[1].getTime()
+    );
+    const limit = options.limit && options.limit > 0 ? options.limit : ordered.length;
+    const selected = ordered.slice(0, limit);
+
+    const items: RatingReplayReportItem[] = [];
+    for (const [ladderId, startTime] of selected) {
+      const detail = this.replayLadder(ladderId, { from: startTime, dryRun });
+      if (detail) {
+        items.push(detail);
+        if (!dryRun) {
+          this.replayQueue.delete(ladderId);
+        }
+      }
+    }
+
+    return this.buildReplayReport(items, dryRun);
+  }
+
+  async replayRatings(options: RatingReplayOptions): Promise<RatingReplayReport> {
+    if (!options.ladderId) {
+      throw new Error('ladderId is required for replayRatings');
+    }
+
+    const from = options.from ? new Date(options.from) : null;
+    const dryRun = options.dryRun ?? false;
+    const detail = this.replayLadder(options.ladderId, { from, dryRun });
+    const items = detail ? [detail] : [];
+    if (!dryRun) {
+      this.replayQueue.delete(options.ladderId);
+    }
+    return this.buildReplayReport(items, dryRun);
+  }
+
+  private replayLadder(
+    ladderId: string,
+    options: { from?: Date | null; dryRun: boolean }
+  ): RatingReplayReportItem | null {
+    const from = options.from ?? null;
+    const dryRun = options.dryRun;
+
+    const [sport, discipline] = ladderId.split(':');
+    const ladderKey: LadderKey = {
+      sport: (sport ?? 'BADMINTON') as Sport,
+      discipline: (discipline ?? 'SINGLES') as Discipline,
+    };
+
+    const ladderMatches = this.matches.filter((match) => match.ladderId === ladderId);
+    if (!ladderMatches.length) {
+      if (!dryRun) {
+        this.ratingEvents.delete(ladderId);
+        for (const player of this.players.values()) {
+          player.ratings.delete(ladderId);
+        }
+        for (const key of Array.from(this.pairSynergies.keys())) {
+          if (this.pairSynergies.get(key)?.ladderId === ladderId) {
+            this.pairSynergies.delete(key);
+          }
+        }
+        this.pairSynergyHistory = this.pairSynergyHistory.filter((entry) => entry.ladderId !== ladderId);
+        this.latestStartByLadder.delete(ladderId);
+      }
+
+      return {
+        ladderId,
+        ladderKey,
+        replayFrom: from ? from.toISOString() : null,
+        replayTo: null,
+        matchesProcessed: 0,
+        playersTouched: 0,
+        pairUpdates: 0,
+        dryRun,
+      } satisfies RatingReplayReportItem;
+    }
+
+    const sorted = [...ladderMatches].sort((a, b) => {
+      const diff = a.startTime.getTime() - b.startTime.getTime();
+      if (diff !== 0) return diff;
+      return a.matchId.localeCompare(b.matchId);
+    });
+
+    const allPlayers = new Set<string>();
+    for (const match of sorted) {
+      match.match.sides.A.players.forEach((playerId) => allPlayers.add(playerId));
+      match.match.sides.B.players.forEach((playerId) => allPlayers.add(playerId));
+    }
+    for (const player of this.players.values()) {
+      if (player.ratings.has(ladderId)) {
+        allPlayers.add(player.playerId);
+      }
+    }
+
+    const playerStates = new Map<string, PlayerState>();
+    const ensurePlayerState = (playerId: string) => {
+      let state = playerStates.get(playerId);
+      if (!state) {
+        const player = this.players.get(playerId) ?? null;
+        state = {
+          playerId,
+          mu: P.baseMu,
+          sigma: P.baseSigma,
+          matchesCount: 0,
+          regionId: player?.regionId ?? undefined,
+        };
+        playerStates.set(playerId, state);
+      }
+      return state;
+    };
+
+    const pairStates = new Map<string, PairState>();
+    const pairSnapshots = new Map<string, MemoryPairSynergy>();
+    const ensurePairState = (players: string[]) => {
+      const sortedPlayers = sortPairPlayers(players);
+      const pairId = buildPairKey(sortedPlayers);
+      let state = pairStates.get(pairId);
+      if (!state) {
+        state = { pairId, players: sortedPlayers, gamma: 0, matches: 0 };
+        pairStates.set(pairId, state);
+      }
+      if (!pairSnapshots.has(pairId)) {
+        pairSnapshots.set(pairId, {
+          key: `${ladderId}::${pairId}`,
+          pairId,
+          ladderId,
+          players: sortedPlayers,
+          gamma: 0,
+          matches: 0,
+          updatedAt: new Date(0),
+        });
+      }
+      return state;
+    };
+
+    const playerLastAppliedAt = new Map<string, Date>();
+    const playerEvents = new Map<string, MemoryRatingEvent[]>();
+    const pairHistory: MemoryPairSynergyHistory[] = [];
+
+    let matchesProcessed = 0;
+    let pairUpdatesCount = 0;
+    let firstApplied: Date | null = null;
+    let lastApplied: Date | null = null;
+
+    for (const match of sorted) {
+      match.match.sides.A.players.forEach(ensurePlayerState);
+      match.match.sides.B.players.forEach(ensurePlayerState);
+
+      if (match.match.sides.A.players.length > 1) ensurePairState(match.match.sides.A.players);
+      if (match.match.sides.B.players.length > 1) ensurePairState(match.match.sides.B.players);
+
+      const result = runMatchUpdate(match.match, {
+        getPlayer: (id) => ensurePlayerState(id),
+        getPair:
+          match.match.sides.A.players.length > 1 || match.match.sides.B.players.length > 1
+            ? (players) => ensurePairState(players)
+            : undefined,
+      });
+
+      const appliedAt = match.timing?.completedAt
+        ? new Date(match.timing.completedAt)
+        : match.startTime;
+
+      matchesProcessed += 1;
+      if (!firstApplied || appliedAt < firstApplied) firstApplied = appliedAt;
+      if (!lastApplied || appliedAt > lastApplied) lastApplied = appliedAt;
+
+      if (!dryRun) {
+        match.result = result;
+      }
+
+      for (const entry of result.perPlayer) {
+        const events = playerEvents.get(entry.playerId) ?? [];
+        const event: MemoryRatingEvent = {
+          ratingEventId: randomUUID(),
+          organizationId: match.organizationId,
+          playerId: entry.playerId,
+          ladderId,
+          matchId: match.matchId,
+          appliedAt: new Date(appliedAt),
+          muBefore: entry.muBefore,
+          muAfter: entry.muAfter,
+          delta: entry.delta,
+          sigmaBefore: entry.sigmaBefore,
+          sigmaAfter: entry.sigmaAfter,
+          winProbPre: entry.winProbPre,
+          movWeight: match.match.movWeight ?? null,
+        };
+        events.push(event);
+        playerEvents.set(entry.playerId, events);
+        playerLastAppliedAt.set(entry.playerId, new Date(appliedAt));
+      }
+
+      for (const update of result.pairUpdates) {
+        pairUpdatesCount += 1;
+        const snapshot = pairSnapshots.get(update.pairId);
+        if (snapshot) {
+          snapshot.players = sortPairPlayers(update.players);
+          snapshot.gamma = update.gammaAfter;
+          snapshot.matches = update.matchesAfter;
+          snapshot.updatedAt = new Date(appliedAt);
+        }
+        pairHistory.push({
+          pairId: update.pairId,
+          ladderId,
+          matchId: match.matchId,
+          gammaBefore: update.gammaBefore,
+          gammaAfter: update.gammaAfter,
+          delta: update.delta,
+          createdAt: new Date(appliedAt),
+        });
+      }
+    }
+
+    for (const playerId of allPlayers) {
+      ensurePlayerState(playerId);
+    }
+
+    const touchedPlayers = new Set<string>(playerLastAppliedAt.keys());
+
+    if (!dryRun) {
+      const ladderBuckets = new Map<string, MemoryRatingEvent[]>();
+      for (const [playerId, events] of playerEvents.entries()) {
+        const ordered = [...events].sort((a, b) => b.appliedAt.getTime() - a.appliedAt.getTime());
+        ladderBuckets.set(playerId, ordered);
+      }
+      this.ratingEvents.set(ladderId, ladderBuckets);
+
+      for (const playerId of allPlayers) {
+        const state = playerStates.get(playerId)!;
+        const updatedAt = playerLastAppliedAt.get(playerId) ?? new Date(0);
+        const player = this.players.get(playerId);
+        if (!player) continue;
+        player.ratings.set(ladderId, {
+          playerId,
+          mu: state.mu,
+          sigma: state.sigma,
+          matchesCount: state.matchesCount,
+          updatedAt,
+        });
+      }
+
+      for (const key of Array.from(this.pairSynergies.keys())) {
+        if (this.pairSynergies.get(key)?.ladderId === ladderId) {
+          this.pairSynergies.delete(key);
+        }
+      }
+      for (const snapshot of pairSnapshots.values()) {
+        this.pairSynergies.set(snapshot.key, { ...snapshot });
+      }
+      this.pairSynergyHistory = this.pairSynergyHistory.filter((entry) => entry.ladderId !== ladderId);
+      this.pairSynergyHistory.push(...pairHistory);
+
+      const latestMatch = sorted.at(-1);
+      if (latestMatch) {
+        this.latestStartByLadder.set(ladderId, new Date(latestMatch.startTime));
+      }
+    }
+
+    return {
+      ladderId,
+      ladderKey,
+      replayFrom: (from ?? firstApplied)?.toISOString() ?? null,
+      replayTo: lastApplied ? lastApplied.toISOString() : null,
+      matchesProcessed,
+      playersTouched: touchedPlayers.size,
+      pairUpdates: pairUpdatesCount,
+      dryRun,
+    } satisfies RatingReplayReportItem;
+  }
+
+  private buildReplayReport(items: RatingReplayReportItem[], dryRun: boolean): RatingReplayReport {
+    const matchesProcessed = items.reduce((sum, item) => sum + item.matchesProcessed, 0);
+    const playersTouched = items.reduce((sum, item) => sum + item.playersTouched, 0);
+    return {
+      dryRun,
+      laddersProcessed: items.length,
+      matchesProcessed,
+      playersTouched,
+      entries: items,
+    };
   }
 
   async runNightlyStabilization(options: NightlyStabilizationOptions = {}): Promise<void> {

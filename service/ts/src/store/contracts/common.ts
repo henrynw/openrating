@@ -65,3 +65,33 @@ export interface NightlyStabilizationOptions {
   asOf?: Date;
   horizonDays?: number;
 }
+
+export interface RatingReplayQueueOptions {
+  limit?: number;
+  dryRun?: boolean;
+}
+
+export interface RatingReplayOptions {
+  ladderId: string;
+  from?: string;
+  dryRun?: boolean;
+}
+
+export interface RatingReplayReportItem {
+  ladderId: string;
+  ladderKey: LadderKey;
+  replayFrom: string | null;
+  replayTo: string | null;
+  matchesProcessed: number;
+  playersTouched: number;
+  pairUpdates: number;
+  dryRun: boolean;
+}
+
+export interface RatingReplayReport {
+  dryRun: boolean;
+  laddersProcessed: number;
+  matchesProcessed: number;
+  playersTouched: number;
+  entries: RatingReplayReportItem[];
+}

@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { and, eq, inArray, or, lt, lte, gt, gte, sql, desc } from 'drizzle-orm';
 import type { PlayerState, MatchInput, PairState, PairUpdate, Sport, Discipline } from '../engine/types.js';
+import { updateMatch as runMatchUpdate } from '../engine/rating.js';
 import { P } from '../engine/params.js';
 import { getDb } from '../db/client.js';
 import {
@@ -24,6 +25,7 @@ import {
   pairSynergyHistory,
   events,
   competitionParticipants,
+  ratingReplayQueue,
 } from '../db/schema.js';
 import type {
   EnsurePlayersResult,
@@ -60,6 +62,10 @@ import type {
   EnsurePairSynergiesParams,
   EnsurePairSynergiesResult,
   NightlyStabilizationOptions,
+  RatingReplayOptions,
+  RatingReplayReport,
+  RatingReplayReportItem,
+  RatingReplayQueueOptions,
   LeaderboardQuery,
   LeaderboardResult,
   LeaderboardEntry,
@@ -97,6 +103,8 @@ import {
   toDbRegionId,
   DEFAULT_REGION,
   buildInsightScopeKey,
+  buildPairKey,
+  sortPairPlayers,
 } from './helpers.js';
 import {
   buildPlayerInsightsSnapshot as buildInsightsSnapshot,
@@ -2067,6 +2075,25 @@ export class PostgresStore implements RatingStore {
     return map;
   }
 
+  private async enqueueReplay(tx: any, ladderId: string, startTime: Date) {
+    const timestamp = now();
+    await tx
+      .insert(ratingReplayQueue)
+      .values({
+        ladderId,
+        earliestStartTime: startTime,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      })
+      .onConflictDoUpdate({
+        target: ratingReplayQueue.ladderId,
+        set: {
+          earliestStartTime: sql`LEAST(${ratingReplayQueue.earliestStartTime}, ${startTime})`,
+          updatedAt: timestamp,
+        },
+      });
+  }
+
   async recordMatch(params: RecordMatchParams): Promise<RecordMatchResult> {
     // Check for existing match with same provider + external_ref for idempotency
     if (params.submissionMeta.externalRef) {
@@ -2181,6 +2208,13 @@ export class PostgresStore implements RatingStore {
       const matchStartTime = parseTimestamp(params.submissionMeta.startTime) ?? now();
       const matchCompletedAt = parseTimestamp(params.timing?.completedAt ?? null);
       const appliedAt = matchCompletedAt ?? matchStartTime;
+
+      const latestRows = await tx
+        .select({ latestStart: sql<Date | null>`MAX(${matches.startTime})` })
+        .from(matches)
+        .where(eq(matches.ladderId, params.ladderId));
+      const latestStartTime = latestRows.at(0)?.latestStart ?? null;
+      const replayRequired = latestStartTime ? matchStartTime < latestStartTime : false;
 
       await tx.insert(matches).values({
         matchId,
@@ -2317,6 +2351,10 @@ export class PostgresStore implements RatingStore {
       if (competitionId) {
         await this.ensureCompetitionParticipantsTx(tx, competitionId, Array.from(playerIds));
       }
+
+      if (replayRequired) {
+        await this.enqueueReplay(tx, params.ladderId, matchStartTime);
+      }
     });
 
     return { matchId, ratingEvents };
@@ -2330,6 +2368,8 @@ export class PostgresStore implements RatingStore {
         regionId: matches.regionId,
         venueId: matches.venueId,
         eventId: matches.eventId,
+        startTime: matches.startTime,
+        ladderId: matches.ladderId,
       })
       .from(matches)
       .where(eq(matches.matchId, matchId))
@@ -2345,6 +2385,7 @@ export class PostgresStore implements RatingStore {
 
     const updates: Record<string, any> = {};
     let ensureCompetitionId: string | null = null;
+    let replayStartTime: Date | null = null;
 
     if (input.startTime !== undefined) {
       const date = new Date(input.startTime);
@@ -2352,6 +2393,10 @@ export class PostgresStore implements RatingStore {
         throw new MatchLookupError('Invalid start time provided');
       }
       updates.startTime = date;
+      const previous = existing.startTime;
+      if (previous && date.getTime() !== previous.getTime()) {
+        replayStartTime = date < previous ? date : previous;
+      }
     }
 
     let nextRegionId = existing.regionId;
@@ -2417,6 +2462,10 @@ export class PostgresStore implements RatingStore {
       if (!row) {
         throw new MatchLookupError(`Match not found: ${matchId}`);
       }
+    }
+
+    if (replayStartTime) {
+      await this.enqueueReplay(this.db, existing.ladderId, replayStartTime);
     }
 
     if (ensureCompetitionId) {
@@ -2981,6 +3030,511 @@ export class PostgresStore implements RatingStore {
       await this.applyGraphSmoothing(tx, asOf, horizonDays);
       await this.applyDriftControl(tx, asOf);
     });
+  }
+
+  async processRatingReplayQueue(options: RatingReplayQueueOptions = {}): Promise<RatingReplayReport> {
+    const dryRun = options.dryRun ?? false;
+    const limit = options.limit && options.limit > 0 ? options.limit : 10;
+
+    const queueEntries = await this.db
+      .select({
+        ladderId: ratingReplayQueue.ladderId,
+        earliestStart: ratingReplayQueue.earliestStartTime,
+      })
+      .from(ratingReplayQueue)
+      .orderBy(ratingReplayQueue.earliestStartTime)
+      .limit(limit);
+
+    const items: RatingReplayReportItem[] = [];
+
+    for (const entry of queueEntries) {
+      const detail = await this.replayLadder(entry.ladderId, {
+        from: entry.earliestStart ?? null,
+        dryRun,
+      });
+
+      if (detail) {
+        items.push(detail);
+        if (!dryRun) {
+          await this.db.delete(ratingReplayQueue).where(eq(ratingReplayQueue.ladderId, entry.ladderId));
+        }
+      }
+    }
+
+    return this.buildReplayReport(items, dryRun);
+  }
+
+  async replayRatings(options: RatingReplayOptions): Promise<RatingReplayReport> {
+    if (!options.ladderId) {
+      throw new Error('ladderId is required for replayRatings');
+    }
+
+    const from = options.from ? new Date(options.from) : null;
+    const dryRun = options.dryRun ?? false;
+
+    const detail = await this.replayLadder(options.ladderId, { from, dryRun });
+    const items = detail ? [detail] : [];
+    if (!dryRun) {
+      await this.db.delete(ratingReplayQueue).where(eq(ratingReplayQueue.ladderId, options.ladderId));
+    }
+    return this.buildReplayReport(items, dryRun);
+  }
+
+  private async replayLadder(
+    ladderId: string,
+    options: { from?: Date | null; dryRun: boolean }
+  ): Promise<RatingReplayReportItem | null> {
+    const from = options.from ?? null;
+    const dryRun = options.dryRun;
+    const replayTimestamp = now();
+
+    return this.db.transaction(async (tx: any) => {
+      const ladderRows = await tx
+        .select({
+          sport: ratingLadders.sport,
+          discipline: ratingLadders.discipline,
+        })
+        .from(ratingLadders)
+        .where(eq(ratingLadders.ladderId, ladderId))
+        .limit(1);
+
+      const ladder = ladderRows.at(0);
+      if (!ladder) {
+        throw new Error(`Ladder not found: ${ladderId}`);
+      }
+
+      const matchRows = (await tx
+        .select({
+          matchId: matches.matchId,
+          organizationId: matches.organizationId,
+          startTime: matches.startTime,
+          sport: matches.sport,
+          discipline: matches.discipline,
+          format: matches.format,
+          tier: matches.tier,
+          timing: matches.timing,
+          rawPayload: matches.rawPayload,
+        })
+        .from(matches)
+        .where(eq(matches.ladderId, ladderId))
+        .orderBy(matches.startTime, matches.matchId)) as Array<{
+        matchId: string;
+        organizationId: string;
+        startTime: Date;
+        sport: string;
+        discipline: string;
+        format: string;
+        tier: string | null;
+        timing: unknown;
+        rawPayload: unknown;
+      }>;
+
+      const ladderKey: LadderKey = {
+        sport: ladder.sport as LadderKey['sport'],
+        discipline: ladder.discipline as LadderKey['discipline'],
+      };
+
+      if (!matchRows.length) {
+        if (!dryRun) {
+          await tx.delete(playerRatingHistory).where(eq(playerRatingHistory.ladderId, ladderId));
+          await tx.delete(pairSynergyHistory).where(eq(pairSynergyHistory.ladderId, ladderId));
+          await tx.delete(pairSynergies).where(eq(pairSynergies.ladderId, ladderId));
+          await tx.delete(playerRatings).where(eq(playerRatings.ladderId, ladderId));
+        }
+
+        return {
+          ladderId,
+          ladderKey,
+          replayFrom: from ? from.toISOString() : null,
+          replayTo: null,
+          matchesProcessed: 0,
+          playersTouched: 0,
+          pairUpdates: 0,
+          dryRun,
+        } satisfies RatingReplayReportItem;
+      }
+
+      const matchIds = matchRows.map((row) => row.matchId);
+
+      const sideRows = (await tx
+        .select({
+          matchId: matchSides.matchId,
+          side: matchSides.side,
+          playerId: matchSidePlayers.playerId,
+          position: matchSidePlayers.position,
+        })
+        .from(matchSides)
+        .innerJoin(matchSidePlayers, eq(matchSidePlayers.matchSideId, matchSides.id))
+        .where(inArray(matchSides.matchId, matchIds))
+        .orderBy(matchSides.matchId, matchSides.side, matchSidePlayers.position)) as Array<{
+        matchId: string;
+        side: string;
+        playerId: string;
+        position: number;
+      }>;
+
+      const gameRows = (await tx
+        .select({
+          matchId: matchGames.matchId,
+          gameNo: matchGames.gameNo,
+          scoreA: matchGames.scoreA,
+          scoreB: matchGames.scoreB,
+        })
+        .from(matchGames)
+        .where(inArray(matchGames.matchId, matchIds))
+        .orderBy(matchGames.matchId, matchGames.gameNo)) as Array<{
+        matchId: string;
+        gameNo: number;
+        scoreA: number;
+        scoreB: number;
+      }>;
+
+      const movWeightRows = (await tx
+        .select({
+          matchId: playerRatingHistory.matchId,
+          movWeight: playerRatingHistory.movWeight,
+        })
+        .from(playerRatingHistory)
+        .where(eq(playerRatingHistory.ladderId, ladderId))) as Array<{
+        matchId: string;
+        movWeight: number | null;
+      }>;
+
+      const existingRatingRows = (await tx
+        .select({
+          playerId: playerRatings.playerId,
+          updatedAt: playerRatings.updatedAt,
+        })
+        .from(playerRatings)
+        .where(eq(playerRatings.ladderId, ladderId))) as Array<{
+        playerId: string;
+        updatedAt: Date | null;
+      }>;
+
+      const sidesByMatch = new Map<string, { A: string[]; B: string[] }>();
+      const gamesByMatch = new Map<string, Array<{ game_no: number; a: number; b: number }>>();
+      const movWeightByMatch = new Map<string, number>();
+      const playerIds = new Set<string>();
+
+      for (const row of sideRows) {
+        const entry = sidesByMatch.get(row.matchId) ?? { A: [] as string[], B: [] as string[] };
+        if (row.side === 'A' || row.side === 'B') {
+          entry[row.side as 'A' | 'B'][row.position] = row.playerId;
+        }
+        sidesByMatch.set(row.matchId, entry);
+        playerIds.add(row.playerId);
+      }
+
+      for (const row of gameRows) {
+        const list = gamesByMatch.get(row.matchId) ?? [];
+        list.push({ game_no: row.gameNo, a: row.scoreA, b: row.scoreB });
+        gamesByMatch.set(row.matchId, list);
+      }
+
+      for (const row of movWeightRows) {
+        if (row.movWeight !== null && !movWeightByMatch.has(row.matchId)) {
+          movWeightByMatch.set(row.matchId, row.movWeight);
+        }
+      }
+
+      const existingUpdatedAt = new Map<string, Date>();
+      for (const row of existingRatingRows) {
+        playerIds.add(row.playerId);
+        if (row.updatedAt) existingUpdatedAt.set(row.playerId, row.updatedAt);
+      }
+
+      const playerIdList = Array.from(playerIds);
+      const playerRegions = playerIdList.length
+        ? ((await tx
+            .select({ playerId: players.playerId, regionId: players.regionId })
+            .from(players)
+            .where(inArray(players.playerId, playerIdList))) as Array<{ playerId: string; regionId: string | null }>)
+        : [];
+      const playerRegionMap = new Map<string, string | undefined>(
+        playerRegions.map((row) => [row.playerId, row.regionId ?? undefined])
+      );
+
+      const ensurePlayerState = (map: Map<string, PlayerState>, playerId: string) => {
+        let state = map.get(playerId);
+        if (!state) {
+          state = {
+            playerId,
+            mu: P.baseMu,
+            sigma: P.baseSigma,
+            matchesCount: 0,
+            regionId: playerRegionMap.get(playerId),
+          };
+          map.set(playerId, state);
+        }
+        return state;
+      };
+
+      const ensurePairState = (map: Map<string, PairState>, playersList: string[]) => {
+        const sorted = sortPairPlayers(playersList);
+        const pairId = buildPairKey(sorted);
+        let state = map.get(pairId);
+        if (!state) {
+          state = { pairId, players: sorted, gamma: 0, matches: 0 };
+          map.set(pairId, state);
+        }
+        return state;
+      };
+
+      const parseTimestamp = (value?: string | null) => {
+        if (!value) return null;
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? null : date;
+      };
+
+      const playerStates = new Map<string, PlayerState>();
+      const pairStates = new Map<string, PairState>();
+      const historyRows: Array<{
+        playerId: string;
+        matchId: string;
+        muBefore: number;
+        muAfter: number;
+        sigmaBefore: number;
+        sigmaAfter: number;
+        delta: number;
+        winProbPre: number;
+        movWeight: number | null;
+        createdAt: Date;
+      }> = [];
+      const pairHistoryRows: Array<{
+        pairKey: string;
+        matchId: string;
+        gammaBefore: number;
+        gammaAfter: number;
+        delta: number;
+        createdAt: Date;
+      }> = [];
+      const playerLastAppliedAt = new Map<string, Date>();
+
+      let matchesProcessed = 0;
+      let pairUpdatesCount = 0;
+      let firstApplied: Date | null = null;
+      let lastApplied: Date | null = null;
+
+      for (const matchRow of matchRows) {
+        const sides = sidesByMatch.get(matchRow.matchId) ?? { A: [] as string[], B: [] as string[] };
+        const games = gamesByMatch.get(matchRow.matchId) ?? [];
+
+        const matchInput: MatchInput = {
+          sport: matchRow.sport as Sport,
+          discipline: matchRow.discipline as Discipline,
+          format: matchRow.format,
+          tier: (matchRow.tier ?? undefined) as MatchInput['tier'],
+          sides: {
+            A: { players: (sides.A ?? []).filter((player): player is string => Boolean(player)) },
+            B: { players: (sides.B ?? []).filter((player): player is string => Boolean(player)) },
+          },
+          games: games.map((game) => ({ game_no: game.game_no, a: game.a, b: game.b })),
+        };
+
+        const raw = (matchRow.rawPayload ?? null) as { winner?: unknown; mov_weight?: unknown } | null;
+        const rawWinner = raw && typeof raw.winner === 'string' ? (raw.winner as string) : null;
+        if (rawWinner === 'A' || rawWinner === 'B') {
+          matchInput.winner = rawWinner;
+        } else {
+          let winsA = 0;
+          let winsB = 0;
+          for (const game of matchInput.games) {
+            if (game.a > game.b) winsA += 1;
+            else if (game.b > game.a) winsB += 1;
+          }
+          if (winsA > winsB) matchInput.winner = 'A';
+          else if (winsB > winsA) matchInput.winner = 'B';
+        }
+
+        let movWeight: number | undefined;
+        const rawMov = raw && typeof raw.mov_weight === 'number' ? (raw.mov_weight as number) : null;
+        if (typeof rawMov === 'number') {
+          movWeight = rawMov;
+        } else {
+          const historyWeight = movWeightByMatch.get(matchRow.matchId);
+          if (typeof historyWeight === 'number') {
+            movWeight = historyWeight;
+          }
+        }
+        if (movWeight !== undefined) {
+          matchInput.movWeight = movWeight;
+        }
+
+        matchInput.sides.A.players.forEach((playerId) => ensurePlayerState(playerStates, playerId));
+        matchInput.sides.B.players.forEach((playerId) => ensurePlayerState(playerStates, playerId));
+
+        const pairDescriptors: Array<{ pairId: string; players: string[] }> = [];
+        if (matchInput.sides.A.players.length > 1) {
+          const pair = ensurePairState(pairStates, matchInput.sides.A.players);
+          pairDescriptors.push({ pairId: pair.pairId, players: [...pair.players] });
+        }
+        if (matchInput.sides.B.players.length > 1) {
+          const pair = ensurePairState(pairStates, matchInput.sides.B.players);
+          pairDescriptors.push({ pairId: pair.pairId, players: [...pair.players] });
+        }
+
+        const result = runMatchUpdate(matchInput, {
+          getPlayer: (id) => ensurePlayerState(playerStates, id),
+          getPair: pairDescriptors.length
+            ? (playersList) => ensurePairState(pairStates, playersList)
+            : undefined,
+        });
+
+        const timing = (matchRow.timing as MatchTiming | null) ?? null;
+        const completedAt = timing ? parseTimestamp(timing.completedAt ?? null) : null;
+        const appliedAt = completedAt ?? matchRow.startTime;
+
+        matchesProcessed += 1;
+        if (!firstApplied || appliedAt < firstApplied) {
+          firstApplied = appliedAt;
+        }
+        if (!lastApplied || appliedAt > lastApplied) {
+          lastApplied = appliedAt;
+        }
+
+        for (const entry of result.perPlayer) {
+          historyRows.push({
+            playerId: entry.playerId,
+            matchId: matchRow.matchId,
+            muBefore: entry.muBefore,
+            muAfter: entry.muAfter,
+            sigmaBefore: entry.sigmaBefore,
+            sigmaAfter: entry.sigmaAfter,
+            delta: entry.delta,
+            winProbPre: entry.winProbPre,
+            movWeight: movWeight ?? null,
+            createdAt: appliedAt,
+          });
+          playerLastAppliedAt.set(entry.playerId, appliedAt);
+        }
+
+        for (const update of result.pairUpdates) {
+          pairUpdatesCount += 1;
+          pairHistoryRows.push({
+            pairKey: update.pairId,
+            matchId: matchRow.matchId,
+            gammaBefore: update.gammaBefore,
+            gammaAfter: update.gammaAfter,
+            delta: update.delta,
+            createdAt: appliedAt,
+          });
+        }
+      }
+
+      for (const playerId of playerIds) {
+        ensurePlayerState(playerStates, playerId);
+      }
+
+      const uniquePlayers = new Set(historyRows.map((row) => row.playerId));
+
+      const ratingRows = Array.from(playerStates.values()).map((state) => ({
+        playerId: state.playerId,
+        ladderId,
+        mu: state.mu,
+        sigma: state.sigma,
+        matchesCount: state.matchesCount,
+        updatedAt: playerLastAppliedAt.get(state.playerId)
+          ?? existingUpdatedAt.get(state.playerId)
+          ?? replayTimestamp,
+      }));
+
+      const chunk = <T>(items: T[], size: number): T[][] => {
+        if (items.length <= size) return [items];
+        const batches: T[][] = [];
+        for (let i = 0; i < items.length; i += size) {
+          batches.push(items.slice(i, i + size));
+        }
+        return batches;
+      };
+
+      if (!dryRun) {
+        await tx.delete(playerRatingHistory).where(eq(playerRatingHistory.ladderId, ladderId));
+        await tx.delete(pairSynergyHistory).where(eq(pairSynergyHistory.ladderId, ladderId));
+        await tx.delete(pairSynergies).where(eq(pairSynergies.ladderId, ladderId));
+        await tx.delete(playerRatings).where(eq(playerRatings.ladderId, ladderId));
+
+        for (const batch of chunk(ratingRows, 500)) {
+          if (batch.length) {
+            await tx.insert(playerRatings).values(batch);
+          }
+        }
+
+        const historyValues = historyRows.map((row) => ({
+          playerId: row.playerId,
+          ladderId,
+          matchId: row.matchId,
+          muBefore: row.muBefore,
+          muAfter: row.muAfter,
+          sigmaBefore: row.sigmaBefore,
+          sigmaAfter: row.sigmaAfter,
+          delta: row.delta,
+          winProbPre: row.winProbPre,
+          movWeight: row.movWeight,
+          createdAt: row.createdAt,
+        }));
+
+        for (const batch of chunk(historyValues, 500)) {
+          if (batch.length) {
+            await tx.insert(playerRatingHistory).values(batch);
+          }
+        }
+
+        const pairRows = Array.from(pairStates.values()).map((pairState) => ({
+          ladderId,
+          pairKey: pairState.pairId,
+          players: pairState.players,
+          gamma: pairState.gamma,
+          matches: pairState.matches,
+          createdAt: replayTimestamp,
+          updatedAt: replayTimestamp,
+        }));
+
+        for (const batch of chunk(pairRows, 500)) {
+          if (batch.length) {
+            await tx.insert(pairSynergies).values(batch);
+          }
+        }
+
+        const pairHistoryValues = pairHistoryRows.map((row) => ({
+          ladderId,
+          pairKey: row.pairKey,
+          matchId: row.matchId,
+          gammaBefore: row.gammaBefore,
+          gammaAfter: row.gammaAfter,
+          delta: row.delta,
+          createdAt: row.createdAt,
+        }));
+
+        for (const batch of chunk(pairHistoryValues, 500)) {
+          if (batch.length) {
+            await tx.insert(pairSynergyHistory).values(batch);
+          }
+        }
+      }
+
+      return {
+        ladderId,
+        ladderKey,
+        replayFrom: (from ?? firstApplied)?.toISOString() ?? null,
+        replayTo: lastApplied ? lastApplied.toISOString() : null,
+        matchesProcessed,
+        playersTouched: uniquePlayers.size,
+        pairUpdates: pairUpdatesCount,
+        dryRun,
+      } satisfies RatingReplayReportItem;
+    });
+  }
+
+  private buildReplayReport(items: RatingReplayReportItem[], dryRun: boolean): RatingReplayReport {
+    const matchesProcessed = items.reduce((sum, item) => sum + item.matchesProcessed, 0);
+    const playersTouched = items.reduce((sum, item) => sum + item.playersTouched, 0);
+    return {
+      dryRun,
+      laddersProcessed: items.length,
+      matchesProcessed,
+      playersTouched,
+      entries: items,
+    };
   }
 
   async getPlayerInsights(query: PlayerInsightsQuery): Promise<PlayerInsightsSnapshot | null> {

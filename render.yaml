@@ -33,6 +33,21 @@ services:
       - key: INSIGHTS_WORKER_POLL_MS
         value: "1000"
 
+  - type: cron
+    name: openrating-replay
+    env: node
+    rootDir: service/ts
+    buildCommand: npm install && npm run build
+    schedule: "*/30 * * * *"
+    startCommand: npm run replay -- queue
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: openrating-db
+          property: connectionString
+      - key: NODE_ENV
+        value: production
+
 databases:
   - name: openrating-db
     plan: free

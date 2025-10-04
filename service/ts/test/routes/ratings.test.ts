@@ -46,7 +46,7 @@ const submitSinglesMatch = async (
     .post('/v1/matches')
     .set('Idempotency-Key', randomUUID())
     .send({
-      provider_id: 'provider-test',
+      provider_id: 'disabled',
       organization_id: organizationId,
       sport: ladderQuery.sport,
       discipline: ladderQuery.discipline,
@@ -91,8 +91,10 @@ test('match submission links rating events and history lookup works', async () =
   assert.ok(aliceRatingRef);
 
   const eventsRes = await agent
-    .get(`/v1/organizations/${org.organization_id}/players/${alice.player_id}/rating-events`)
-    .query(ladderQuery);
+    .get(
+      `/v1/ratings/${ladderQuery.sport}/${ladderQuery.discipline}/players/${alice.player_id}/events`
+    )
+    .query({ organization_id: org.organization_id });
   assert.equal(eventsRes.status, 200, eventsRes.text);
 
   const eventsBody = eventsRes.body as {
@@ -111,17 +113,19 @@ test('match submission links rating events and history lookup works', async () =
 
   const detailRes = await agent
     .get(
-      `/v1/organizations/${org.organization_id}/players/${alice.player_id}/rating-events/${aliceRatingRef!.rating_event_id}`
+      `/v1/ratings/${ladderQuery.sport}/${ladderQuery.discipline}/players/${alice.player_id}/events/${aliceRatingRef!.rating_event_id}`
     )
-    .query(ladderQuery);
+    .query({ organization_id: org.organization_id });
   assert.equal(detailRes.status, 200, detailRes.text);
 
   const detailBody = detailRes.body as { rating_event_id: string; mu_after: number };
   assert.equal(detailBody.rating_event_id, aliceRatingRef!.rating_event_id);
 
   const snapshotRes = await agent
-    .get(`/v1/organizations/${org.organization_id}/players/${alice.player_id}/rating-snapshot`)
-    .query(ladderQuery);
+    .get(
+      `/v1/ratings/${ladderQuery.sport}/${ladderQuery.discipline}/players/${alice.player_id}/snapshot`
+    )
+    .query({ organization_id: org.organization_id });
   assert.equal(snapshotRes.status, 200, snapshotRes.text);
 
   const snapshotBody = snapshotRes.body as {
@@ -146,8 +150,10 @@ test('rating snapshot honors as_of parameter', async () => {
   await submitSinglesMatch(org.organization_id, alice.player_id, bob.player_id);
 
   const eventsRes = await agent
-    .get(`/v1/organizations/${org.organization_id}/players/${alice.player_id}/rating-events`)
-    .query(ladderQuery);
+    .get(
+      `/v1/ratings/${ladderQuery.sport}/${ladderQuery.discipline}/players/${alice.player_id}/events`
+    )
+    .query({ organization_id: org.organization_id });
   assert.equal(eventsRes.status, 200, eventsRes.text);
 
   const events = (eventsRes.body as {
@@ -163,8 +169,10 @@ test('rating snapshot honors as_of parameter', async () => {
   const earliest = events[events.length - 1];
 
   const latestSnapshotRes = await agent
-    .get(`/v1/organizations/${org.organization_id}/players/${alice.player_id}/rating-snapshot`)
-    .query(ladderQuery);
+    .get(
+      `/v1/ratings/${ladderQuery.sport}/${ladderQuery.discipline}/players/${alice.player_id}/snapshot`
+    )
+    .query({ organization_id: org.organization_id });
   assert.equal(latestSnapshotRes.status, 200, latestSnapshotRes.text);
 
   const latestSnapshot = latestSnapshotRes.body as {
@@ -176,8 +184,10 @@ test('rating snapshot honors as_of parameter', async () => {
   assert.equal(latestSnapshot.mu, latest.mu_after);
 
   const asOfSnapshotRes = await agent
-    .get(`/v1/organizations/${org.organization_id}/players/${alice.player_id}/rating-snapshot`)
-    .query({ ...ladderQuery, as_of: earliest.applied_at });
+    .get(
+      `/v1/ratings/${ladderQuery.sport}/${ladderQuery.discipline}/players/${alice.player_id}/snapshot`
+    )
+    .query({ organization_id: org.organization_id, as_of: earliest.applied_at });
   assert.equal(asOfSnapshotRes.status, 200, asOfSnapshotRes.text);
 
   const asOfSnapshot = asOfSnapshotRes.body as {

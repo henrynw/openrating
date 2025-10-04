@@ -15,6 +15,9 @@ import type {
   RecordMatchParams,
   RecordMatchResult,
   NightlyStabilizationOptions,
+  RatingReplayOptions,
+  RatingReplayReport,
+  RatingReplayQueueOptions,
 } from './common.js';
 import type {
   RatingEventListQuery,
@@ -95,6 +98,8 @@ export interface RatingStore {
   listCompetitionParticipants(competitionId: string): Promise<CompetitionParticipantListResult>;
   ensureCompetitionParticipants(competitionId: string, playerIds: string[]): Promise<void>;
   runNightlyStabilization(options?: NightlyStabilizationOptions): Promise<void>;
+  processRatingReplayQueue(options?: RatingReplayQueueOptions): Promise<RatingReplayReport>;
+  replayRatings(options: RatingReplayOptions): Promise<RatingReplayReport>;
   getPlayerInsights(query: PlayerInsightsQuery): Promise<PlayerInsightsSnapshot | null>;
   buildPlayerInsightsSnapshot(
     query: PlayerInsightsQuery,
