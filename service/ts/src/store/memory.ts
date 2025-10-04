@@ -533,6 +533,16 @@ export class MemoryStore implements RatingStore {
       }
     }
 
+    const parseTimestamp = (value?: string | null) => {
+      if (!value) return null;
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date;
+    };
+
+    const matchStartTime = parseTimestamp(params.submissionMeta.startTime) ?? new Date();
+    const matchCompletedAt = parseTimestamp(params.timing?.completedAt ?? null);
+    const appliedAtBase = matchCompletedAt ?? matchStartTime;
+
     this.matches.push({
       matchId,
       ladderId,
@@ -541,7 +551,7 @@ export class MemoryStore implements RatingStore {
       competitionId,
       match: params.match,
       result: params.result,
-      startTime: new Date(params.submissionMeta.startTime),
+      startTime: matchStartTime,
       organizationId: params.submissionMeta.organizationId,
       sport: params.match.sport,
       discipline: params.match.discipline,
@@ -558,7 +568,6 @@ export class MemoryStore implements RatingStore {
     });
 
     const ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
-    const appliedAtBase = new Date(params.submissionMeta.startTime ?? new Date().toISOString());
     for (const entry of params.result.perPlayer) {
       const appliedAt = new Date(appliedAtBase);
       const event: MemoryRatingEvent = {
@@ -596,7 +605,7 @@ export class MemoryStore implements RatingStore {
       await this.ensureCompetitionParticipants(competitionId, Array.from(playerIds));
     }
 
-    const pairTimestamp = new Date(params.submissionMeta.startTime ?? new Date().toISOString());
+    const pairTimestamp = new Date(appliedAtBase);
     for (const update of params.pairUpdates) {
       const key = `${ladderId}::${update.pairId}`;
       let record = this.pairSynergies.get(key);
@@ -625,7 +634,7 @@ export class MemoryStore implements RatingStore {
         gammaBefore: update.gammaBefore,
         gammaAfter: update.gammaAfter,
         delta: update.delta,
-        createdAt: new Date(),
+        createdAt: pairTimestamp,
       });
     }
 

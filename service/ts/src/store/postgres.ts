@@ -2050,6 +2050,16 @@ export class PostgresStore implements RatingStore {
     const ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
 
     await this.db.transaction(async (tx: any) => {
+      const parseTimestamp = (value?: string | null) => {
+        if (!value) return null;
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? null : date;
+      };
+
+      const matchStartTime = parseTimestamp(params.submissionMeta.startTime) ?? now();
+      const matchCompletedAt = parseTimestamp(params.timing?.completedAt ?? null);
+      const appliedAt = matchCompletedAt ?? matchStartTime;
+
       await tx.insert(matches).values({
         matchId,
         ladderId: params.ladderId,
@@ -2064,7 +2074,7 @@ export class PostgresStore implements RatingStore {
         regionId: submissionRegionId ?? null,
         eventId,
         competitionId,
-        startTime: new Date(params.submissionMeta.startTime),
+        startTime: matchStartTime,
         timing: params.timing ?? null,
         statistics: params.statistics ?? null,
         segments: params.segments ?? null,
@@ -2117,7 +2127,7 @@ export class PostgresStore implements RatingStore {
             mu: entry.muAfter,
             sigma: entry.sigmaAfter,
             matchesCount: playerState?.matchesCount ?? 0,
-            updatedAt: now(),
+            updatedAt: appliedAt,
           })
           .where(
             and(
@@ -2139,7 +2149,7 @@ export class PostgresStore implements RatingStore {
             delta: entry.delta,
             winProbPre: entry.winProbPre,
             movWeight,
-            createdAt: now(),
+            createdAt: appliedAt,
           })
           .returning({
             id: playerRatingHistory.id,
@@ -2162,7 +2172,7 @@ export class PostgresStore implements RatingStore {
             gamma: update.gammaAfter,
             matches: update.matchesAfter,
             players: update.players,
-            updatedAt: now(),
+            updatedAt: appliedAt,
           })
           .where(
             and(
@@ -2178,7 +2188,7 @@ export class PostgresStore implements RatingStore {
           gammaBefore: update.gammaBefore,
           gammaAfter: update.gammaAfter,
           delta: update.delta,
-          createdAt: now(),
+          createdAt: appliedAt,
         });
       }
 
