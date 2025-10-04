@@ -77,7 +77,7 @@ import type {
   PlayerInsightsBuildOptions,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
-import { buildLadderId, DEFAULT_REGION } from './helpers.js';
+import { buildLadderId, DEFAULT_REGION, buildPairKey, sortPairPlayers } from './helpers.js';
 import {
   buildPlayerInsightsSnapshot as buildInsightsSnapshot,
   enrichSnapshotWithCache,
