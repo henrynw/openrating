@@ -93,6 +93,8 @@ export async function enforceMatchWrite(
   }
 }
 
+export const getSubjectId = async (req: Request) => (await getSubjectContext(req)).subject;
+
 type SubjectContext = {
   subject: string;
   scopes: string[];

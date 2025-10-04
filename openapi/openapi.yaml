@@ -1293,9 +1293,13 @@ components:
           type: [string, 'null']
     MatchSubmit:
       type: object
-      required: [provider_id, sport, discipline, format, start_time, sides, games]
+      required: [sport, discipline, format, start_time, sides, games]
       properties:
-        provider_id: { type: string, description: 'Identifier of the data provider submitting the match' }
+        provider_id:
+          type: string
+          description: >-
+            Optional provider override. When omitted the API derives the provider_id from the authenticated subject
+            and ignores any supplied value that does not match that subject.
         external_ref:
           type: [string, 'null']
           description: >-

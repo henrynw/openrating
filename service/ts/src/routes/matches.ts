@@ -5,6 +5,7 @@ import {
   AuthorizationError,
   authorizeOrgAccess,
   enforceMatchWrite,
+  getSubjectId,
   hasScope,
   requireAuth,
   requireScope,
@@ -85,7 +86,7 @@ const MatchGameSchema = z.object({
 
 const MatchSubmitSchema = z
   .object({
-    provider_id: z.string(),
+    provider_id: z.string().optional(),
     external_ref: z.string().optional(),
     organization_id: z.string().uuid().optional(),
     organization_slug: z.string().optional(),
@@ -406,6 +407,16 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
           : undefined,
       });
 
+      const subjectProviderId = await getSubjectId(req);
+      if (parsed.data.provider_id && parsed.data.provider_id !== subjectProviderId) {
+        return res.status(400).send({
+          error: 'provider_mismatch',
+          message: 'provider_id must match the authenticated subject',
+        });
+      }
+
+      const providerId = subjectProviderId;
+
       const { matchId, ratingEvents } = await store.recordMatch({
         ladderId,
         ladderKey,
@@ -420,7 +431,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         ...(sideParticipants !== undefined ? { sideParticipants } : {}),
         ...(gameDetails !== undefined ? { gameDetails } : {}),
         submissionMeta: {
-          providerId: parsed.data.provider_id,
+          providerId,
           externalRef: parsed.data.external_ref ?? null,
           organizationId: organization.organizationId,
           startTime: parsed.data.start_time,
