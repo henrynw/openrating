@@ -14,16 +14,19 @@ import type {
   PlayerCompetitiveProfile,
   PlayerAttributes,
   PlayerRankingSnapshot,
+  PlayerInsightsQuery,
 } from '../store/index.js';
 import { OrganizationLookupError, PlayerLookupError } from '../store/index.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
-import { toPlayerResponse } from './helpers/responders.js';
+import { toPlayerResponse, toPlayerInsightsResponse } from './helpers/responders.js';
 
 const LooseRecordSchema = z.record(z.unknown());
+const SportEnum = z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']);
+const DisciplineEnum = z.enum(['SINGLES', 'DOUBLES', 'MIXED']);
 
 const PlayerRankingSnapshotSchema = z.object({
   source: z.string(),
-  discipline: z.enum(['SINGLES', 'DOUBLES', 'MIXED']).nullable().optional(),
+  discipline: DisciplineEnum.nullable().optional(),
   position: z.number().int().min(1).nullable().optional(),
   points: z.number().nullable().optional(),
   as_of: z.string().datetime().nullable().optional(),
@@ -31,7 +34,7 @@ const PlayerRankingSnapshotSchema = z.object({
 });
 
 const PlayerCompetitiveProfileSchema = z.object({
-  discipline: z.enum(['SINGLES', 'DOUBLES', 'MIXED']).nullable().optional(),
+  discipline: DisciplineEnum.nullable().optional(),
   ranking_points: z.number().nullable().optional(),
   ranking_position: z.number().int().min(1).nullable().optional(),
   total_matches: z.number().int().min(0).nullable().optional(),
@@ -92,6 +95,23 @@ const PlayerGetQuerySchema = z
   .refine((data) => data.organization_id || data.organization_slug, {
     message: 'organization_id or organization_slug is required',
     path: ['organization_id'],
+  });
+
+const PlayerInsightsQuerySchema = z
+  .object({
+    organization_id: z.string().optional(),
+    organization_slug: z.string().optional(),
+    sport: SportEnum.optional(),
+    discipline: DisciplineEnum.optional(),
+    force_refresh: z.union([z.string(), z.boolean()]).optional(),
+  })
+  .refine((data) => data.organization_id || data.organization_slug, {
+    message: 'organization_id or organization_slug is required',
+    path: ['organization_id'],
+  })
+  .refine((data) => !data.discipline || data.sport, {
+    message: 'sport is required when discipline provided',
+    path: ['sport'],
   });
 
 const PlayerUpdateSchema = z
@@ -298,6 +318,81 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
         return res.status(err.status).send({ error: err.code, message: err.message });
       }
       console.error('player_get_error', err);
+      return res.status(500).send({ error: 'internal_error' });
+    }
+  });
+
+  app.get('/v1/players/:player_id/insights', requireAuth, async (req, res) => {
+    const parsed = PlayerInsightsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+    }
+
+    const { organization_id, organization_slug, sport, discipline, force_refresh } = parsed.data;
+    const forceRefresh = (() => {
+      if (typeof force_refresh === 'boolean') return force_refresh;
+      if (typeof force_refresh === 'string') {
+        const value = force_refresh.toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(value)) return true;
+        if (['0', 'false', 'no', 'off'].includes(value)) return false;
+      }
+      return false;
+    })();
+
+    try {
+      const organization = await resolveOrganization({ organization_id, organization_slug });
+
+      await authorizeOrgAccess(req, organization.organizationId, {
+        permissions: ['players:read', 'matches:read', 'ratings:read'],
+        ...(sport ? { sport } : {}),
+        errorCode: 'players_read_denied',
+        errorMessage: 'Insufficient grants for players:read',
+      });
+
+      const insightsQuery = {
+        organizationId: organization.organizationId,
+        playerId: req.params.player_id,
+        sport: sport ?? null,
+        discipline: discipline ?? null,
+      } satisfies PlayerInsightsQuery;
+
+      const ifNoneMatch = req.header('if-none-match');
+
+      let snapshot = forceRefresh ? null : await store.getPlayerInsights(insightsQuery);
+      let etag = snapshot?.cacheKeys?.etag ?? null;
+
+      if (snapshot && ifNoneMatch && etag && ifNoneMatch === etag) {
+        res.status(304).end();
+        return;
+      }
+
+      if (!snapshot || forceRefresh) {
+        const built = await store.buildPlayerInsightsSnapshot(insightsQuery);
+        const upserted = await store.upsertPlayerInsightsSnapshot(insightsQuery, built);
+        snapshot = upserted.snapshot;
+        etag = upserted.etag;
+      }
+
+      if (!snapshot) {
+        return res.status(404).send({ error: 'insights_not_found' });
+      }
+
+      if (etag) {
+        res.setHeader('ETag', etag);
+      }
+
+      return res.send(toPlayerInsightsResponse(snapshot));
+    } catch (err) {
+      if (err instanceof OrganizationLookupError) {
+        return res.status(400).send({ error: 'invalid_organization', message: err.message });
+      }
+      if (err instanceof AuthorizationError) {
+        return res.status(err.status).send({ error: err.code, message: err.message });
+      }
+      if (err instanceof PlayerLookupError) {
+        return res.status(404).send({ error: 'player_not_found', message: err.message });
+      }
+      console.error('player_insights_error', err);
       return res.status(500).send({ error: 'internal_error' });
     }
   });

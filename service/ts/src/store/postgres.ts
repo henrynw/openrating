@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { and, eq, inArray, or, lt, lte, gt, gte, sql, desc } from 'drizzle-orm';
-import type { PlayerState, MatchInput, PairState, PairUpdate } from '../engine/types.js';
+import type { PlayerState, MatchInput, PairState, PairUpdate, Sport, Discipline } from '../engine/types.js';
 import { P } from '../engine/params.js';
 import { getDb } from '../db/client.js';
 import {
@@ -12,6 +12,8 @@ import {
   competitions,
   playerRatings,
   playerRatingHistory,
+  playerInsights,
+  playerInsightJobs,
   players,
   providers,
   ratingLadders,
@@ -79,9 +81,29 @@ import type {
   CompetitionParticipantUpsertInput,
   CompetitionParticipantRecord,
   CompetitionParticipantListResult,
+  PlayerInsightsSnapshot,
+  PlayerInsightsQuery,
+  PlayerInsightsEnqueueInput,
+  PlayerInsightsJob,
+  PlayerInsightsJobClaimOptions,
+  PlayerInsightsJobCompletion,
+  PlayerInsightsUpsertResult,
+  PlayerInsightsBuildOptions,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
-import { buildLadderId, isDefaultRegion, toDbRegionId, DEFAULT_REGION } from './helpers.js';
+import {
+  buildLadderId,
+  isDefaultRegion,
+  toDbRegionId,
+  DEFAULT_REGION,
+  buildInsightScopeKey,
+} from './helpers.js';
+import {
+  buildPlayerInsightsSnapshot as buildInsightsSnapshot,
+  enrichSnapshotWithCache,
+  type PlayerInsightSourceEvent,
+  type PlayerInsightCurrentRating,
+} from '../insights/builder.js';
 
 const now = () => new Date();
 const DEFAULT_PAGE_SIZE = 50;
@@ -136,6 +158,29 @@ type RatingEventRow = {
   winProbPre: number | null;
   movWeight: number | null;
   organizationId: string;
+};
+
+type PlayerInsightEventRow = {
+  id: number;
+  createdAt: Date;
+  sport: string;
+  discipline: string;
+  muBefore: number;
+  muAfter: number;
+  sigmaBefore: number | null;
+  sigmaAfter: number;
+  delta: number;
+  winProbPre: number | null;
+  matchId: string | null;
+};
+
+type PlayerInsightRatingRow = {
+  sport: string;
+  discipline: string;
+  mu: number;
+  sigma: number;
+  matchesCount: number;
+  updatedAt: Date;
 };
 
 type PlayerLeaderboardRow = {
@@ -345,6 +390,88 @@ export class PostgresStore implements RatingStore {
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     } satisfies CompetitionParticipantRecord;
+  }
+
+  private toPlayerInsightEvent(row: PlayerInsightEventRow): PlayerInsightSourceEvent {
+    return {
+      id: String(row.id),
+      createdAt: row.createdAt,
+      sport: row.sport as Sport,
+      discipline: row.discipline as Discipline,
+      muBefore: row.muBefore,
+      muAfter: row.muAfter,
+      sigmaBefore: row.sigmaBefore,
+      sigmaAfter: row.sigmaAfter,
+      delta: row.delta,
+      winProbPre: row.winProbPre,
+      matchId: row.matchId,
+    } satisfies PlayerInsightSourceEvent;
+  }
+
+  private toPlayerInsightRating(row: PlayerInsightRatingRow): PlayerInsightCurrentRating {
+    return {
+      sport: row.sport as Sport,
+      discipline: row.discipline as Discipline,
+      mu: row.mu,
+      sigma: row.sigma,
+      matchesCount: row.matchesCount,
+      updatedAt: row.updatedAt,
+    } satisfies PlayerInsightCurrentRating;
+  }
+
+  private async fetchPlayerInsightEvents(
+    query: PlayerInsightsQuery,
+    client = this.db
+  ): Promise<PlayerInsightSourceEvent[]> {
+    const filters: any[] = [eq(playerRatingHistory.playerId, query.playerId)];
+    if (query.sport) filters.push(eq(ratingLadders.sport, query.sport));
+    if (query.discipline) filters.push(eq(ratingLadders.discipline, query.discipline));
+
+    const rows = await client
+      .select({
+        id: playerRatingHistory.id,
+        createdAt: playerRatingHistory.createdAt,
+        sport: ratingLadders.sport,
+        discipline: ratingLadders.discipline,
+        muBefore: playerRatingHistory.muBefore,
+        muAfter: playerRatingHistory.muAfter,
+        sigmaBefore: playerRatingHistory.sigmaBefore,
+        sigmaAfter: playerRatingHistory.sigmaAfter,
+        delta: playerRatingHistory.delta,
+        winProbPre: playerRatingHistory.winProbPre,
+        matchId: playerRatingHistory.matchId,
+      })
+      .from(playerRatingHistory)
+      .innerJoin(ratingLadders, eq(playerRatingHistory.ladderId, ratingLadders.ladderId))
+      .where(filters.length > 1 ? and(...filters) : filters[0])
+      .orderBy(playerRatingHistory.createdAt);
+
+    return (rows as PlayerInsightEventRow[]).map((row) => this.toPlayerInsightEvent(row));
+  }
+
+  private async fetchPlayerInsightRatings(
+    query: PlayerInsightsQuery,
+    client = this.db
+  ): Promise<PlayerInsightCurrentRating[]> {
+    const filters: any[] = [eq(playerRatings.playerId, query.playerId)];
+    if (query.sport) filters.push(eq(ratingLadders.sport, query.sport));
+    if (query.discipline) filters.push(eq(ratingLadders.discipline, query.discipline));
+
+    const rows = await client
+      .select({
+        sport: ratingLadders.sport,
+        discipline: ratingLadders.discipline,
+        mu: playerRatings.mu,
+        sigma: playerRatings.sigma,
+        matchesCount: playerRatings.matchesCount,
+        updatedAt: playerRatings.updatedAt,
+      })
+      .from(playerRatings)
+      .innerJoin(ratingLadders, eq(playerRatings.ladderId, ratingLadders.ladderId))
+      .where(filters.length > 1 ? and(...filters) : filters[0])
+      .orderBy(playerRatings.updatedAt);
+
+    return (rows as PlayerInsightRatingRow[]).map((row) => this.toPlayerInsightRating(row));
   }
 
   private async getEventRowById(eventId: string, client = this.db): Promise<EventRow | null> {
@@ -2722,6 +2849,262 @@ export class PostgresStore implements RatingStore {
       await this.applyGraphSmoothing(tx, asOf, horizonDays);
       await this.applyDriftControl(tx, asOf);
     });
+  }
+
+  async getPlayerInsights(query: PlayerInsightsQuery): Promise<PlayerInsightsSnapshot | null> {
+    await this.assertPlayerInOrganization(query.playerId, query.organizationId);
+    const scopeKey = buildInsightScopeKey(query.sport ?? null, query.discipline ?? null);
+
+    const rows = await this.db
+      .select({ snapshot: playerInsights.snapshot })
+      .from(playerInsights)
+      .where(
+        and(
+          eq(playerInsights.playerId, query.playerId),
+          eq(playerInsights.organizationId, query.organizationId),
+          eq(playerInsights.scopeKey, scopeKey)
+        )
+      )
+      .limit(1);
+
+    const row = rows.at(0);
+    if (!row) return null;
+    return JSON.parse(JSON.stringify(row.snapshot)) as PlayerInsightsSnapshot;
+  }
+
+  async buildPlayerInsightsSnapshot(
+    query: PlayerInsightsQuery,
+    options?: PlayerInsightsBuildOptions
+  ): Promise<PlayerInsightsSnapshot> {
+    await this.assertPlayerInOrganization(query.playerId, query.organizationId);
+    const [events, ratings] = await Promise.all([
+      this.fetchPlayerInsightEvents(query),
+      this.fetchPlayerInsightRatings(query),
+    ]);
+
+    return buildInsightsSnapshot({
+      playerId: query.playerId,
+      sport: query.sport ?? null,
+      discipline: query.discipline ?? null,
+      events,
+      ratings,
+      options,
+    });
+  }
+
+  async upsertPlayerInsightsSnapshot(
+    query: PlayerInsightsQuery,
+    snapshot: PlayerInsightsSnapshot
+  ): Promise<PlayerInsightsUpsertResult> {
+    await this.assertPlayerInOrganization(query.playerId, query.organizationId);
+    const scopeKey = buildInsightScopeKey(query.sport ?? null, query.discipline ?? null);
+    const { snapshot: enriched, etag, digest } = enrichSnapshotWithCache(snapshot);
+    const generatedAt = new Date(enriched.meta.generatedAt);
+
+    await this.db
+      .insert(playerInsights)
+      .values({
+        playerId: query.playerId,
+        organizationId: query.organizationId,
+        sport: query.sport ?? null,
+        discipline: query.discipline ?? null,
+        scopeKey,
+        schemaVersion: enriched.meta.schemaVersion,
+        snapshot: enriched as unknown as PlayerInsightsSnapshot,
+        generatedAt,
+        etag,
+        digest,
+      })
+      .onConflictDoUpdate({
+        target: [playerInsights.playerId, playerInsights.organizationId, playerInsights.scopeKey],
+        set: {
+          schemaVersion: enriched.meta.schemaVersion,
+          snapshot: enriched as unknown as PlayerInsightsSnapshot,
+          generatedAt,
+          etag,
+          digest,
+          updatedAt: sql`now()`,
+        },
+      });
+
+    return { snapshot: JSON.parse(JSON.stringify(enriched)) as PlayerInsightsSnapshot, etag, digest };
+  }
+
+  async enqueuePlayerInsightsRefresh(
+    input: PlayerInsightsEnqueueInput
+  ): Promise<{ jobId: string; enqueued: boolean }> {
+    await this.assertPlayerInOrganization(input.playerId, input.organizationId);
+    const scopeKey = buildInsightScopeKey(input.sport ?? null, input.discipline ?? null);
+    const runAt = input.runAt ? new Date(input.runAt) : now();
+
+    const existingRows = await this.db
+      .select({
+        jobId: playerInsightJobs.jobId,
+        status: playerInsightJobs.status,
+      })
+      .from(playerInsightJobs)
+      .where(
+        and(
+          eq(playerInsightJobs.playerId, input.playerId),
+          eq(playerInsightJobs.organizationId, input.organizationId),
+          eq(playerInsightJobs.scopeKey, scopeKey),
+          sql`${playerInsightJobs.status} IN ('PENDING', 'IN_PROGRESS')`
+        )
+      )
+      .limit(1);
+
+    const existing = existingRows.at(0);
+
+    if (existing) {
+      if (input.dedupe === false) {
+        const updateData: Record<string, unknown> = {
+          status: 'PENDING',
+          runAt,
+          lockedAt: null,
+          lockedBy: null,
+          updatedAt: sql`now()`,
+          lastError: null,
+        };
+        if (input.payload !== undefined) {
+          updateData.payload = input.payload;
+        }
+        await this.db
+          .update(playerInsightJobs)
+          .set(updateData)
+          .where(eq(playerInsightJobs.jobId, existing.jobId));
+        return { jobId: existing.jobId, enqueued: true };
+      }
+
+      return { jobId: existing.jobId, enqueued: false };
+    }
+
+    const jobId = randomUUID();
+    await this.db.insert(playerInsightJobs).values({
+      jobId,
+      playerId: input.playerId,
+      organizationId: input.organizationId,
+      sport: input.sport ?? null,
+      discipline: input.discipline ?? null,
+      scopeKey,
+      status: 'PENDING',
+      runAt,
+      attempts: 0,
+      lockedAt: null,
+      lockedBy: null,
+      payload: input.payload ?? null,
+      lastError: null,
+    });
+
+    return { jobId, enqueued: true };
+  }
+
+  async claimPlayerInsightsJob(
+    options: PlayerInsightsJobClaimOptions
+  ): Promise<PlayerInsightsJob | null> {
+    const result = await this.db.execute(sql`
+      WITH claimed AS (
+        SELECT job_id
+        FROM player_insight_jobs
+        WHERE status = 'PENDING'
+          AND run_at <= now()
+        ORDER BY run_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      )
+      UPDATE player_insight_jobs
+      SET status = 'IN_PROGRESS',
+          locked_at = now(),
+          locked_by = ${options.workerId},
+          attempts = attempts + 1,
+          updated_at = now()
+      WHERE job_id IN (SELECT job_id FROM claimed)
+      RETURNING job_id AS "jobId",
+                player_id AS "playerId",
+                organization_id AS "organizationId",
+                sport,
+                discipline,
+                run_at AS "runAt",
+                status,
+                attempts,
+                locked_at AS "lockedAt",
+                locked_by AS "lockedBy",
+                payload,
+                last_error AS "lastError";
+    `);
+
+    const rows = result.rows as Array<{
+      jobId: string;
+      playerId: string;
+      organizationId: string;
+      sport: string | null;
+      discipline: string | null;
+      runAt: Date;
+      status: string;
+      attempts: number;
+      lockedAt: Date | null;
+      lockedBy: string | null;
+      payload: unknown;
+      lastError: string | null;
+    }>;
+    const row = rows?.[0];
+    if (!row) return null;
+    return {
+      jobId: row.jobId,
+      playerId: row.playerId,
+      organizationId: row.organizationId,
+      sport: (row.sport ?? null) as Sport | null,
+      discipline: (row.discipline ?? null) as Discipline | null,
+      runAt: row.runAt.toISOString(),
+      status: row.status as PlayerInsightsJob['status'],
+      attempts: row.attempts,
+      lockedAt: row.lockedAt ? row.lockedAt.toISOString() : null,
+      lockedBy: row.lockedBy ?? null,
+      payload: (row.payload ?? null) as Record<string, unknown> | null,
+      lastError: row.lastError ?? null,
+    } satisfies PlayerInsightsJob;
+  }
+
+  async completePlayerInsightsJob(result: PlayerInsightsJobCompletion): Promise<void> {
+    const condition = and(
+      eq(playerInsightJobs.jobId, result.jobId),
+      or(
+        sql`${playerInsightJobs.lockedBy} IS NULL`,
+        eq(playerInsightJobs.lockedBy, result.workerId)
+      )
+    );
+
+    if (result.success) {
+      await this.db
+        .update(playerInsightJobs)
+        .set({
+          status: 'COMPLETED',
+          lockedAt: null,
+          lockedBy: null,
+          updatedAt: sql`now()`,
+          lastError: null,
+        })
+        .where(condition);
+      return;
+    }
+
+    const runAt = result.rescheduleAt === undefined
+      ? new Date(Date.now() + 30_000)
+      : result.rescheduleAt === null
+        ? null
+        : new Date(result.rescheduleAt);
+
+    const updateData: Record<string, unknown> = {
+      status: runAt ? 'PENDING' : 'FAILED',
+      lockedAt: null,
+      lockedBy: null,
+      updatedAt: sql`now()`,
+      lastError: result.error ?? null,
+    };
+    if (runAt) {
+      updateData.runAt = runAt;
+    }
+
+    await this.db.update(playerInsightJobs).set(updateData).where(condition);
   }
 
   async listPlayers(query: PlayerListQuery): Promise<PlayerListResult> {

@@ -315,3 +315,50 @@ export const pairSynergyHistory = pgTable('pair_synergy_history', {
   delta: doublePrecision('delta').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const playerInsights = pgTable('player_insights', {
+  playerId: text('player_id').references(() => players.playerId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  organizationId: text('organization_id').references(() => organizations.organizationId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  sport: text('sport'),
+  discipline: text('discipline'),
+  scopeKey: text('scope_key').notNull(),
+  schemaVersion: integer('schema_version').notNull(),
+  snapshot: jsonb('snapshot').notNull(),
+  generatedAt: timestamp('generated_at', { withTimezone: true }).defaultNow().notNull(),
+  etag: text('etag').notNull(),
+  digest: text('digest'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table: any) => ({
+  pk: primaryKey(table.playerId, table.organizationId, table.scopeKey),
+}));
+
+export const playerInsightJobs = pgTable('player_insight_jobs', {
+  jobId: text('job_id').primaryKey(),
+  playerId: text('player_id').references(() => players.playerId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  organizationId: text('organization_id').references(() => organizations.organizationId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  sport: text('sport'),
+  discipline: text('discipline'),
+  scopeKey: text('scope_key').notNull(),
+  status: text('status').notNull().default('PENDING'),
+  runAt: timestamp('run_at', { withTimezone: true }).defaultNow().notNull(),
+  lockedAt: timestamp('locked_at', { withTimezone: true }),
+  lockedBy: text('locked_by'),
+  attempts: integer('attempts').default(0).notNull(),
+  payload: jsonb('payload'),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table: any) => ({
+  uniqueScope: uniqueIndex('player_insight_jobs_unique_scope')
+    .on(table.playerId, table.organizationId, table.scopeKey)
+    .where(sql`${table.status} IN ('PENDING', 'IN_PROGRESS')`),
+}));

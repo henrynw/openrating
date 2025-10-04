@@ -20,3 +20,6 @@ export const DEFAULT_TIER = NULL_TIER;
 export const DEFAULT_REGION = NULL_REGION;
 
 export const toDbRegionId = (regionId: string) => (isDefaultRegion(regionId) ? null : regionId);
+
+export const buildInsightScopeKey = (sport?: string | null, discipline?: string | null) =>
+  `${sport ?? ''}:${discipline ?? ''}`;

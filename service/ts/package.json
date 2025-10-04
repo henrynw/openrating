@@ -13,7 +13,8 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:studio": "drizzle-kit studio --config drizzle.config.ts",
     "grants": "tsx scripts/grants.ts",
-    "nightly": "NODE_ENV=production tsx scripts/nightly.ts"
+    "nightly": "NODE_ENV=production tsx scripts/nightly.ts",
+    "insights:worker": "NODE_ENV=production tsx scripts/insights-worker.ts"
   },
   "dependencies": {
     "express": "^4.19.2",

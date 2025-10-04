@@ -5,6 +5,7 @@ services:
     rootDir: service/ts
     buildCommand: npm install && npm run build && npm run db:migrate
     startCommand: npm run start
+    autoDeploy: true
     envVars:
       - key: PORT
         value: "8080"
@@ -14,6 +15,23 @@ services:
           property: connectionString
     healthCheckPath: /health
     plan: starter
+
+  - type: worker
+    name: openrating-insights-worker
+    env: node
+    rootDir: service/ts
+    buildCommand: npm install && npm run build
+    startCommand: npm run insights:worker
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: openrating-db
+          property: connectionString
+      - key: INSIGHTS_WORKER_ID
+        generateValue: true
+      - key: INSIGHTS_WORKER_POLL_MS
+        value: "1000"
 
 databases:
   - name: openrating-db

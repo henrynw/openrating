@@ -44,6 +44,16 @@ import type {
   CompetitionParticipantRecord,
   CompetitionParticipantListResult,
 } from './competitions.js';
+import type {
+  PlayerInsightsSnapshot,
+  PlayerInsightsQuery,
+  PlayerInsightsEnqueueInput,
+  PlayerInsightsJob,
+  PlayerInsightsJobClaimOptions,
+  PlayerInsightsJobCompletion,
+  PlayerInsightsUpsertResult,
+  PlayerInsightsBuildOptions,
+} from './insights.js';
 
 export interface RatingStore {
   createPlayer(input: PlayerCreateInput): Promise<PlayerRecord>;
@@ -85,4 +95,18 @@ export interface RatingStore {
   listCompetitionParticipants(competitionId: string): Promise<CompetitionParticipantListResult>;
   ensureCompetitionParticipants(competitionId: string, playerIds: string[]): Promise<void>;
   runNightlyStabilization(options?: NightlyStabilizationOptions): Promise<void>;
+  getPlayerInsights(query: PlayerInsightsQuery): Promise<PlayerInsightsSnapshot | null>;
+  buildPlayerInsightsSnapshot(
+    query: PlayerInsightsQuery,
+    options?: PlayerInsightsBuildOptions
+  ): Promise<PlayerInsightsSnapshot>;
+  upsertPlayerInsightsSnapshot(
+    query: PlayerInsightsQuery,
+    snapshot: PlayerInsightsSnapshot
+  ): Promise<PlayerInsightsUpsertResult>;
+  enqueuePlayerInsightsRefresh(
+    input: PlayerInsightsEnqueueInput
+  ): Promise<{ jobId: string; enqueued: boolean }>;
+  claimPlayerInsightsJob(options: PlayerInsightsJobClaimOptions): Promise<PlayerInsightsJob | null>;
+  completePlayerInsightsJob(result: PlayerInsightsJobCompletion): Promise<void>;
 }

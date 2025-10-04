@@ -1,6 +1,14 @@
 import { randomUUID } from 'crypto';
 import { P } from '../engine/params.js';
-import type { MatchInput, PairState, PairUpdate, PlayerState, UpdateResult } from '../engine/types.js';
+import type {
+  MatchInput,
+  PairState,
+  PairUpdate,
+  PlayerState,
+  UpdateResult,
+  Sport,
+  Discipline,
+} from '../engine/types.js';
 import type {
   EnsurePlayersResult,
   LadderKey,
@@ -54,9 +62,23 @@ import type {
   CompetitionParticipantUpsertInput,
   CompetitionParticipantRecord,
   CompetitionParticipantListResult,
+  PlayerInsightsSnapshot,
+  PlayerInsightsQuery,
+  PlayerInsightsEnqueueInput,
+  PlayerInsightsJob,
+  PlayerInsightsJobClaimOptions,
+  PlayerInsightsJobCompletion,
+  PlayerInsightsUpsertResult,
+  PlayerInsightsBuildOptions,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
 import { buildLadderId, DEFAULT_REGION } from './helpers.js';
+import {
+  buildPlayerInsightsSnapshot as buildInsightsSnapshot,
+  enrichSnapshotWithCache,
+  type PlayerInsightSourceEvent,
+  type PlayerInsightCurrentRating,
+} from '../insights/builder.js';
 
 interface MemoryRatingRecord extends PlayerState {
   updatedAt: Date;
@@ -269,6 +291,9 @@ export class MemoryStore implements RatingStore {
     }>;
   }> = [];
   private ratingEvents = new Map<string, Map<string, MemoryRatingEvent[]>>();
+  private playerInsightsSnapshots = new Map<string, PlayerInsightsUpsertResult>();
+  private playerInsightJobs = new Map<string, PlayerInsightsJob>();
+  private playerInsightJobQueue: string[] = [];
   private pairSynergies = new Map<string, MemoryPairSynergy>();
   private pairSynergyHistory: MemoryPairSynergyHistory[] = [];
 
@@ -1807,6 +1832,197 @@ export class MemoryStore implements RatingStore {
       rating.mu += delta;
       rating.updatedAt = now;
     }
+  }
+
+  private buildInsightScopeKey(sport?: Sport | null, discipline?: Discipline | null) {
+    return `${sport ?? ''}:${discipline ?? ''}`;
+  }
+
+  private buildInsightStoreKey(query: PlayerInsightsQuery) {
+    return `${query.organizationId}|${query.playerId}|${this.buildInsightScopeKey(query.sport ?? null, query.discipline ?? null)}`;
+  }
+
+  private resortInsightJobQueue() {
+    this.playerInsightJobQueue.sort((a, b) => {
+      const jobA = this.playerInsightJobs.get(a);
+      const jobB = this.playerInsightJobs.get(b);
+      const timeA = jobA ? new Date(jobA.runAt).getTime() : Number.POSITIVE_INFINITY;
+      const timeB = jobB ? new Date(jobB.runAt).getTime() : Number.POSITIVE_INFINITY;
+      return timeA - timeB;
+    });
+  }
+
+  async getPlayerInsights(query: PlayerInsightsQuery): Promise<PlayerInsightsSnapshot | null> {
+    this.assertPlayerInOrganization(query.playerId, query.organizationId);
+    const key = this.buildInsightStoreKey(query);
+    const record = this.playerInsightsSnapshots.get(key);
+    if (!record) return null;
+    return JSON.parse(JSON.stringify(record.snapshot)) as PlayerInsightsSnapshot;
+  }
+
+  async buildPlayerInsightsSnapshot(
+    query: PlayerInsightsQuery,
+    options?: PlayerInsightsBuildOptions
+  ): Promise<PlayerInsightsSnapshot> {
+    const player = this.players.get(query.playerId);
+    if (!player || player.organizationId !== query.organizationId) {
+      throw new PlayerLookupError(`Player not found: ${query.playerId}`, { missing: [query.playerId] });
+    }
+
+    const events: PlayerInsightSourceEvent[] = [];
+    for (const [ladderId, playerBuckets] of this.ratingEvents.entries()) {
+      const [sport, discipline] = ladderId.split(':') as [Sport, Discipline];
+      const entries = playerBuckets.get(query.playerId);
+      if (!entries?.length) continue;
+      for (const event of entries) {
+        events.push({
+          id: event.ratingEventId,
+          createdAt: event.appliedAt,
+          sport,
+          discipline,
+          muBefore: event.muBefore,
+          muAfter: event.muAfter,
+          sigmaBefore: event.sigmaBefore,
+          sigmaAfter: event.sigmaAfter,
+          delta: event.delta,
+          winProbPre: event.winProbPre,
+          matchId: event.matchId,
+        });
+      }
+    }
+
+    events.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+    const ratings: PlayerInsightCurrentRating[] = [];
+    for (const [ladderId, rating] of player.ratings.entries()) {
+      const [sport, discipline] = ladderId.split(':') as [Sport, Discipline];
+      ratings.push({
+        sport,
+        discipline,
+        mu: rating.mu,
+        sigma: rating.sigma,
+        matchesCount: rating.matchesCount,
+        updatedAt: rating.updatedAt,
+      });
+    }
+
+    return buildInsightsSnapshot({
+      playerId: query.playerId,
+      sport: query.sport ?? null,
+      discipline: query.discipline ?? null,
+      events,
+      ratings,
+      options,
+    });
+  }
+
+  async upsertPlayerInsightsSnapshot(
+    query: PlayerInsightsQuery,
+    snapshot: PlayerInsightsSnapshot
+  ): Promise<PlayerInsightsUpsertResult> {
+    this.assertPlayerInOrganization(query.playerId, query.organizationId);
+    const { snapshot: enriched, etag, digest } = enrichSnapshotWithCache(snapshot);
+    const key = this.buildInsightStoreKey(query);
+    this.playerInsightsSnapshots.set(key, { snapshot: enriched, etag, digest });
+    return { snapshot: JSON.parse(JSON.stringify(enriched)) as PlayerInsightsSnapshot, etag, digest };
+  }
+
+  async enqueuePlayerInsightsRefresh(
+    input: PlayerInsightsEnqueueInput
+  ): Promise<{ jobId: string; enqueued: boolean }> {
+    this.assertPlayerInOrganization(input.playerId, input.organizationId);
+    const scopeKey = this.buildInsightScopeKey(input.sport ?? null, input.discipline ?? null);
+    const existing = Array.from(this.playerInsightJobs.values()).find(
+      (job) =>
+        job.playerId === input.playerId &&
+        job.organizationId === input.organizationId &&
+        job.status !== 'COMPLETED' &&
+        this.buildInsightScopeKey(job.sport ?? null, job.discipline ?? null) === scopeKey
+    );
+
+    if (existing && existing.status !== 'FAILED' && input.dedupe !== false) {
+      return { jobId: existing.jobId, enqueued: false };
+    }
+
+    const jobId = randomUUID();
+    const runAt = input.runAt ? new Date(input.runAt) : new Date();
+    const job: PlayerInsightsJob = {
+      jobId,
+      playerId: input.playerId,
+      organizationId: input.organizationId,
+      sport: input.sport ?? null,
+      discipline: input.discipline ?? null,
+      runAt: runAt.toISOString(),
+      status: 'PENDING',
+      attempts: 0,
+      lockedAt: null,
+      lockedBy: null,
+      payload: input.payload ?? null,
+      lastError: null,
+    };
+    this.playerInsightJobs.set(jobId, job);
+    this.playerInsightJobQueue.push(jobId);
+    this.resortInsightJobQueue();
+    return { jobId, enqueued: true };
+  }
+
+  async claimPlayerInsightsJob(
+    options: PlayerInsightsJobClaimOptions
+  ): Promise<PlayerInsightsJob | null> {
+    const now = new Date();
+    for (const jobId of this.playerInsightJobQueue) {
+      const job = this.playerInsightJobs.get(jobId);
+      if (!job) continue;
+      if (job.status !== 'PENDING') continue;
+      if (new Date(job.runAt) > now) continue;
+      job.status = 'IN_PROGRESS';
+      job.lockedBy = options.workerId;
+      job.lockedAt = now.toISOString();
+      job.attempts += 1;
+      this.playerInsightJobs.set(jobId, job);
+      return JSON.parse(JSON.stringify(job)) as PlayerInsightsJob;
+    }
+    return null;
+  }
+
+  async completePlayerInsightsJob(result: PlayerInsightsJobCompletion): Promise<void> {
+    const job = this.playerInsightJobs.get(result.jobId);
+    if (!job) return;
+    if (job.lockedBy && job.lockedBy !== result.workerId) {
+      return;
+    }
+
+    if (result.success) {
+      job.status = 'COMPLETED';
+      job.lockedBy = null;
+      job.lockedAt = null;
+      job.lastError = null;
+      this.playerInsightJobs.set(job.jobId, job);
+      this.playerInsightJobQueue = this.playerInsightJobQueue.filter((id) => id !== job.jobId);
+      return;
+    }
+
+    const rescheduleAt = result.rescheduleAt === undefined ? new Date(Date.now() + 30_000) : result.rescheduleAt;
+    if (rescheduleAt === null) {
+      job.status = 'FAILED';
+      job.lockedBy = null;
+      job.lockedAt = null;
+      job.lastError = result.error ?? null;
+      this.playerInsightJobs.set(job.jobId, job);
+      return;
+    }
+
+    const runAt = new Date(rescheduleAt);
+    job.status = 'PENDING';
+    job.lockedBy = null;
+    job.lockedAt = null;
+    job.lastError = result.error ?? null;
+    job.runAt = runAt.toISOString();
+    this.playerInsightJobs.set(job.jobId, job);
+    if (!this.playerInsightJobQueue.includes(job.jobId)) {
+      this.playerInsightJobQueue.push(job.jobId);
+    }
+    this.resortInsightJobQueue();
   }
 
   private assertPlayerInOrganization(playerId: string, organizationId: string) {

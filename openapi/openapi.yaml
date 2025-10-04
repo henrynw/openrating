@@ -191,6 +191,61 @@ paths:
         '404':
           description: Player not found
 
+  /v1/players/{player_id}/insights:
+    get:
+      tags: [Players]
+      summary: Retrieve precomputed insights for a player
+      operationId: getPlayerInsights
+      parameters:
+        - in: path
+          name: player_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: organization_id
+          required: false
+          schema: { type: string }
+          description: 'UUID of the organization (optional if organization_slug provided)'
+        - in: query
+          name: organization_slug
+          required: false
+          schema: { type: string }
+          description: 'Slug identifier for the organization'
+        - in: query
+          name: sport
+          required: false
+          schema:
+            type: string
+            enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+          description: Limit insights to a specific sport (defaults to all tracked sports)
+        - in: query
+          name: discipline
+          required: false
+          schema:
+            type: string
+            enum: [SINGLES, DOUBLES, MIXED]
+          description: Limit insights to a specific discipline when provided
+        - in: header
+          name: If-None-Match
+          required: false
+          schema: { type: string }
+          description: 'Return 304 if the provided ETag matches the current snapshot'
+      responses:
+        '200':
+          description: Precomputed insight snapshot for the player
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Cache validator for the snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerInsightsResponse'
+        '304':
+          description: Snapshot not modified
+        '404':
+          description: Player not found
+
   /v1/ratings/{sport}/{discipline}/players/{player_id}/events:
     get:
       tags: [Ratings]
@@ -1042,6 +1097,200 @@ components:
         metadata:
           type: [object, 'null']
           additionalProperties: true
+    PlayerInsightsResponse:
+      type: object
+      required: [meta, rating_trend, form_summary, discipline_overview, volatility]
+      properties:
+        meta:
+          $ref: '#/components/schemas/PlayerInsightMeta'
+        rating_trend:
+          $ref: '#/components/schemas/PlayerInsightRatingTrend'
+        form_summary:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PlayerInsightFormWindow'
+        discipline_overview:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PlayerInsightDiscipline'
+        milestones:
+          type: [array, 'null']
+          items:
+            $ref: '#/components/schemas/PlayerInsightMilestone'
+        streaks:
+          type: [array, 'null']
+          items:
+            $ref: '#/components/schemas/PlayerInsightStreak'
+        volatility:
+          $ref: '#/components/schemas/PlayerInsightVolatility'
+        cache_keys:
+          $ref: '#/components/schemas/PlayerInsightCacheKeys'
+    PlayerInsightMeta:
+      type: object
+      required: [schema_version, generated_at, player_id]
+      properties:
+        schema_version: { type: integer, minimum: 1 }
+        generated_at: { type: string, format: date-time }
+        player_id: { type: string }
+        sport:
+          type: [string, 'null']
+          enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL, null]
+        disciplines:
+          type: array
+          items:
+            type: string
+            enum: [SINGLES, DOUBLES, MIXED]
+        sample_range:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            start:
+              type: string
+              format: date-time
+            end:
+              type: string
+              format: date-time
+    PlayerInsightRatingTrend:
+      type: object
+      required: [cadence, points]
+      properties:
+        cadence:
+          type: string
+          enum: [DAILY, WEEKLY, MONTHLY]
+          default: WEEKLY
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlayerInsightRatingPoint'
+        lifetime_high:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            mu: { type: number }
+            sigma: { type: number }
+            occurred_at: { type: string, format: date-time }
+        lifetime_low:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            mu: { type: number }
+            sigma: { type: number }
+            occurred_at: { type: string, format: date-time }
+        latest_snapshot_id:
+          type: [string, 'null']
+    PlayerInsightRatingPoint:
+      type: object
+      required: [period_start, mu, sigma]
+      properties:
+        period_start: { type: string, format: date-time }
+        mu: { type: number }
+        sigma: { type: number }
+        mu_delta:
+          type: [number, 'null']
+        sample_count:
+          type: [integer, 'null']
+          minimum: 0
+    PlayerInsightFormWindow:
+      type: object
+      required: [matches, wins, losses, net_delta]
+      properties:
+        matches: { type: integer, minimum: 0 }
+        wins: { type: integer, minimum: 0 }
+        losses: { type: integer, minimum: 0 }
+        draws:
+          type: [integer, 'null']
+          minimum: 0
+        net_delta: { type: number }
+        avg_delta:
+          type: [number, 'null']
+        avg_opponent_mu:
+          type: [number, 'null']
+        rating_events:
+          type: [integer, 'null']
+          minimum: 0
+        last_event_at:
+          type: [string, 'null']
+          format: date-time
+    PlayerInsightDiscipline:
+      type: object
+      required: [matches_played, wins, net_delta]
+      properties:
+        sport:
+          type: [string, 'null']
+          enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL, null]
+        discipline:
+          type: [string, 'null']
+          enum: [SINGLES, DOUBLES, MIXED, null]
+        current_rank:
+          type: [integer, 'null']
+          minimum: 1
+        best_rank:
+          type: [integer, 'null']
+          minimum: 1
+        mu:
+          type: [number, 'null']
+        sigma:
+          type: [number, 'null']
+        matches_played: { type: integer, minimum: 0 }
+        wins: { type: integer, minimum: 0 }
+        losses:
+          type: [integer, 'null']
+          minimum: 0
+        net_delta: { type: number }
+        events_played:
+          type: [integer, 'null']
+          minimum: 0
+        last_event_at:
+          type: [string, 'null']
+          format: date-time
+    PlayerInsightMilestone:
+      type: object
+      required: [type, occurred_at]
+      properties:
+        type: { type: string }
+        occurred_at: { type: string, format: date-time }
+        delta:
+          type: [number, 'null']
+        label:
+          type: [string, 'null']
+        match_id:
+          type: [string, 'null']
+        rating_event_id:
+          type: [string, 'null']
+    PlayerInsightStreak:
+      type: object
+      required: [type, start_at, end_at]
+      properties:
+        type:
+          type: string
+          enum: [WIN_STREAK, LOSS_STREAK, RATING_MOMENTUM, VOLATILITY_SHIFT]
+        start_at: { type: string, format: date-time }
+        end_at: { type: string, format: date-time }
+        matches:
+          type: [integer, 'null']
+          minimum: 0
+        net_delta:
+          type: [number, 'null']
+    PlayerInsightVolatility:
+      type: object
+      required: [sigma_now]
+      properties:
+        sigma_now: { type: number }
+        sigma_30d_change:
+          type: [number, 'null']
+        inactive_streak_days:
+          type: [integer, 'null']
+          minimum: 0
+        volatility_status:
+          type: [string, 'null']
+          enum: [STABLE, ELEVATED, HIGH, UNKNOWN, null]
+    PlayerInsightCacheKeys:
+      type: [object, 'null']
+      properties:
+        etag:
+          type: [string, 'null']
+        digest:
+          type: [string, 'null']
     MatchSubmit:
       type: object
       required: [provider_id, sport, discipline, format, start_time, sides, games]

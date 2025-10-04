@@ -30,17 +30,24 @@ npm run db:migrate
 # 4. Run the API
 npm run dev
 # http://localhost:8080/health
+
+# 5. (optional) Run the insights worker in another terminal to build player
+# insight snapshots and keep them fresh
+npm run insights:worker
 ```
 
 > Tip: if `DATABASE_URL` is omitted the service falls back to the in-memory store (handy for demos, no persistence).
 
 ### Deploy on Render (blueprint)
 1. [Create a Render account](https://render.com) and connect this repo.
-2. Accept the detected `render.yaml` blueprint — it provisions a Node web service (`openrating-api`) and a managed Postgres instance (`openrating-db`).
-3. Render runs `npm install`, `npm run build`, executes migrations (`npm run db:migrate`), then starts the API.
-4. Visit the generated URL; `/health` should respond with `{ ok: true }`.
+2. Accept the detected `render.yaml` blueprint — it provisions:
+   - `openrating-api` (web) with auto deploy and automated migrations.
+   - `openrating-insights-worker` (worker) that continuously refreshes player insights.
+   - `openrating-db` (Postgres).
+3. Render runs the web build `npm install && npm run build && npm run db:migrate` and the worker build `npm install && npm run build`. Both services auto-deploy on each push (toggle `autoDeploy` in Render if you prefer manual approvals).
+4. Verify the API at `/health` and check the worker logs for insight job activity.
 
-> Tip: edit `render.yaml` if you need a different plan, region, or environment settings.
+> Tip: edit `render.yaml` if you need different plans, regions, or environment settings.
 
 ### Auth0 integration
 - Define an API in Auth0 with identifier `https://api.openrating.app` (or your own audience).
@@ -76,6 +83,13 @@ npm run grants -- list --subject bwf-provider
 ```
 
 The CLI reads credentials from environment variables so provider secrets stay out of git.
+
+### Background insights job queue
+- `/v1/players/{player_id}/insights` serves precomputed snapshots backed by the `player_insights` table and honours `If-None-Match` headers.
+- Run `npm run insights:worker` (locally or in production) to process `player_insight_jobs`, rebuild snapshots, and write them back atomically.
+- Enqueue refreshes by calling `store.enqueuePlayerInsightsRefresh({ organizationId, playerId, sport, discipline })` wherever you ingest matches or rating changes. Jobs are deduped by scope, and multiple workers can run concurrently.
+- For backfills, enqueue jobs for every player (or wipe the table) and let the worker regenerate snapshots; it’s safe to replay history.
+- To pause processing, stop the worker. Pending jobs remain in the queue until the worker resumes.
 
 ### Listing data
 - `POST /v1/organizations`: create a new organization (returns the canonical UUID).

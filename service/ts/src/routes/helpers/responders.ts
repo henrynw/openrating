@@ -10,6 +10,7 @@ import type {
   PlayerAttributes,
   PlayerRankingSnapshot,
   RatingEventRecord,
+  PlayerInsightsSnapshot,
 } from '../../store/index.js';
 
 export const toOrganizationResponse = (
@@ -210,3 +211,129 @@ export const toRatingEventResponse = (event: RatingEventRecord) => ({
   win_probability_pre: event.winProbPre ?? null,
   metadata: event.metadata ?? null,
 });
+
+const serializeFormSummary = (summary: PlayerInsightsSnapshot['formSummary']) =>
+  Object.fromEntries(
+    Object.entries(summary).map(([key, window]) => [
+      key,
+      {
+        matches: window.matches,
+        wins: window.wins,
+        losses: window.losses,
+        draws: window.draws ?? null,
+        net_delta: window.netDelta,
+        avg_delta: window.avgDelta ?? null,
+        avg_opponent_mu: window.avgOpponentMu ?? null,
+        rating_events: window.ratingEvents ?? null,
+        last_event_at: window.lastEventAt ?? null,
+      },
+    ])
+  );
+
+const serializeDisciplineOverview = (
+  overview: PlayerInsightsSnapshot['disciplineOverview']
+) =>
+  Object.fromEntries(
+    Object.entries(overview).map(([key, discipline]) => [
+      key,
+      {
+        sport: discipline.sport ?? null,
+        discipline: discipline.discipline ?? null,
+        current_rank: discipline.currentRank ?? null,
+        best_rank: discipline.bestRank ?? null,
+        mu: discipline.mu ?? null,
+        sigma: discipline.sigma ?? null,
+        matches_played: discipline.matchesPlayed,
+        wins: discipline.wins,
+        losses: discipline.losses ?? null,
+        net_delta: discipline.netDelta,
+        events_played: discipline.eventsPlayed ?? null,
+        last_event_at: discipline.lastEventAt ?? null,
+      },
+    ])
+  );
+
+const serializeTrendPoints = (snapshot: PlayerInsightsSnapshot) =>
+  snapshot.ratingTrend.points.map((point) => ({
+    period_start: point.periodStart,
+    mu: point.mu,
+    sigma: point.sigma,
+    mu_delta: point.muDelta ?? null,
+    sample_count: point.sampleCount ?? null,
+  }));
+
+export const toPlayerInsightsResponse = (snapshot: PlayerInsightsSnapshot) => {
+  const { meta } = snapshot;
+  const ratingTrend = snapshot.ratingTrend;
+  const formSummary = serializeFormSummary(snapshot.formSummary);
+  const disciplineOverview = serializeDisciplineOverview(snapshot.disciplineOverview);
+  const milestones = snapshot.milestones?.map((milestone) => ({
+    type: milestone.type,
+    occurred_at: milestone.occurredAt,
+    delta: milestone.delta ?? null,
+    label: milestone.label ?? null,
+    match_id: milestone.matchId ?? null,
+    rating_event_id: milestone.ratingEventId ?? null,
+  })) ?? null;
+  const streaks = snapshot.streaks?.map((streak) => ({
+    type: streak.type,
+    start_at: streak.startAt,
+    end_at: streak.endAt,
+    matches: streak.matches ?? null,
+    net_delta: streak.netDelta ?? null,
+  })) ?? null;
+
+  const lifetimeHigh = ratingTrend.lifetimeHigh
+    ? {
+        mu: ratingTrend.lifetimeHigh.mu,
+        sigma: ratingTrend.lifetimeHigh.sigma,
+        occurred_at: ratingTrend.lifetimeHigh.occurredAt,
+      }
+    : null;
+  const lifetimeLow = ratingTrend.lifetimeLow
+    ? {
+        mu: ratingTrend.lifetimeLow.mu,
+        sigma: ratingTrend.lifetimeLow.sigma,
+        occurred_at: ratingTrend.lifetimeLow.occurredAt,
+      }
+    : null;
+
+  return {
+    meta: {
+      schema_version: meta.schemaVersion,
+      generated_at: meta.generatedAt,
+      player_id: meta.playerId,
+      sport: meta.sport ?? null,
+      disciplines: meta.disciplines,
+      sample_range: meta.sampleRange
+        ? {
+            start: meta.sampleRange.start ?? null,
+            end: meta.sampleRange.end ?? null,
+          }
+        : null,
+    },
+    rating_trend: {
+      cadence: ratingTrend.cadence,
+      points: serializeTrendPoints(snapshot),
+      lifetime_high: lifetimeHigh,
+      lifetime_low: lifetimeLow,
+      latest_snapshot_id: ratingTrend.latestSnapshotId ?? null,
+    },
+    form_summary: formSummary,
+    discipline_overview: disciplineOverview,
+    milestones,
+    streaks,
+    volatility: {
+      sigma_now: snapshot.volatility.sigmaNow,
+      sigma_30d_change: snapshot.volatility.sigma30dChange ?? null,
+      inactive_streak_days: snapshot.volatility.inactiveStreakDays ?? null,
+      volatility_status: snapshot.volatility.volatilityStatus ?? null,
+    },
+    cache_keys: snapshot.cacheKeys
+      ? {
+          etag: snapshot.cacheKeys.etag ?? null,
+          digest: snapshot.cacheKeys.digest ?? null,
+        }
+      : null,
+  };
+};
