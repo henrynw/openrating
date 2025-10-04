@@ -87,6 +87,10 @@ export const events = pgTable('events', {
   organizationId: text('organization_id').references(() => organizations.organizationId, {
     onDelete: 'cascade',
   }).notNull(),
+  providerId: text('provider_id').references(() => providers.providerId, {
+    onDelete: 'restrict',
+  }),
+  externalRef: text('external_ref'),
   type: text('type').notNull(),
   name: text('name').notNull(),
   slug: text('slug').notNull(),
@@ -100,6 +104,9 @@ export const events = pgTable('events', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table: any) => ({
   organizationSlugIdx: uniqueIndex('events_org_slug_idx').on(table.organizationId, table.slug),
+  providerExternalRefIdx: uniqueIndex('events_provider_external_ref_idx')
+    .on(table.providerId, table.externalRef)
+    .where(sql`${table.externalRef} IS NOT NULL`),
 }));
 
 export const competitions = pgTable('competitions', {
@@ -110,6 +117,10 @@ export const competitions = pgTable('competitions', {
   organizationId: text('organization_id').references(() => organizations.organizationId, {
     onDelete: 'cascade',
   }).notNull(),
+  providerId: text('provider_id').references(() => providers.providerId, {
+    onDelete: 'restrict',
+  }),
+  externalRef: text('external_ref'),
   name: text('name').notNull(),
   slug: text('slug').notNull(),
   sport: text('sport'),
@@ -129,6 +140,9 @@ export const competitions = pgTable('competitions', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table: any) => ({
   eventSlugIdx: uniqueIndex('competitions_event_slug_idx').on(table.eventId, table.slug),
+  providerExternalRefIdx: uniqueIndex('competitions_provider_external_ref_idx')
+    .on(table.providerId, table.externalRef)
+    .where(sql`${table.externalRef} IS NOT NULL`),
 }));
 
 export const players = pgTable('players', {

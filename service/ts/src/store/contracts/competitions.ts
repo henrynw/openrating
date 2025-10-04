@@ -5,6 +5,8 @@ export interface CompetitionRecord {
   competitionId: string;
   eventId: string;
   organizationId: string;
+  providerId?: string | null;
+  externalRef?: string | null;
   name: string;
   slug: string;
   sport?: MatchInput['sport'] | null;
@@ -27,6 +29,8 @@ export interface CompetitionRecord {
 export interface CompetitionCreateInput {
   eventId: string;
   organizationId: string;
+  providerId: string;
+  externalRef?: string | null;
   name: string;
   slug?: string | null;
   sport?: MatchInput['sport'] | null;

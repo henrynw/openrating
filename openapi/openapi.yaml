@@ -1630,6 +1630,8 @@ components:
         event_id: { type: string }
         organization_id: { type: string }
         organization_slug: { type: string }
+        provider_id: { type: [string, 'null'] }
+        external_ref: { type: [string, 'null'] }
         type:
           type: string
           enum: [TOURNAMENT, LEAGUE, LADDER, BOX_LEAGUE, CHAMPIONSHIP, SERIES, EXHIBITION, CUSTOM]
@@ -1667,6 +1669,12 @@ components:
       properties:
         organization_id: { type: string, format: uuid }
         organization_slug: { type: string }
+        provider_id:
+          type: string
+          description: >-
+            Optional provider override. When omitted the API derives the provider_id from the authenticated subject
+            and ignores any supplied value that does not match that subject.
+        external_ref: { type: string }
         type:
           type: string
           enum: [TOURNAMENT, LEAGUE, LADDER, BOX_LEAGUE, CHAMPIONSHIP, SERIES, EXHIBITION, CUSTOM]
@@ -1717,6 +1725,8 @@ components:
         event_id: { type: string }
         event_slug: { type: string }
         organization_id: { type: string }
+        provider_id: { type: [string, 'null'] }
+        external_ref: { type: [string, 'null'] }
         name: { type: string }
         slug: { type: string }
         sport:
@@ -1760,6 +1770,12 @@ components:
       type: object
       required: [name]
       properties:
+        provider_id:
+          type: string
+          description: >-
+            Optional provider override. When omitted the API derives the provider_id from the authenticated subject
+            and ignores any supplied value that does not match that subject.
+        external_ref: { type: string }
         name: { type: string }
         slug: { type: string }
         sport:

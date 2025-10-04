@@ -7,6 +7,7 @@ import {
   requireAuth,
   requireScope,
   hasScope,
+  getSubjectId,
 } from '../auth.js';
 import type {
   RatingStore,
@@ -35,6 +36,8 @@ const EventCreateSchema = z
   .object({
     organization_id: z.string().uuid().optional(),
     organization_slug: z.string().optional(),
+    provider_id: z.string().optional(),
+    external_ref: z.string().optional(),
     type: EventTypeEnum,
     name: z.string().min(1),
     slug: z.string().optional(),
@@ -87,6 +90,8 @@ const toEventResponse = (
     event_id: event.eventId,
     organization_id: event.organizationId,
     organization_slug: organization.slug,
+    provider_id: event.providerId ?? null,
+    external_ref: event.externalRef ?? null,
     type: event.type,
     name: event.name,
     slug: event.slug,
@@ -130,8 +135,18 @@ export const registerEventRoutes = (app: Express, deps: EventRouteDeps) => {
         errorMessage: 'Insufficient grants to create events',
       });
 
+      const subjectProviderId = await getSubjectId(req);
+      if (parsed.data.provider_id && parsed.data.provider_id !== subjectProviderId) {
+        return res.status(400).send({
+          error: 'provider_mismatch',
+          message: 'provider_id must match the authenticated subject',
+        });
+      }
+
       const event = await store.createEvent({
         organizationId: organization.organizationId,
+        providerId: subjectProviderId,
+        externalRef: parsed.data.external_ref ?? null,
         type: parsed.data.type,
         name: parsed.data.name,
         slug: parsed.data.slug,

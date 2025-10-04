@@ -65,6 +65,8 @@ export interface EventMediaLinks {
 export interface EventRecord {
   eventId: string;
   organizationId: string;
+  providerId?: string | null;
+  externalRef?: string | null;
   type: EventType;
   name: string;
   slug: string;
@@ -80,6 +82,8 @@ export interface EventRecord {
 
 export interface EventCreateInput {
   organizationId: string;
+  providerId: string;
+  externalRef?: string | null;
   type: EventType;
   name: string;
   slug?: string;

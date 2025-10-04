@@ -6,6 +6,7 @@ import {
   authorizeOrgAccess,
   requireAuth,
   requireScope,
+  getSubjectId,
 } from '../auth.js';
 import type {
   RatingStore,
@@ -63,6 +64,8 @@ const CompetitionMediaLinksSchema = z.object({
 });
 
 const CompetitionCreateSchema = z.object({
+  provider_id: z.string().optional(),
+  external_ref: z.string().optional(),
   name: z.string().min(1),
   slug: z.string().optional(),
   sport: OptionalSportEnum,
@@ -144,12 +147,22 @@ export const registerCompetitionRoutes = (app: Express, deps: CompetitionRouteDe
         errorMessage: 'Insufficient grants to create competitions',
       });
 
+      const subjectProviderId = await getSubjectId(req);
+      if (parsed.data.provider_id && parsed.data.provider_id !== subjectProviderId) {
+        return res.status(400).send({
+          error: 'provider_mismatch',
+          message: 'provider_id must match the authenticated subject',
+        });
+      }
+
       const classification = mapCompetitionClassificationInput(parsed.data.classification);
       const mediaLinks = mapCompetitionMediaLinksInput(parsed.data.media_links);
 
       const competition = await store.createCompetition({
         eventId: event.eventId,
         organizationId: event.organizationId,
+        providerId: subjectProviderId,
+        externalRef: parsed.data.external_ref ?? null,
         name: parsed.data.name,
         slug: parsed.data.slug ?? null,
         sport: parsed.data.sport ?? null,

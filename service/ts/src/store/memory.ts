@@ -91,6 +91,8 @@ interface MemoryPlayerRecord extends PlayerRecord {
 interface MemoryEventRecord {
   eventId: string;
   organizationId: string;
+  providerId: string;
+  externalRef: string | null;
   type: string;
   name: string;
   slug: string;
@@ -108,6 +110,8 @@ interface MemoryCompetitionRecord {
   competitionId: string;
   eventId: string;
   organizationId: string;
+  providerId: string;
+  externalRef: string | null;
   name: string;
   slug: string;
   sport?: string | null;
@@ -259,9 +263,11 @@ export class MemoryStore implements RatingStore {
   private organizationsBySlug = new Map<string, string>();
   private events = new Map<string, MemoryEventRecord>();
   private eventsBySlug = new Map<string, string>();
+  private eventsByProviderRef = new Map<string, string>();
   private competitionParticipants = new Map<string, Map<string, MemoryCompetitionParticipant>>();
   private competitions = new Map<string, MemoryCompetitionRecord>();
   private competitionsBySlug = new Map<string, string>();
+  private competitionsByProviderRef = new Map<string, string>();
   private players = new Map<string, MemoryPlayerRecord>();
   private matches: Array<{
     matchId: string;
@@ -1257,6 +1263,17 @@ export class MemoryStore implements RatingStore {
 
   async createEvent(input: EventCreateInput): Promise<EventRecord> {
     this.assertOrganizationExists(input.organizationId);
+    const providerKey = input.externalRef ? `${input.providerId}::${input.externalRef}` : null;
+    if (providerKey) {
+      const existingId = this.eventsByProviderRef.get(providerKey);
+      if (existingId) {
+        const existing = this.events.get(existingId);
+        if (existing) {
+          return this.toEventRecord(existing);
+        }
+      }
+    }
+
     const eventId = randomUUID();
     const baseSlug = input.slug ?? input.name;
     const slug = slugify(baseSlug);
@@ -1269,6 +1286,8 @@ export class MemoryStore implements RatingStore {
     const record: MemoryEventRecord = {
       eventId,
       organizationId: input.organizationId,
+      providerId: input.providerId,
+      externalRef: input.externalRef ?? null,
       type: input.type,
       name: input.name,
       slug,
@@ -1284,6 +1303,9 @@ export class MemoryStore implements RatingStore {
 
     this.events.set(eventId, record);
     this.eventsBySlug.set(slugKey, eventId);
+    if (providerKey) {
+      this.eventsByProviderRef.set(providerKey, eventId);
+    }
 
     return this.toEventRecord(record);
   }
@@ -1388,6 +1410,22 @@ export class MemoryStore implements RatingStore {
       );
     }
 
+    const providerKey = input.externalRef ? `${input.providerId}::${input.externalRef}` : null;
+    if (providerKey) {
+      const existingId = this.competitionsByProviderRef.get(providerKey);
+      if (existingId) {
+        const existing = this.competitions.get(existingId);
+        if (existing) {
+          if (existing.eventId !== input.eventId) {
+            throw new EventLookupError(
+              `Competition external_ref already exists for a different event (${existing.eventId})`
+            );
+          }
+          return this.toCompetitionRecord(existing);
+        }
+      }
+    }
+
     const competitionId = randomUUID();
     const baseSlug = input.slug ?? input.name;
     const slug = slugify(baseSlug);
@@ -1401,6 +1439,8 @@ export class MemoryStore implements RatingStore {
       competitionId,
       eventId: input.eventId,
       organizationId: input.organizationId,
+      providerId: input.providerId,
+      externalRef: input.externalRef ?? null,
       name: input.name,
       slug,
       sport: input.sport ?? null,
@@ -1422,6 +1462,9 @@ export class MemoryStore implements RatingStore {
 
     this.competitions.set(competitionId, record);
     this.competitionsBySlug.set(slugKey, competitionId);
+    if (providerKey) {
+      this.competitionsByProviderRef.set(providerKey, competitionId);
+    }
 
     return this.toCompetitionRecord(record);
   }
@@ -1633,6 +1676,8 @@ export class MemoryStore implements RatingStore {
     return {
       eventId: event.eventId,
       organizationId: event.organizationId,
+      providerId: event.providerId,
+      externalRef: event.externalRef,
       type: event.type as any,
       name: event.name,
       slug: event.slug,
@@ -1652,6 +1697,8 @@ export class MemoryStore implements RatingStore {
       competitionId: competition.competitionId,
       eventId: competition.eventId,
       organizationId: competition.organizationId,
+      providerId: competition.providerId,
+      externalRef: competition.externalRef,
       name: competition.name,
       slug: competition.slug,
       sport: (competition.sport ?? null) as CompetitionRecord['sport'],
@@ -1662,6 +1709,10 @@ export class MemoryStore implements RatingStore {
       drawSize: competition.drawSize ?? null,
       startDate: competition.startDate ? competition.startDate.toISOString() : null,
       endDate: competition.endDate ? competition.endDate.toISOString() : null,
+      classification: competition.classification ?? null,
+      purse: competition.purse ?? null,
+      purseCurrency: competition.purseCurrency ?? null,
+      mediaLinks: competition.mediaLinks ?? null,
       metadata: competition.metadata ?? null,
       createdAt: competition.createdAt.toISOString(),
       updatedAt: competition.updatedAt.toISOString(),

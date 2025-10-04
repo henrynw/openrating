@@ -199,6 +199,8 @@ type PlayerLeaderboardRow = {
 type EventRow = {
   eventId: string;
   organizationId: string;
+  providerId: string | null;
+  externalRef: string | null;
   type: string;
   name: string;
   slug: string;
@@ -216,6 +218,8 @@ type CompetitionRow = {
   competitionId: string;
   eventId: string;
   organizationId: string;
+  providerId: string | null;
+  externalRef: string | null;
   name: string;
   slug: string;
   sport: string | null;
@@ -339,6 +343,8 @@ export class PostgresStore implements RatingStore {
     return {
       eventId: row.eventId,
       organizationId: row.organizationId,
+      providerId: row.providerId ?? null,
+      externalRef: row.externalRef ?? null,
       type: row.type as any,
       name: row.name,
       slug: row.slug,
@@ -358,6 +364,8 @@ export class PostgresStore implements RatingStore {
       competitionId: row.competitionId,
       eventId: row.eventId,
       organizationId: row.organizationId,
+      providerId: row.providerId ?? null,
+      externalRef: row.externalRef ?? null,
       name: row.name,
       slug: row.slug,
       sport: (row.sport ?? null) as CompetitionRecord['sport'],
@@ -479,6 +487,8 @@ export class PostgresStore implements RatingStore {
       .select({
         eventId: events.eventId,
         organizationId: events.organizationId,
+        providerId: events.providerId,
+        externalRef: events.externalRef,
         type: events.type,
         name: events.name,
         slug: events.slug,
@@ -502,6 +512,8 @@ export class PostgresStore implements RatingStore {
       .select({
         eventId: events.eventId,
         organizationId: events.organizationId,
+        providerId: events.providerId,
+        externalRef: events.externalRef,
         type: events.type,
         name: events.name,
         slug: events.slug,
@@ -522,12 +534,45 @@ export class PostgresStore implements RatingStore {
     return (rows as EventRow[]).at(0) ?? null;
   }
 
+  private async getEventRowByProviderRef(
+    providerId: string,
+    externalRef: string,
+    client = this.db
+  ): Promise<EventRow | null> {
+    const rows = await client
+      .select({
+        eventId: events.eventId,
+        organizationId: events.organizationId,
+        providerId: events.providerId,
+        externalRef: events.externalRef,
+        type: events.type,
+        name: events.name,
+        slug: events.slug,
+        description: events.description,
+        startDate: events.startDate,
+        endDate: events.endDate,
+        sanctioningBody: events.sanctioningBody,
+        season: events.season,
+        metadata: events.metadata,
+        createdAt: events.createdAt,
+        updatedAt: events.updatedAt,
+      })
+      .from(events)
+      .where(
+        and(eq(events.providerId, providerId), eq(events.externalRef, externalRef))
+      )
+      .limit(1);
+    return (rows as EventRow[]).at(0) ?? null;
+  }
+
   private async getCompetitionRowById(competitionId: string, client = this.db): Promise<CompetitionRow | null> {
     const rows = await client
       .select({
         competitionId: competitions.competitionId,
         eventId: competitions.eventId,
         organizationId: competitions.organizationId,
+        providerId: competitions.providerId,
+        externalRef: competitions.externalRef,
         name: competitions.name,
         slug: competitions.slug,
         sport: competitions.sport,
@@ -558,6 +603,8 @@ export class PostgresStore implements RatingStore {
         competitionId: competitions.competitionId,
         eventId: competitions.eventId,
         organizationId: competitions.organizationId,
+        providerId: competitions.providerId,
+        externalRef: competitions.externalRef,
         name: competitions.name,
         slug: competitions.slug,
         sport: competitions.sport,
@@ -578,6 +625,42 @@ export class PostgresStore implements RatingStore {
       })
       .from(competitions)
       .where(and(eq(competitions.eventId, eventId), eq(competitions.slug, slug)))
+      .limit(1);
+    return (rows as CompetitionRow[]).at(0) ?? null;
+  }
+
+  private async getCompetitionRowByProviderRef(
+    providerId: string,
+    externalRef: string,
+    client = this.db
+  ): Promise<CompetitionRow | null> {
+    const rows = await client
+      .select({
+        competitionId: competitions.competitionId,
+        eventId: competitions.eventId,
+        organizationId: competitions.organizationId,
+        providerId: competitions.providerId,
+        externalRef: competitions.externalRef,
+        name: competitions.name,
+        slug: competitions.slug,
+        sport: competitions.sport,
+        discipline: competitions.discipline,
+        format: competitions.format,
+        tier: competitions.tier,
+        status: competitions.status,
+        drawSize: competitions.drawSize,
+        startDate: competitions.startDate,
+        endDate: competitions.endDate,
+        classification: competitions.classification,
+        purse: competitions.purse,
+        purseCurrency: competitions.purseCurrency,
+        mediaLinks: competitions.mediaLinks,
+        metadata: competitions.metadata,
+        createdAt: competitions.createdAt,
+        updatedAt: competitions.updatedAt,
+      })
+      .from(competitions)
+      .where(and(eq(competitions.providerId, providerId), eq(competitions.externalRef, externalRef)))
       .limit(1);
     return (rows as CompetitionRow[]).at(0) ?? null;
   }
@@ -1222,6 +1305,15 @@ export class PostgresStore implements RatingStore {
 
   async createEvent(input: EventCreateInput): Promise<EventRecord> {
     await this.assertOrganizationExists(input.organizationId);
+    await this.ensureProvider(input.providerId);
+
+    if (input.externalRef) {
+      const existingByRef = await this.getEventRowByProviderRef(input.providerId, input.externalRef);
+      if (existingByRef) {
+        return this.toEventRecord(existingByRef);
+      }
+    }
+
     const slug = slugify(input.slug ?? input.name);
     const existing = await this.getEventRowBySlug(input.organizationId, slug);
     if (existing) {
@@ -1233,6 +1325,8 @@ export class PostgresStore implements RatingStore {
       .values({
         eventId: randomUUID(),
         organizationId: input.organizationId,
+        providerId: input.providerId,
+        externalRef: input.externalRef ?? null,
         type: input.type,
         name: input.name,
         slug,
@@ -1248,6 +1342,8 @@ export class PostgresStore implements RatingStore {
       .returning({
         eventId: events.eventId,
         organizationId: events.organizationId,
+        providerId: events.providerId,
+        externalRef: events.externalRef,
         type: events.type,
         name: events.name,
         slug: events.slug,
@@ -1300,6 +1396,8 @@ export class PostgresStore implements RatingStore {
       .returning({
         eventId: events.eventId,
         organizationId: events.organizationId,
+        providerId: events.providerId,
+        externalRef: events.externalRef,
         type: events.type,
         name: events.name,
         slug: events.slug,
@@ -1340,6 +1438,8 @@ export class PostgresStore implements RatingStore {
       .select({
         eventId: events.eventId,
         organizationId: events.organizationId,
+        providerId: events.providerId,
+        externalRef: events.externalRef,
         type: events.type,
         name: events.name,
         slug: events.slug,
@@ -1393,6 +1493,20 @@ export class PostgresStore implements RatingStore {
       );
     }
 
+    await this.ensureProvider(input.providerId);
+
+    if (input.externalRef) {
+      const existingByRef = await this.getCompetitionRowByProviderRef(input.providerId, input.externalRef);
+      if (existingByRef) {
+        if (existingByRef.eventId !== input.eventId) {
+          throw new EventLookupError(
+            `Competition external_ref already exists for a different event (${existingByRef.eventId})`
+          );
+        }
+        return this.toCompetitionRecord(existingByRef);
+      }
+    }
+
     const slug = slugify(input.slug ?? input.name);
     const existing = await this.getCompetitionRowBySlug(input.eventId, slug);
     if (existing) {
@@ -1405,6 +1519,8 @@ export class PostgresStore implements RatingStore {
         competitionId: randomUUID(),
         eventId: input.eventId,
         organizationId: input.organizationId,
+        providerId: input.providerId,
+        externalRef: input.externalRef ?? null,
         name: input.name,
         slug,
         sport: input.sport ?? null,
@@ -1427,6 +1543,8 @@ export class PostgresStore implements RatingStore {
         competitionId: competitions.competitionId,
         eventId: competitions.eventId,
         organizationId: competitions.organizationId,
+        providerId: competitions.providerId,
+        externalRef: competitions.externalRef,
         name: competitions.name,
         slug: competitions.slug,
         sport: competitions.sport,
@@ -1496,6 +1614,8 @@ export class PostgresStore implements RatingStore {
         competitionId: competitions.competitionId,
         eventId: competitions.eventId,
         organizationId: competitions.organizationId,
+        providerId: competitions.providerId,
+        externalRef: competitions.externalRef,
         name: competitions.name,
         slug: competitions.slug,
         sport: competitions.sport,
@@ -1524,6 +1644,8 @@ export class PostgresStore implements RatingStore {
         competitionId: competitions.competitionId,
         eventId: competitions.eventId,
         organizationId: competitions.organizationId,
+        providerId: competitions.providerId,
+        externalRef: competitions.externalRef,
         name: competitions.name,
         slug: competitions.slug,
         sport: competitions.sport,

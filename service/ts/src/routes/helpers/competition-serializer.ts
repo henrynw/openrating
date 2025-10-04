@@ -27,6 +27,8 @@ export const toCompetitionResponse = (competition: CompetitionRecord, event: Eve
   event_id: competition.eventId,
   event_slug: event.slug,
   organization_id: event.organizationId,
+  provider_id: competition.providerId ?? null,
+  external_ref: competition.externalRef ?? null,
   name: competition.name,
   slug: competition.slug,
   sport: competition.sport ?? null,
