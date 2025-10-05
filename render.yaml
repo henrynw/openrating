@@ -14,11 +14,14 @@ services:
           name: openrating-db
           property: connectionString
       - key: CF_IMAGES_ACCOUNT_ID
-        fromSecret: cf-images-account-id
+        fromSecret:
+          name: cf-images-account-id
       - key: CF_IMAGES_ACCOUNT_HASH
-        fromSecret: cf-images-account-hash
+        fromSecret:
+          name: cf-images-account-hash
       - key: CF_IMAGES_API_TOKEN
-        fromSecret: cf-images-api-token
+        fromSecret:
+          name: cf-images-api-token
       - key: CF_IMAGES_DEFAULT_VARIANT
         value: "public"
       - key: CF_IMAGES_VARIANT_ALIASES
@@ -43,11 +46,14 @@ services:
       - key: INSIGHTS_WORKER_POLL_MS
         value: "1000"
       - key: CF_IMAGES_ACCOUNT_ID
-        fromSecret: cf-images-account-id
+        fromSecret:
+          name: cf-images-account-id
       - key: CF_IMAGES_ACCOUNT_HASH
-        fromSecret: cf-images-account-hash
+        fromSecret:
+          name: cf-images-account-hash
       - key: CF_IMAGES_API_TOKEN
-        fromSecret: cf-images-api-token
+        fromSecret:
+          name: cf-images-api-token
       - key: CF_IMAGES_DEFAULT_VARIANT
         value: "public"
       - key: CF_IMAGES_VARIANT_ALIASES
@@ -68,11 +74,14 @@ services:
       - key: NODE_ENV
         value: production
       - key: CF_IMAGES_ACCOUNT_ID
-        fromSecret: cf-images-account-id
+        fromSecret:
+          name: cf-images-account-id
       - key: CF_IMAGES_ACCOUNT_HASH
-        fromSecret: cf-images-account-hash
+        fromSecret:
+          name: cf-images-account-hash
       - key: CF_IMAGES_API_TOKEN
-        fromSecret: cf-images-api-token
+        fromSecret:
+          name: cf-images-api-token
       - key: CF_IMAGES_DEFAULT_VARIANT
         value: "public"
       - key: CF_IMAGES_VARIANT_ALIASES
