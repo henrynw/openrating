@@ -237,6 +237,8 @@ const toPlayerRecord = (player: MemoryPlayerRecord): PlayerRecord => ({
   externalRef: player.externalRef,
   competitiveProfile: player.competitiveProfile ?? null,
   attributes: player.attributes ?? null,
+  profilePhotoId: player.profilePhotoId,
+  profilePhotoUploadedAt: player.profilePhotoUploadedAt,
 });
 
 const paginatePlayers = (
@@ -328,6 +330,9 @@ export class MemoryStore implements RatingStore {
       externalRef: input.externalRef,
       competitiveProfile: input.competitiveProfile ?? null,
       attributes: input.attributes ?? null,
+      profilePhotoId: input.profilePhotoId ?? undefined,
+      profilePhotoUploadedAt:
+        input.profilePhotoUploadedAt ?? (input.profilePhotoId ? new Date().toISOString() : undefined),
       ratings: new Map(),
     };
     this.players.set(playerId, record);
@@ -370,6 +375,15 @@ export class MemoryStore implements RatingStore {
     }
     if (input.attributes !== undefined) {
       player.attributes = input.attributes ?? null;
+    }
+    if (input.profilePhotoId !== undefined) {
+      player.profilePhotoId = input.profilePhotoId ?? undefined;
+      if (input.profilePhotoUploadedAt === undefined && input.profilePhotoId) {
+        player.profilePhotoUploadedAt = new Date().toISOString();
+      }
+    }
+    if (input.profilePhotoUploadedAt !== undefined) {
+      player.profilePhotoUploadedAt = input.profilePhotoUploadedAt ?? undefined;
     }
 
     return toPlayerRecord(player);

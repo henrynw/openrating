@@ -153,6 +153,9 @@ export const toPlayerResponse = (
     external_ref: maybe(player.externalRef),
     competitive_profile: maybe(serializeCompetitiveProfile(player.competitiveProfile)),
     attributes: maybe(serializePlayerAttributes(player.attributes)),
+    profile_photo_id: maybe(player.profilePhotoId),
+    profile_photo_url: maybe(player.profilePhotoUrl),
+    profile_photo_uploaded_at: maybe(player.profilePhotoUploadedAt),
   };
 };
 

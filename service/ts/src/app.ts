@@ -10,6 +10,7 @@ import { registerRatingRoutes } from './routes/ratings.js';
 import { createOrganizationResolver } from './routes/helpers/organization-resolver.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerCompetitionRoutes } from './routes/competitions.js';
+import { profilePhotoService } from './services/profile-photos.js';
 
 export const createApp = (store: RatingStore): Express => {
   const app = express();
@@ -20,7 +21,7 @@ export const createApp = (store: RatingStore): Express => {
   const resolveOrganization = createOrganizationResolver(store);
 
   registerOrganizationRoutes(app, store);
-  registerPlayerRoutes(app, { store, resolveOrganization });
+  registerPlayerRoutes(app, { store, resolveOrganization, photoService: profilePhotoService });
   registerMatchRoutes(app, { store, resolveOrganization });
   registerRatingRoutes(app, { store, resolveOrganization });
   registerEventRoutes(app, { store, resolveOrganization });

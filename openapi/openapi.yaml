@@ -191,6 +191,96 @@ paths:
         '404':
           description: Player not found
 
+  /v1/players/{player_id}/profile-photo/upload:
+    post:
+      tags: [Players]
+      summary: Issue an upload URL for a player's profile photo
+      operationId: createPlayerProfilePhotoUpload
+      parameters:
+        - in: path
+          name: player_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerProfilePhotoUploadRequest'
+      responses:
+        '200':
+          description: Upload URL issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerProfilePhotoUploadResponse'
+        '400':
+          description: Invalid request
+        '404':
+          description: Player not found
+        '503':
+          description: Profile photo service not configured
+
+  /v1/players/{player_id}/profile-photo/finalize:
+    post:
+      tags: [Players]
+      summary: Finalize a player's profile photo upload
+      operationId: finalizePlayerProfilePhoto
+      parameters:
+        - in: path
+          name: player_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerProfilePhotoFinalizeRequest'
+      responses:
+        '200':
+          description: Profile photo finalized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerProfilePhotoFinalizeResponse'
+        '400':
+          description: Invalid request
+        '404':
+          description: Player not found
+        '409':
+          description: Uploaded image is not yet available; retry the finalize call shortly
+        '503':
+          description: Profile photo service not configured
+
+  /v1/players/{player_id}/profile-photo:
+    delete:
+      tags: [Players]
+      summary: Remove a player's profile photo
+      operationId: deletePlayerProfilePhoto
+      parameters:
+        - in: path
+          name: player_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerProfilePhotoDeleteRequest'
+      responses:
+        '200':
+          description: Profile photo removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerProfilePhotoDeleteResponse'
+        '400':
+          description: Invalid request
+        '404':
+          description: Player not found
+
   /v1/players/{player_id}/insights:
     get:
       tags: [Players]
@@ -1027,6 +1117,121 @@ components:
           $ref: '#/components/schemas/PlayerCompetitiveProfile'
         attributes:
           $ref: '#/components/schemas/PlayerAttributes'
+        profile_photo_id:
+          type: [string, 'null']
+          description: Cloudflare Images identifier for the player's profile photo
+        profile_photo_url:
+          type: [string, 'null']
+          format: uri
+          description: CDN URL for the player's current profile photo
+        profile_photo_uploaded_at:
+          type: [string, 'null']
+          format: date-time
+          description: Timestamp when the current profile photo was last updated
+    PlayerProfilePhotoContentType:
+      type: string
+      enum: [image/jpeg, image/png, image/webp, image/avif]
+    PlayerProfilePhotoUploadRequest:
+      allOf:
+        - type: object
+          properties:
+            organization_id: { type: string }
+            organization_slug: { type: string }
+            content_type:
+              $ref: '#/components/schemas/PlayerProfilePhotoContentType'
+        - anyOf:
+            - required: [organization_id]
+            - required: [organization_slug]
+    PlayerProfilePhotoUploadResponse:
+      type: object
+      properties:
+        upload:
+          type: object
+          properties:
+            url:
+              type: string
+              format: uri
+            method:
+              type: string
+              enum: [POST]
+            headers:
+              type: object
+              additionalProperties:
+                type: string
+            expires_at:
+              type: string
+              format: date-time
+          required: [url, method, headers, expires_at]
+        profile_photo:
+          type: object
+          properties:
+            image_id: { type: string }
+            url:
+              type: [string, 'null']
+              format: uri
+            requires_finalize:
+              type: boolean
+              description: Indicates the client must call finalize after the upload completes
+          required: [image_id, requires_finalize]
+        previous_photo:
+          type: [object, 'null']
+          properties:
+            image_id: { type: string }
+            url:
+              type: [string, 'null']
+              format: uri
+        player:
+          $ref: '#/components/schemas/PlayerResponse'
+      required: [upload, profile_photo, player]
+    PlayerProfilePhotoDeleteRequest:
+      allOf:
+        - type: object
+          properties:
+            organization_id: { type: string }
+            organization_slug: { type: string }
+        - anyOf:
+            - required: [organization_id]
+            - required: [organization_slug]
+    PlayerProfilePhotoDeleteResponse:
+      type: object
+      properties:
+        deleted_image_id:
+          type: [string, 'null']
+        player:
+          $ref: '#/components/schemas/PlayerResponse'
+      required: [player]
+    PlayerProfilePhotoFinalizeRequest:
+      allOf:
+        - type: object
+          properties:
+            organization_id: { type: string }
+            organization_slug: { type: string }
+            image_id: { type: string }
+          required: [image_id]
+        - anyOf:
+            - required: [organization_id]
+            - required: [organization_slug]
+    PlayerProfilePhotoFinalizeResponse:
+      type: object
+      properties:
+        profile_photo:
+          type: object
+          properties:
+            image_id: { type: string }
+            url:
+              type: [string, 'null']
+              format: uri
+            uploaded_at:
+              type: [string, 'null']
+              format: date-time
+            variants:
+              type: object
+              additionalProperties:
+                type: string
+          required: [image_id]
+        player:
+          $ref: '#/components/schemas/PlayerResponse'
+      required: [profile_photo, player]
     PlayerListResponse:
       type: object
       properties:

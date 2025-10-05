@@ -48,6 +48,8 @@ export interface PlayerCreateInput {
   regionId?: string;
   competitiveProfile?: PlayerCompetitiveProfile | null;
   attributes?: PlayerAttributes | null;
+  profilePhotoId?: string | null;
+  profilePhotoUploadedAt?: string | null;
 }
 
 export interface PlayerUpdateInput {
@@ -63,6 +65,8 @@ export interface PlayerUpdateInput {
   regionId?: string | null;
   competitiveProfile?: PlayerCompetitiveProfile | null;
   attributes?: PlayerAttributes | null;
+  profilePhotoId?: string | null;
+  profilePhotoUploadedAt?: string | null;
 }
 
 export interface PlayerRecord {
@@ -80,6 +84,9 @@ export interface PlayerRecord {
   externalRef?: string;
   competitiveProfile?: PlayerCompetitiveProfile | null;
   attributes?: PlayerAttributes | null;
+  profilePhotoId?: string;
+  profilePhotoUrl?: string;
+  profilePhotoUploadedAt?: string;
 }
 
 export interface PlayerListQuery {

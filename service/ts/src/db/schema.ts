@@ -164,6 +164,8 @@ export const players = pgTable('players', {
   }),
   competitiveProfile: jsonb('competitive_profile'),
   attributes: jsonb('attributes'),
+  profilePhotoId: text('profile_photo_id'),
+  profilePhotoUploadedAt: timestamp('profile_photo_uploaded_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });

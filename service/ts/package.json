@@ -18,25 +18,25 @@
     "insights:worker": "NODE_ENV=production tsx scripts/insights-worker.ts"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "zod": "^3.23.8",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.30.5",
-    "pg": "^8.11.5",
+    "express": "^4.19.2",
     "express-oauth2-jwt-bearer": "^1.7.0",
-    "yargs": "^17.7.2"
+    "pg": "^8.11.5",
+    "yargs": "^17.7.2",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
+    "@types/supertest": "^2.0.16",
     "@types/yargs": "^17.0.32",
+    "drizzle-kit": "^0.30.2",
     "eslint": "^9.9.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-import": "^2.29.1",
     "prettier": "^3.3.3",
+    "supertest": "^7.0.0",
     "tsx": "^4.16.2",
-    "typescript": "^5.5.4",
-    "drizzle-kit": "^0.30.2",
-    "@types/supertest": "^2.0.16",
-    "supertest": "^7.0.0"
+    "typescript": "^5.5.4"
   }
 }

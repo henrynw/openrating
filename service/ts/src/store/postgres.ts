@@ -338,6 +338,8 @@ export class PostgresStore implements RatingStore {
     regionId: string | null;
     competitiveProfile: unknown | null;
     attributes: unknown | null;
+    profilePhotoId: string | null;
+    profilePhotoUploadedAt: Date | null;
   }): PlayerRecord {
     return {
       playerId: row.playerId,
@@ -354,6 +356,8 @@ export class PostgresStore implements RatingStore {
       regionId: row.regionId ?? undefined,
       competitiveProfile: (row.competitiveProfile as PlayerCompetitiveProfile | null) ?? null,
       attributes: (row.attributes as PlayerAttributes | null) ?? null,
+      profilePhotoId: row.profilePhotoId ?? undefined,
+      profilePhotoUploadedAt: row.profilePhotoUploadedAt?.toISOString(),
     };
   }
 
@@ -1796,6 +1800,12 @@ export class PostgresStore implements RatingStore {
     await this.assertOrganizationExists(input.organizationId);
     const regionId = await this.ensureRegion(input.regionId ?? null, input.organizationId);
 
+    const profilePhotoUploadedAt = input.profilePhotoUploadedAt
+      ? new Date(input.profilePhotoUploadedAt)
+      : input.profilePhotoId
+        ? now()
+        : null;
+
     await this.db.insert(players).values({
       playerId,
       organizationId: input.organizationId,
@@ -1811,6 +1821,8 @@ export class PostgresStore implements RatingStore {
       regionId,
       competitiveProfile: input.competitiveProfile ?? null,
       attributes: input.attributes ?? null,
+      profilePhotoId: input.profilePhotoId ?? null,
+      profilePhotoUploadedAt,
       createdAt: now(),
       updatedAt: now(),
     });
@@ -1830,6 +1842,8 @@ export class PostgresStore implements RatingStore {
       externalRef: input.externalRef,
       competitiveProfile: input.competitiveProfile ?? null,
       attributes: input.attributes ?? null,
+      profilePhotoId: input.profilePhotoId ?? undefined,
+      profilePhotoUploadedAt: profilePhotoUploadedAt?.toISOString(),
     } satisfies PlayerRecord;
   }
 
@@ -1847,10 +1861,12 @@ export class PostgresStore implements RatingStore {
         sex: players.sex,
         birthYear: players.birthYear,
         countryCode: players.countryCode,
-        regionId: players.regionId,
-        competitiveProfile: players.competitiveProfile,
-        attributes: players.attributes,
-      })
+      regionId: players.regionId,
+      competitiveProfile: players.competitiveProfile,
+      attributes: players.attributes,
+      profilePhotoId: players.profilePhotoId,
+      profilePhotoUploadedAt: players.profilePhotoUploadedAt,
+    })
       .from(players)
       .where(and(eq(players.playerId, playerId), eq(players.organizationId, organizationId)))
       .limit(1);
@@ -1876,6 +1892,8 @@ export class PostgresStore implements RatingStore {
       regionId: players.regionId,
       competitiveProfile: players.competitiveProfile,
       attributes: players.attributes,
+      profilePhotoId: players.profilePhotoId,
+      profilePhotoUploadedAt: players.profilePhotoUploadedAt,
     } as const;
 
     const existingRows = await this.db
@@ -1911,6 +1929,17 @@ export class PostgresStore implements RatingStore {
     }
     if (input.attributes !== undefined) {
       updates.attributes = input.attributes ?? null;
+    }
+    if (input.profilePhotoId !== undefined) {
+      updates.profilePhotoId = input.profilePhotoId ?? null;
+      if (input.profilePhotoUploadedAt === undefined && input.profilePhotoId) {
+        updates.profilePhotoUploadedAt = now();
+      }
+    }
+    if (input.profilePhotoUploadedAt !== undefined) {
+      updates.profilePhotoUploadedAt = input.profilePhotoUploadedAt
+        ? new Date(input.profilePhotoUploadedAt)
+        : null;
     }
 
     if (input.regionId !== undefined) {
@@ -3895,6 +3924,8 @@ export class PostgresStore implements RatingStore {
         externalRef: players.externalRef,
         competitiveProfile: players.competitiveProfile,
         attributes: players.attributes,
+        profilePhotoId: players.profilePhotoId,
+        profilePhotoUploadedAt: players.profilePhotoUploadedAt,
       })
       .from(players)
       .orderBy(players.playerId)
@@ -3919,6 +3950,8 @@ export class PostgresStore implements RatingStore {
         externalRef: string | null;
         competitiveProfile: unknown | null;
         attributes: unknown | null;
+        profilePhotoId: string | null;
+        profilePhotoUploadedAt: Date | null;
       }>;
 
     const hasMore = rows.length > limit;
@@ -3940,6 +3973,8 @@ export class PostgresStore implements RatingStore {
       externalRef: row.externalRef ?? undefined,
       competitiveProfile: (row.competitiveProfile as PlayerCompetitiveProfile | null) ?? null,
       attributes: (row.attributes as PlayerAttributes | null) ?? null,
+      profilePhotoId: row.profilePhotoId ?? undefined,
+      profilePhotoUploadedAt: row.profilePhotoUploadedAt?.toISOString(),
     }));
 
     return { items, nextCursor };

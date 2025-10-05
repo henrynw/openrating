@@ -38,6 +38,29 @@ npm run insights:worker
 
 > Tip: if `DATABASE_URL` is omitted the service falls back to the in-memory store (handy for demos, no persistence).
 
+## Player profile photos
+
+Cloudflare Images is the default integration for serving profile photos. The API remains optional—if you skip the environment variables below, the photo routes stay disabled and existing clients continue to work without images.
+
+Set these environment variables on every service that issues upload URLs (`web`, `worker`, `cron`):
+
+- `CF_IMAGES_ACCOUNT_ID` – Cloudflare account ID.
+- `CF_IMAGES_ACCOUNT_HASH` – Images delivery hash (found in the Images dashboard).
+- `CF_IMAGES_API_TOKEN` – API token with the *Cloudflare Images: Edit* permission.
+- *(optional)* `CF_IMAGES_DEFAULT_VARIANT` – Variant name to use when returning `profile_photo_url` (defaults to `public`).
+- *(optional)* `CF_IMAGES_VARIANT_ALIASES` – Comma-separated alias map (e.g. `default:public,thumb:avatarThumb`) so you can keep friendly keys while Cloudflare stores the actual variant names.
+
+> Render blueprint users can store these as secrets named `cf-images-account-id`, `cf-images-account-hash`, and `cf-images-api-token`.
+
+Flow:
+
+1. `POST /v1/players/{player_id}/profile-photo/upload` – returns a Cloudflare direct-upload URL plus the provisional `image_id`.
+2. The client uploads the binary to that URL.
+3. `POST /v1/players/{player_id}/profile-photo/finalize` – the API confirms Cloudflare finished processing, stores the `image_id`, and returns the public URLs/variants.
+4. `DELETE /v1/players/{player_id}/profile-photo` removes the image and clears the player metadata.
+
+You control the variants (resize, format, etc.) inside Cloudflare Images—define them once in the dashboard and reference the names via `CF_IMAGES_DEFAULT_VARIANT`/`CF_IMAGES_VARIANT_ALIASES`.
+
 ### Deploy on Render (blueprint)
 1. [Create a Render account](https://render.com) and connect this repo.
 2. Accept the detected `render.yaml` blueprint — it provisions:

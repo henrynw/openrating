@@ -15,10 +15,17 @@ import type {
   PlayerAttributes,
   PlayerRankingSnapshot,
   PlayerInsightsQuery,
+  PlayerRecord,
 } from '../store/index.js';
 import { OrganizationLookupError, PlayerLookupError } from '../store/index.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
 import { toPlayerResponse, toPlayerInsightsResponse } from './helpers/responders.js';
+import type { ProfilePhotoService } from '../services/profile-photos.js';
+import {
+  ProfilePhotoServiceDisabledError,
+  ProfilePhotoNotReadyError,
+  CloudflareImagesError,
+} from '../services/profile-photos.js';
 
 const LooseRecordSchema = z.record(z.unknown());
 const SportEnum = z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']);
@@ -51,6 +58,39 @@ const PlayerAttributesSchema = z.object({
   residence: z.string().nullable().optional(),
   metadata: LooseRecordSchema.nullish(),
 });
+
+const ProfilePhotoContentTypeEnum = z.enum(['image/jpeg', 'image/png', 'image/webp', 'image/avif'] as const);
+
+const requireOrganizationIdentifier = <T extends { organization_id?: string; organization_slug?: string }>(
+  schema: z.ZodType<T>
+) =>
+  schema.refine((data) => data.organization_id || data.organization_slug, {
+    message: 'organization_id or organization_slug is required',
+    path: ['organization_id'],
+  });
+
+const PlayerPhotoUploadSchema = requireOrganizationIdentifier(
+  z.object({
+    organization_id: z.string().uuid().optional(),
+    organization_slug: z.string().optional(),
+    content_type: ProfilePhotoContentTypeEnum.optional(),
+  })
+);
+
+const PlayerPhotoDeleteSchema = requireOrganizationIdentifier(
+  z.object({
+    organization_id: z.string().uuid().optional(),
+    organization_slug: z.string().optional(),
+  })
+);
+
+const PlayerPhotoFinalizeSchema = requireOrganizationIdentifier(
+  z.object({
+    organization_id: z.string().uuid().optional(),
+    organization_slug: z.string().optional(),
+    image_id: z.string().min(1),
+  })
+);
 
 const PlayerUpsertSchema = z
   .object({
@@ -205,10 +245,19 @@ const mapPlayerAttributesInput = (
 interface PlayerRouteDeps {
   store: RatingStore;
   resolveOrganization: (input: OrganizationIdentifierInput) => Promise<OrganizationRecord>;
+  photoService: ProfilePhotoService;
 }
 
 export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
-  const { store, resolveOrganization } = deps;
+  const { store, resolveOrganization, photoService } = deps;
+
+  const withProfilePhoto = (player: PlayerRecord) => {
+    const url = photoService.getPublicUrl(player.profilePhotoId);
+    return {
+      ...player,
+      profilePhotoUrl: url ?? undefined,
+    };
+  };
 
   app.post('/v1/players', async (req, res) => {
     const parsed = PlayerUpsertSchema.safeParse(req.body);
@@ -241,7 +290,7 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
         ...(attributes !== undefined ? { attributes } : {}),
       });
 
-      return res.send(toPlayerResponse(created, organization.slug));
+      return res.send(toPlayerResponse(withProfilePhoto(created), organization.slug));
     } catch (err) {
       if (err instanceof OrganizationLookupError) {
         return res.status(400).send({ error: 'invalid_organization', message: err.message });
@@ -271,7 +320,7 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
       const result = await store.listPlayers({ organizationId: organization.organizationId, limit, cursor, q });
 
       return res.send({
-        players: result.items.map((player) => toPlayerResponse(player, organization.slug)),
+        players: result.items.map((player) => toPlayerResponse(withProfilePhoto(player), organization.slug)),
         next_cursor: result.nextCursor ?? null,
       });
     } catch (err) {
@@ -309,7 +358,7 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
         return res.status(404).send({ error: 'player_not_found' });
       }
 
-      return res.send(toPlayerResponse(player, organization.slug, { forceNullDefaults: true }));
+      return res.send(toPlayerResponse(withProfilePhoto(player), organization.slug, { forceNullDefaults: true }));
     } catch (err) {
       if (err instanceof OrganizationLookupError) {
         return res.status(400).send({ error: 'invalid_organization', message: err.message });
@@ -397,6 +446,237 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
     }
   });
 
+  app.post(
+    '/v1/players/:player_id/profile-photo/upload',
+    requireAuth,
+    requireScope('matches:write'),
+    async (req, res) => {
+      const parsed = PlayerPhotoUploadSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+      }
+
+      try {
+        const organization = await resolveOrganization({
+          organization_id: parsed.data.organization_id,
+          organization_slug: parsed.data.organization_slug,
+        });
+
+        await authorizeOrgAccess(req, organization.organizationId, {
+          permissions: ['players:write', 'matches:write'],
+          errorCode: 'players_update_denied',
+          errorMessage: 'Insufficient grants for players:write',
+        });
+
+        const player = await store.getPlayer(req.params.player_id, organization.organizationId);
+        if (!player) {
+          return res.status(404).send({ error: 'player_not_found' });
+        }
+
+        if (!photoService.isEnabled()) {
+          return res.status(503).send({
+            error: 'profile_photo_service_disabled',
+            message: 'Profile photo uploads are not configured',
+          });
+        }
+
+        const uploadRequest = await photoService.createDirectUpload({
+          organizationId: organization.organizationId,
+          playerId: player.playerId,
+          contentType: parsed.data.content_type,
+        });
+
+        return res.send({
+          upload: {
+            url: uploadRequest.uploadUrl,
+            method: 'POST',
+            headers: {},
+            expires_at: uploadRequest.expiresAt,
+          },
+          profile_photo: {
+            image_id: uploadRequest.imageId,
+            url: null,
+            requires_finalize: true,
+          },
+          previous_photo: player.profilePhotoId
+            ? {
+                image_id: player.profilePhotoId,
+                url: photoService.getPublicUrl(player.profilePhotoId),
+              }
+            : null,
+          player: toPlayerResponse(withProfilePhoto(player), organization.slug, { forceNullDefaults: true }),
+        });
+      } catch (err) {
+        if (err instanceof OrganizationLookupError) {
+          return res.status(400).send({ error: 'invalid_organization', message: err.message });
+        }
+        if (err instanceof AuthorizationError) {
+          return res.status(err.status).send({ error: err.code, message: err.message });
+        }
+        if (err instanceof PlayerLookupError) {
+          return res.status(404).send({ error: 'player_not_found', message: err.message });
+        }
+        if (err instanceof ProfilePhotoServiceDisabledError) {
+          return res.status(503).send({
+            error: 'profile_photo_service_disabled',
+            message: err.message,
+          });
+        }
+        if (err instanceof CloudflareImagesError && err.status === 404) {
+          return res.status(404).send({ error: 'profile_photo_not_found', message: err.message });
+        }
+        console.error('player_profile_photo_upload_error', err);
+        return res.status(500).send({ error: 'internal_error' });
+      }
+    }
+  );
+
+  app.delete(
+    '/v1/players/:player_id/profile-photo',
+    requireAuth,
+    requireScope('matches:write'),
+    async (req, res) => {
+      const parsed = PlayerPhotoDeleteSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+      }
+
+      try {
+        const organization = await resolveOrganization({
+          organization_id: parsed.data.organization_id,
+          organization_slug: parsed.data.organization_slug,
+        });
+
+        await authorizeOrgAccess(req, organization.organizationId, {
+          permissions: ['players:write', 'matches:write'],
+          errorCode: 'players_update_denied',
+          errorMessage: 'Insufficient grants for players:write',
+        });
+
+        const player = await store.getPlayer(req.params.player_id, organization.organizationId);
+        if (!player) {
+          return res.status(404).send({ error: 'player_not_found' });
+        }
+
+        const previousId = player.profilePhotoId ?? null;
+        await photoService.delete(previousId);
+
+        const updated = await store.updatePlayer(player.playerId, organization.organizationId, {
+          profilePhotoId: null,
+          profilePhotoUploadedAt: null,
+        });
+
+        return res.send({
+          deleted_image_id: previousId,
+          player: toPlayerResponse(withProfilePhoto(updated), organization.slug, { forceNullDefaults: true }),
+        });
+      } catch (err) {
+        if (err instanceof OrganizationLookupError) {
+          return res.status(400).send({ error: 'invalid_organization', message: err.message });
+        }
+        if (err instanceof AuthorizationError) {
+          return res.status(err.status).send({ error: err.code, message: err.message });
+        }
+        if (err instanceof PlayerLookupError) {
+          return res.status(404).send({ error: 'player_not_found', message: err.message });
+        }
+        console.error('player_profile_photo_delete_error', err);
+        return res.status(500).send({ error: 'internal_error' });
+      }
+    }
+  );
+
+  app.post(
+    '/v1/players/:player_id/profile-photo/finalize',
+    requireAuth,
+    requireScope('matches:write'),
+    async (req, res) => {
+      const parsed = PlayerPhotoFinalizeSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+      }
+
+      try {
+        const organization = await resolveOrganization({
+          organization_id: parsed.data.organization_id,
+          organization_slug: parsed.data.organization_slug,
+        });
+
+        await authorizeOrgAccess(req, organization.organizationId, {
+          permissions: ['players:write', 'matches:write'],
+          errorCode: 'players_update_denied',
+          errorMessage: 'Insufficient grants for players:write',
+        });
+
+        const player = await store.getPlayer(req.params.player_id, organization.organizationId);
+        if (!player) {
+          return res.status(404).send({ error: 'player_not_found' });
+        }
+
+        if (!photoService.isEnabled()) {
+          return res.status(503).send({
+            error: 'profile_photo_service_disabled',
+            message: 'Profile photo uploads are not configured',
+          });
+        }
+
+        const finalizeResult = await photoService.finalize(parsed.data.image_id);
+
+        const previousId = player.profilePhotoId ?? null;
+        const uploadedAt = finalizeResult.uploadedAt ?? new Date().toISOString();
+
+        const updated = await store.updatePlayer(player.playerId, organization.organizationId, {
+          profilePhotoId: finalizeResult.imageId,
+          profilePhotoUploadedAt: uploadedAt,
+        });
+
+        if (previousId && previousId !== finalizeResult.imageId) {
+          await photoService.delete(previousId);
+        }
+
+        return res.send({
+          profile_photo: {
+            image_id: finalizeResult.imageId,
+            url: finalizeResult.variants.default ?? photoService.getPublicUrl(finalizeResult.imageId),
+            uploaded_at: updated.profilePhotoUploadedAt ?? uploadedAt,
+            variants: finalizeResult.variants,
+          },
+          player: toPlayerResponse(withProfilePhoto(updated), organization.slug, { forceNullDefaults: true }),
+        });
+      } catch (err) {
+        if (err instanceof OrganizationLookupError) {
+          return res.status(400).send({ error: 'invalid_organization', message: err.message });
+        }
+        if (err instanceof AuthorizationError) {
+          return res.status(err.status).send({ error: err.code, message: err.message });
+        }
+        if (err instanceof PlayerLookupError) {
+          return res.status(404).send({ error: 'player_not_found', message: err.message });
+        }
+        if (err instanceof ProfilePhotoServiceDisabledError) {
+          return res.status(503).send({
+            error: 'profile_photo_service_disabled',
+            message: err.message,
+          });
+        }
+        if (err instanceof ProfilePhotoNotReadyError) {
+          return res.status(409).send({
+            error: 'profile_photo_not_ready',
+            message: 'Uploaded object is not yet processed. Try again shortly.',
+          });
+        }
+        if (err instanceof CloudflareImagesError && err.status === 404) {
+          return res.status(404).send({
+            error: 'profile_photo_not_found',
+            message: 'Cloudflare Images could not locate the uploaded asset',
+          });
+        }
+        console.error('player_profile_photo_finalize_error', err);
+        return res.status(500).send({ error: 'internal_error' });
+      }
+    }
+  );
+
   app.patch('/v1/players/:player_id', requireAuth, requireScope('matches:write'), async (req, res) => {
     const parsed = PlayerUpdateSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -435,7 +715,7 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
 
       const updated = await store.updatePlayer(req.params.player_id, organization.organizationId, updateInput);
 
-      return res.send(toPlayerResponse(updated, organization.slug, { forceNullDefaults: true }));
+      return res.send(toPlayerResponse(withProfilePhoto(updated), organization.slug, { forceNullDefaults: true }));
     } catch (err) {
       if (err instanceof OrganizationLookupError) {
         return res.status(400).send({ error: 'invalid_organization', message: err.message });
