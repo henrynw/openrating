@@ -191,6 +191,16 @@ type PlayerInsightRatingRow = {
   updatedAt: Date;
 };
 
+type ReplayLadderResult = {
+  report: RatingReplayReportItem;
+  refreshTargets: Array<{
+    playerId: string;
+    organizationId: string;
+    sport: Sport;
+    discipline: Discipline;
+  }>;
+};
+
 type PlayerLeaderboardRow = {
   playerId: string;
   mu: number;
@@ -3046,6 +3056,7 @@ export class PostgresStore implements RatingStore {
       .limit(limit);
 
     const items: RatingReplayReportItem[] = [];
+    const refreshTargets = new Map<string, { playerId: string; organizationId: string; sport: Sport; discipline: Discipline }>();
 
     for (const entry of queueEntries) {
       const detail = await this.replayLadder(entry.ladderId, {
@@ -3054,10 +3065,28 @@ export class PostgresStore implements RatingStore {
       });
 
       if (detail) {
-        items.push(detail);
+        items.push(detail.report);
         if (!dryRun) {
           await this.db.delete(ratingReplayQueue).where(eq(ratingReplayQueue.ladderId, entry.ladderId));
         }
+        if (!dryRun) {
+          for (const target of detail.refreshTargets) {
+            const key = `${target.playerId}:${target.organizationId}:${target.sport}:${target.discipline}`;
+            refreshTargets.set(key, target);
+          }
+        }
+      }
+    }
+
+    if (!dryRun && refreshTargets.size) {
+      for (const target of refreshTargets.values()) {
+        await this.enqueuePlayerInsightsRefresh({
+          playerId: target.playerId,
+          organizationId: target.organizationId,
+          sport: target.sport,
+          discipline: target.discipline,
+          dedupe: false,
+        });
       }
     }
 
@@ -3073,9 +3102,20 @@ export class PostgresStore implements RatingStore {
     const dryRun = options.dryRun ?? false;
 
     const detail = await this.replayLadder(options.ladderId, { from, dryRun });
-    const items = detail ? [detail] : [];
+    const items = detail ? [detail.report] : [];
     if (!dryRun) {
       await this.db.delete(ratingReplayQueue).where(eq(ratingReplayQueue.ladderId, options.ladderId));
+      if (detail) {
+        for (const target of detail.refreshTargets) {
+          await this.enqueuePlayerInsightsRefresh({
+            playerId: target.playerId,
+            organizationId: target.organizationId,
+            sport: target.sport,
+            discipline: target.discipline,
+            dedupe: false,
+          });
+        }
+      }
     }
     return this.buildReplayReport(items, dryRun);
   }
@@ -3083,7 +3123,7 @@ export class PostgresStore implements RatingStore {
   private async replayLadder(
     ladderId: string,
     options: { from?: Date | null; dryRun: boolean }
-  ): Promise<RatingReplayReportItem | null> {
+  ): Promise<ReplayLadderResult | null> {
     const from = options.from ?? null;
     const dryRun = options.dryRun;
     const replayTimestamp = now();
@@ -3143,15 +3183,18 @@ export class PostgresStore implements RatingStore {
         }
 
         return {
-          ladderId,
-          ladderKey,
-          replayFrom: from ? from.toISOString() : null,
-          replayTo: null,
-          matchesProcessed: 0,
-          playersTouched: 0,
-          pairUpdates: 0,
-          dryRun,
-        } satisfies RatingReplayReportItem;
+          report: {
+            ladderId,
+            ladderKey,
+            replayFrom: from ? from.toISOString() : null,
+            replayTo: null,
+            matchesProcessed: 0,
+            playersTouched: 0,
+            pairUpdates: 0,
+            dryRun,
+          },
+          refreshTargets: [],
+        } satisfies ReplayLadderResult;
       }
 
       const matchIds = matchRows.map((row) => row.matchId);
@@ -3244,14 +3287,25 @@ export class PostgresStore implements RatingStore {
       }
 
       const playerIdList = Array.from(playerIds);
-      const playerRegions = playerIdList.length
+      const playerMetaRows = playerIdList.length
         ? ((await tx
-            .select({ playerId: players.playerId, regionId: players.regionId })
+            .select({
+              playerId: players.playerId,
+              regionId: players.regionId,
+              organizationId: players.organizationId,
+            })
             .from(players)
-            .where(inArray(players.playerId, playerIdList))) as Array<{ playerId: string; regionId: string | null }>)
+            .where(inArray(players.playerId, playerIdList))) as Array<{
+            playerId: string;
+            regionId: string | null;
+            organizationId: string;
+          }>)
         : [];
       const playerRegionMap = new Map<string, string | undefined>(
-        playerRegions.map((row) => [row.playerId, row.regionId ?? undefined])
+        playerMetaRows.map((row) => [row.playerId, row.regionId ?? undefined])
+      );
+      const playerOrganizationMap = new Map<string, string>(
+        playerMetaRows.map((row) => [row.playerId, row.organizationId])
       );
 
       const ensurePlayerState = (map: Map<string, PlayerState>, playerId: string) => {
@@ -3512,16 +3566,33 @@ export class PostgresStore implements RatingStore {
         }
       }
 
+      const refreshTargets: ReplayLadderResult['refreshTargets'] = [];
+      if (!dryRun) {
+        for (const playerId of uniquePlayers) {
+          const organizationId = playerOrganizationMap.get(playerId);
+          if (!organizationId) continue;
+          refreshTargets.push({
+            playerId,
+            organizationId,
+            sport: ladderKey.sport as Sport,
+            discipline: ladderKey.discipline as Discipline,
+          });
+        }
+      }
+
       return {
-        ladderId,
-        ladderKey,
-        replayFrom: (from ?? firstApplied)?.toISOString() ?? null,
-        replayTo: lastApplied ? lastApplied.toISOString() : null,
-        matchesProcessed,
-        playersTouched: uniquePlayers.size,
-        pairUpdates: pairUpdatesCount,
-        dryRun,
-      } satisfies RatingReplayReportItem;
+        report: {
+          ladderId,
+          ladderKey,
+          replayFrom: (from ?? firstApplied)?.toISOString() ?? null,
+          replayTo: lastApplied ? lastApplied.toISOString() : null,
+          matchesProcessed,
+          playersTouched: uniquePlayers.size,
+          pairUpdates: pairUpdatesCount,
+          dryRun,
+        },
+        refreshTargets,
+      } satisfies ReplayLadderResult;
     });
   }
 

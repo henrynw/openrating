@@ -1084,13 +1084,32 @@ export class MemoryStore implements RatingStore {
     const selected = ordered.slice(0, limit);
 
     const items: RatingReplayReportItem[] = [];
+    const refreshTargets = new Map<string, { playerId: string; organizationId: string; sport: Sport; discipline: Discipline }>();
     for (const [ladderId, startTime] of selected) {
       const detail = this.replayLadder(ladderId, { from: startTime, dryRun });
       if (detail) {
-        items.push(detail);
+        items.push(detail.report);
         if (!dryRun) {
           this.replayQueue.delete(ladderId);
         }
+        if (!dryRun) {
+          for (const target of detail.refreshTargets) {
+            const key = `${target.playerId}:${target.organizationId}:${target.sport}:${target.discipline}`;
+            refreshTargets.set(key, target);
+          }
+        }
+      }
+    }
+
+    if (!dryRun && refreshTargets.size) {
+      for (const target of refreshTargets.values()) {
+        await this.enqueuePlayerInsightsRefresh({
+          playerId: target.playerId,
+          organizationId: target.organizationId,
+          sport: target.sport,
+          discipline: target.discipline,
+          dedupe: false,
+        });
       }
     }
 
@@ -1105,9 +1124,20 @@ export class MemoryStore implements RatingStore {
     const from = options.from ? new Date(options.from) : null;
     const dryRun = options.dryRun ?? false;
     const detail = this.replayLadder(options.ladderId, { from, dryRun });
-    const items = detail ? [detail] : [];
+    const items = detail ? [detail.report] : [];
     if (!dryRun) {
       this.replayQueue.delete(options.ladderId);
+      if (detail) {
+        for (const target of detail.refreshTargets) {
+          await this.enqueuePlayerInsightsRefresh({
+            playerId: target.playerId,
+            organizationId: target.organizationId,
+            sport: target.sport,
+            discipline: target.discipline,
+            dedupe: false,
+          });
+        }
+      }
     }
     return this.buildReplayReport(items, dryRun);
   }
@@ -1115,7 +1145,7 @@ export class MemoryStore implements RatingStore {
   private replayLadder(
     ladderId: string,
     options: { from?: Date | null; dryRun: boolean }
-  ): RatingReplayReportItem | null {
+  ): { report: RatingReplayReportItem; refreshTargets: Array<{ playerId: string; organizationId: string; sport: Sport; discipline: Discipline }> } | null {
     const from = options.from ?? null;
     const dryRun = options.dryRun;
 
@@ -1142,6 +1172,7 @@ export class MemoryStore implements RatingStore {
       }
 
       return {
+        report: {
         ladderId,
         ladderKey,
         replayFrom: from ? from.toISOString() : null,
@@ -1150,7 +1181,9 @@ export class MemoryStore implements RatingStore {
         playersTouched: 0,
         pairUpdates: 0,
         dryRun,
-      } satisfies RatingReplayReportItem;
+        },
+        refreshTargets: [],
+      } satisfies { report: RatingReplayReportItem; refreshTargets: Array<{ playerId: string; organizationId: string; sport: Sport; discipline: Discipline }> };
     }
 
     const sorted = [...ladderMatches].sort((a, b) => {
@@ -1295,6 +1328,19 @@ export class MemoryStore implements RatingStore {
     }
 
     const touchedPlayers = new Set<string>(playerLastAppliedAt.keys());
+    const refreshTargets: Array<{ playerId: string; organizationId: string; sport: Sport; discipline: Discipline }> = [];
+    if (!dryRun) {
+      for (const playerId of touchedPlayers) {
+        const player = this.players.get(playerId);
+        if (!player) continue;
+        refreshTargets.push({
+          playerId,
+          organizationId: player.organizationId,
+          sport: ladderKey.sport,
+          discipline: ladderKey.discipline,
+        });
+      }
+    }
 
     if (!dryRun) {
       const ladderBuckets = new Map<string, MemoryRatingEvent[]>();
@@ -1336,15 +1382,18 @@ export class MemoryStore implements RatingStore {
     }
 
     return {
-      ladderId,
-      ladderKey,
-      replayFrom: (from ?? firstApplied)?.toISOString() ?? null,
-      replayTo: lastApplied ? lastApplied.toISOString() : null,
-      matchesProcessed,
-      playersTouched: touchedPlayers.size,
-      pairUpdates: pairUpdatesCount,
-      dryRun,
-    } satisfies RatingReplayReportItem;
+      report: {
+        ladderId,
+        ladderKey,
+        replayFrom: (from ?? firstApplied)?.toISOString() ?? null,
+        replayTo: lastApplied ? lastApplied.toISOString() : null,
+        matchesProcessed,
+        playersTouched: touchedPlayers.size,
+        pairUpdates: pairUpdatesCount,
+        dryRun,
+      },
+      refreshTargets,
+    };
   }
 
   private buildReplayReport(items: RatingReplayReportItem[], dryRun: boolean): RatingReplayReport {

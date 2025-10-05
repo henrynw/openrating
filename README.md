@@ -93,7 +93,7 @@ The CLI reads credentials from environment variables so provider secrets stay ou
 
 ### Rating replay & backfills
 - Match ingestion records the current ladder state. If you later insert a match with a `start_time` earlier than what has already been processed, the ladder is marked dirty and a replay entry is queued automatically.
-- Run `npm run replay -- queue` to process queued ladders. The command re-sorts matches by `start_time`, truncates rating history, and rebuilds player ratings + pair synergies inside a transaction. Use `--dry-run` to preview the work without mutating state.
+- Run `npm run replay -- queue` to process queued ladders. The command re-sorts matches by `start_time`, truncates rating history, and rebuilds player ratings + pair synergies inside a transaction. Use `--dry-run` to preview the work without mutating state. Any players touched during the replay automatically receive fresh insight jobs so the worker catches their new rating history.
 - To rebuild a specific ladder on demand (for example after bulk edits), run `npm run replay -- ladder BADMINTON:SINGLES`. You can optionally pass `--from <ISO timestamp>` to hint at the earliest affected match and `--dry-run` to inspect the plan first.
 - The CLI works in both Postgres and in-memory modes; in-memory runs are useful for local validation. Replays clear the corresponding queue entry on success so repeated runs are idempotent.
 
