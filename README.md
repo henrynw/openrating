@@ -48,7 +48,7 @@ Set these environment variables on every service that issues upload URLs (`web`,
 - `CF_IMAGES_ACCOUNT_HASH` – Images delivery hash (found in the Images dashboard).
 - `CF_IMAGES_API_TOKEN` – API token with the *Cloudflare Images: Edit* permission.
 - *(optional)* `CF_IMAGES_DEFAULT_VARIANT` – Variant name to use when returning `profile_photo_url` (defaults to `public`).
-- *(optional)* `CF_IMAGES_VARIANT_ALIASES` – Comma-separated alias map (e.g. `default:public,thumb:avatarThumb`) so you can keep friendly keys while Cloudflare stores the actual variant names.
+- *(optional)* `CF_IMAGES_VARIANT_ALIASES` – Comma-separated alias map (e.g. `default:avatarcard,thumb:avatarthumb`) so you can keep friendly keys while Cloudflare stores the actual variant names.
 
 > Render blueprint users can store these as secrets named `cf-images-account-id`, `cf-images-account-hash`, and `cf-images-api-token`.
 
@@ -59,7 +59,7 @@ Flow:
 3. `POST /v1/players/{player_id}/profile-photo/finalize` – the API confirms Cloudflare finished processing, stores the `image_id`, and returns the public URLs/variants.
 4. `DELETE /v1/players/{player_id}/profile-photo` removes the image and clears the player metadata.
 
-You control the variants (resize, format, etc.) inside Cloudflare Images—define them once in the dashboard and reference the names via `CF_IMAGES_DEFAULT_VARIANT`/`CF_IMAGES_VARIANT_ALIASES`.
+You control the variants (resize, format, etc.) inside Cloudflare Images—define them once in the dashboard and reference the names via `CF_IMAGES_DEFAULT_VARIANT`/`CF_IMAGES_VARIANT_ALIASES`. The default blueprint expects two variants: `avatarcard` (≈256×256) for detail views and `avatarthumb` (≈96×96) for leaderboards.
 
 ### Deploy on Render (blueprint)
 1. [Create a Render account](https://render.com) and connect this repo.

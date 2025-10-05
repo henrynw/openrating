@@ -20,9 +20,9 @@ services:
       - key: CF_IMAGES_API_TOKEN
         value: ""
       - key: CF_IMAGES_DEFAULT_VARIANT
-        value: "avatar-card"
+        value: "avatarcard"
       - key: CF_IMAGES_VARIANT_ALIASES
-        value: "default:avatar-card,thumb:avatar-thumb"
+        value: "default:avatarcard,thumb:avatarthumb"
     healthCheckPath: /health
     plan: starter
 
@@ -49,9 +49,9 @@ services:
       - key: CF_IMAGES_API_TOKEN
         value: ""
       - key: CF_IMAGES_DEFAULT_VARIANT
-        value: "avatar-card"
+        value: "avatarcard"
       - key: CF_IMAGES_VARIANT_ALIASES
-        value: "default:avatar-card,thumb:avatar-thumb"
+        value: "default:avatarcard,thumb:avatarthumb"
 
   - type: cron
     name: openrating-replay
@@ -74,9 +74,9 @@ services:
       - key: CF_IMAGES_API_TOKEN
         value: ""
       - key: CF_IMAGES_DEFAULT_VARIANT
-        value: "avatar-card"
+        value: "avatarcard"
       - key: CF_IMAGES_VARIANT_ALIASES
-        value: "default:avatar-card,thumb:avatar-thumb"
+        value: "default:avatarcard,thumb:avatarthumb"
 
 databases:
   - name: openrating-db
