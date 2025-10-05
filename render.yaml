@@ -20,9 +20,9 @@ services:
       - key: CF_IMAGES_API_TOKEN
         fromSecret: cf-images-api-token
       - key: CF_IMAGES_DEFAULT_VARIANT
-        value: public
+        value: "public"
       - key: CF_IMAGES_VARIANT_ALIASES
-        value: default:public
+        value: "default:public"
     healthCheckPath: /health
     plan: starter
 
@@ -49,9 +49,9 @@ services:
       - key: CF_IMAGES_API_TOKEN
         fromSecret: cf-images-api-token
       - key: CF_IMAGES_DEFAULT_VARIANT
-        value: public
+        value: "public"
       - key: CF_IMAGES_VARIANT_ALIASES
-        value: default:public
+        value: "default:public"
 
   - type: cron
     name: openrating-replay
@@ -74,9 +74,9 @@ services:
       - key: CF_IMAGES_API_TOKEN
         fromSecret: cf-images-api-token
       - key: CF_IMAGES_DEFAULT_VARIANT
-        value: public
+        value: "public"
       - key: CF_IMAGES_VARIANT_ALIASES
-        value: default:public
+        value: "default:public"
 
 databases:
   - name: openrating-db
