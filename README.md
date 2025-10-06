@@ -81,6 +81,7 @@ You control the variants (resize, format, etc.) inside Cloudflare Images—defin
   - `AUTH_PROVIDER=AUTH0`
   - Leave `AUTH_DISABLE` unset in production; set `AUTH_DISABLE=1` locally to bypass auth.
 - Seed `subjects` and `subject_grants` tables with the org/sport permissions your callers need.  The API auto-creates a `subjects` row the first time a new Auth0 `sub` appears.
+- Using the hosted OpenRating API? Request client credentials via the [contact form](https://www.openrating.app/contact) and we’ll provision access for you.
 
 ### Grant management CLI
 ```bash

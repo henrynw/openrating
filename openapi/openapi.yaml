@@ -2,6 +2,12 @@ openapi: 3.1.0
 info:
   title: OpenRating API
   version: 1.0.0
+  description: |
+    ## Authentication
+
+    Self-hosted deployments supply their own identity provider (see the README for
+    configuration details). To request client credentials for the hosted OpenRating
+    service, contact us at https://www.openrating.app/contact.
 tags:
   - name: Leaderboards
     description: Global rating leaderboards and movers for each sport and discipline.
@@ -1028,6 +1034,15 @@ paths:
           description: Competition not found
 
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JSON Web Tokens used to authorize requests. Self-hosted installations
+        configure their own issuer; hosted API credentials are issued by OpenRating
+        (request access at https://www.openrating.app/contact).
   schemas:
     PlayerUpsert:
       allOf:
