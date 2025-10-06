@@ -230,7 +230,7 @@ paths:
   /v1/players/{player_id}/profile-photo/finalize:
     post:
       tags: [Players]
-      summary: Finalize a player's profile photo upload
+      summary: Finalize a player's profile photo upload after uploading
       operationId: finalizePlayerProfilePhoto
       parameters:
         - in: path
