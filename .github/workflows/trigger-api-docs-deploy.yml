@@ -1,0 +1,21 @@
+name: Trigger API Docs Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - openapi/openapi.yaml
+
+jobs:
+  trigger-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Render deploy hook
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_DOCS_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "RENDER_DOCS_DEPLOY_HOOK secret is not set" >&2
+            exit 1
+          fi
+          curl -sS -X POST "$DEPLOY_HOOK"
