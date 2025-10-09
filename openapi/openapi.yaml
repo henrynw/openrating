@@ -1822,10 +1822,12 @@ components:
           type: [object, 'null']
           additionalProperties: true
     MatchStatistics:
-      type: object
       description: Collection of key-value metrics summarizing performance.
-      additionalProperties:
-        $ref: '#/components/schemas/MatchMetric'
+      oneOf:
+        - type: object
+          additionalProperties:
+            $ref: '#/components/schemas/MatchMetric'
+        - $ref: '#/components/schemas/LooseMatchStatistics'
     MatchMetric:
       type: object
       required: [value]
@@ -1844,6 +1846,16 @@ components:
           type: [object, 'null']
           additionalProperties: true
       description: A single statistic value with optional contextual details.
+    LooseMatchStatistics:
+      type: object
+      description: Legacy nested statistic maps. The API flattens and coerces numeric values into MatchMetric entries automatically.
+      additionalProperties:
+        oneOf:
+          - type: number
+          - type: string
+          - type: 'null'
+          - $ref: '#/components/schemas/MatchMetric'
+          - $ref: '#/components/schemas/LooseMatchStatistics'
     Event:
       type: object
       properties:

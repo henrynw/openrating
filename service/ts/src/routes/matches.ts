@@ -27,20 +27,17 @@ import { normalizeMatchSubmission } from '../formats/index.js';
 import { normalizeRegion, normalizeTier, isDefaultRegion } from '../store/helpers.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
 import { toMatchSummaryResponse } from './helpers/responders.js';
+import {
+  isMatchMetricRecord,
+  normalizeMatchStatistics,
+  type LooseMatchStatistics,
+} from './helpers/statistics.js';
 import { buildPairKey, sortPairPlayers } from '../store/helpers.js';
 import type { PairState } from '../engine/types.js';
 
 const LooseRecordSchema = z.record(z.unknown());
 
-const MatchMetricSchema = z.object({
-  value: z.number(),
-  unit: z.string().nullable().optional(),
-  breakdown: z.record(z.number()).nullable().optional(),
-  source: z.string().nullable().optional(),
-  metadata: LooseRecordSchema.nullable().optional(),
-});
-
-const MatchStatisticsSchema = z.union([z.record(MatchMetricSchema), z.null()]);
+const MatchStatisticsSchema = z.union([LooseRecordSchema, z.null()]);
 
 const MatchSegmentSchema = z.object({
   sequence: z.number().int().min(1).nullable().optional(),
@@ -225,7 +222,10 @@ const mapMatchStatisticsInput = (
 ): MatchStatistics | undefined => {
   if (statistics === undefined) return undefined;
   if (statistics === null) return null;
-  return statistics;
+  if (isMatchMetricRecord(statistics)) {
+    return statistics;
+  }
+  return normalizeMatchStatistics(statistics as LooseMatchStatistics);
 };
 
 const mapSideParticipantsInput = (
