@@ -37,6 +37,7 @@ import type { PairState } from '../engine/types.js';
 
 const LooseRecordSchema = z.record(z.unknown());
 
+// Experimental telemetry payload; structure may evolve as we add richer sport-specific support.
 const MatchStatisticsSchema = z.union([LooseRecordSchema, z.null()]);
 
 const MatchSegmentSchema = z.object({
@@ -446,6 +447,37 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         ratingEvents.map((event) => [event.playerId, event.ratingEventId])
       );
 
+      const missingRatingEvents = result.perPlayer
+        .filter((p) => !ratingEventByPlayer.has(p.playerId))
+        .map((p) => p.playerId);
+
+      if (missingRatingEvents.length) {
+        const fetched = await Promise.all(
+          missingRatingEvents.map(async (playerId) => {
+            try {
+              const { items } = await store.listRatingEvents({
+                ladderKey,
+                playerId,
+                organizationId: organization.organizationId,
+                matchId,
+                limit: 1,
+              });
+              const event = items.find((item) => item.matchId === matchId);
+              return event ? { playerId, ratingEventId: event.ratingEventId } : null;
+            } catch (lookupError) {
+              console.error('rating_event_lookup_error', { playerId, matchId, lookupError });
+              return null;
+            }
+          })
+        );
+
+        for (const entry of fetched) {
+          if (entry) {
+            ratingEventByPlayer.set(entry.playerId, entry.ratingEventId);
+          }
+        }
+      }
+
       return res.send({
         match_id: matchId,
         organization_id: organization.organizationId,
@@ -455,7 +487,9 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         ratings: result.perPlayer.map((p) => {
           const ratingEventId = ratingEventByPlayer.get(p.playerId);
           if (!ratingEventId) {
-            throw new Error(`missing rating event for player ${p.playerId} in match ${matchId}`);
+            throw new Error(
+              `missing rating event for player ${p.playerId} in match ${matchId}`
+            );
           }
           return {
             player_id: p.playerId,

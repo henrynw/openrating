@@ -1552,8 +1552,14 @@ components:
         venue_region_id: { type: string }
         tier: { type: string, enum: [SANCTIONED, LEAGUE, SOCIAL, EXHIBITION] }
         statistics:
+          description: >-
+            Experimental: optional performance metrics captured by the submitter. Subject to breaking
+            changes while we iterate on structured telemetry support.
           $ref: '#/components/schemas/MatchStatistics'
         segments:
+          description: >-
+            Experimental: optional timeline markers supplied by the submitter. Subject to breaking
+            changes while we iterate on structured telemetry support.
           type: array
           items:
             $ref: '#/components/schemas/MatchSegment'
@@ -1593,10 +1599,16 @@ components:
               a: { type: integer }
               b: { type: integer }
               segments:
+                description: >-
+                  Experimental: optional timeline markers supplied by the submitter. Subject to breaking
+                  changes while we iterate on structured telemetry support.
                 type: array
                 items:
                   $ref: '#/components/schemas/MatchSegment'
               statistics:
+                description: >-
+                  Experimental: optional per-game performance metrics. Subject to breaking changes while
+                  we iterate on structured telemetry support.
                 $ref: '#/components/schemas/MatchStatistics'
     MatchUpdate:
       type: object
@@ -1617,8 +1629,14 @@ components:
         timing:
           $ref: '#/components/schemas/MatchTiming'
         statistics:
+          description: >-
+            Experimental: optional performance metrics captured by the submitter. Subject to breaking
+            changes while we iterate on structured telemetry support.
           $ref: '#/components/schemas/MatchStatistics'
         segments:
+          description: >-
+            Experimental: optional timeline markers supplied by the submitter. Subject to breaking
+            changes while we iterate on structured telemetry support.
           type: array
           items:
             $ref: '#/components/schemas/MatchSegment'
@@ -1720,8 +1738,14 @@ components:
         timing:
           $ref: '#/components/schemas/MatchTiming'
         statistics:
+          description: >-
+            Experimental: optional match-wide performance metrics captured by the submitter. Subject to
+            breaking changes while we iterate on structured telemetry support.
           $ref: '#/components/schemas/MatchStatistics'
         segments:
+          description: >-
+            Experimental: optional timeline markers supplied by the submitter. Subject to breaking
+            changes while we iterate on structured telemetry support.
           type: array
           items:
             $ref: '#/components/schemas/MatchSegment'
@@ -1746,10 +1770,16 @@ components:
               a: { type: integer }
               b: { type: integer }
               segments:
+                description: >-
+                  Experimental: optional timeline markers supplied by the submitter. Subject to breaking
+                  changes while we iterate on structured telemetry support.
                 type: array
                 items:
                   $ref: '#/components/schemas/MatchSegment'
               statistics:
+                description: >-
+                  Experimental: optional per-game performance metrics. Subject to breaking changes while
+                  we iterate on structured telemetry support.
                 $ref: '#/components/schemas/MatchStatistics'
     MatchTiming:
       type: object
@@ -1775,7 +1805,9 @@ components:
           $ref: '#/components/schemas/MatchStatus'
     MatchSegment:
       type: object
-      description: Time-ordered scoring or momentum events captured during play.
+      description: >-
+        Experimental: time-ordered scoring or momentum events captured during play. Shape and semantics are
+        subject to change while we iterate on structured telemetry support.
       properties:
         sequence:
           type: [integer, 'null']
@@ -1822,7 +1854,9 @@ components:
           type: [object, 'null']
           additionalProperties: true
     MatchStatistics:
-      description: Collection of key-value metrics summarizing performance.
+      description: >-
+        Experimental: collection of key-value metrics summarizing performance. Shape and semantics are
+        subject to change while we iterate on structured telemetry support.
       oneOf:
         - type: object
           additionalProperties:
