@@ -2237,7 +2237,7 @@ export class PostgresStore implements RatingStore {
       });
     }
 
-    const ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
+    let ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
 
     await this.db.transaction(async (tx: any) => {
       const parseTimestamp = (value?: string | null) => {
@@ -2397,6 +2397,52 @@ export class PostgresStore implements RatingStore {
         await this.enqueueReplay(tx, params.ladderId, matchStartTime);
       }
     });
+
+    const eventByPlayer = new Map(ratingEvents.map((event) => [event.playerId, event]));
+    const missingForPlayers = params.result.perPlayer
+      .map((entry) => entry.playerId)
+      .filter((playerId) => !eventByPlayer.has(playerId));
+
+    if (missingForPlayers.length) {
+      console.warn('record_match_rating_events_missing', {
+        matchId,
+        missingPlayers: missingForPlayers,
+      });
+
+      const fetched = (await this.db
+        .select({
+          playerId: playerRatingHistory.playerId,
+          ratingEventId: sql<string>`CAST(${playerRatingHistory.id} AS TEXT)`,
+          appliedAt: playerRatingHistory.createdAt,
+        })
+        .from(playerRatingHistory)
+        .where(
+          and(
+            eq(playerRatingHistory.matchId, matchId),
+            inArray(playerRatingHistory.playerId, missingForPlayers)
+          )
+        )) as Array<{ playerId: string; ratingEventId: string; appliedAt: Date }>;
+
+      for (const row of fetched) {
+        eventByPlayer.set(row.playerId, {
+          playerId: row.playerId,
+          ratingEventId: row.ratingEventId,
+          appliedAt: row.appliedAt.toISOString(),
+        });
+      }
+    }
+
+    const orderedRatingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
+
+    for (const entry of params.result.perPlayer) {
+      const event = eventByPlayer.get(entry.playerId);
+      if (!event) {
+        throw new Error(`missing rating event for player ${entry.playerId} in match ${matchId}`);
+      }
+      orderedRatingEvents.push(event);
+    }
+
+    ratingEvents = orderedRatingEvents;
 
     return { matchId, ratingEvents };
   }
