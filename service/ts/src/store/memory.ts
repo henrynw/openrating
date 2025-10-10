@@ -32,6 +32,8 @@ import type {
   MatchStatistics,
   MatchParticipant,
   MatchUpdateInput,
+  MatchSportTotalsQuery,
+  MatchSportTotalsResult,
   OrganizationCreateInput,
   OrganizationUpdateInput,
   OrganizationListQuery,
@@ -1547,6 +1549,59 @@ export class MemoryStore implements RatingStore {
     }));
 
     return { items, nextCursor };
+  }
+
+  async countMatchesBySport(query: MatchSportTotalsQuery): Promise<MatchSportTotalsResult> {
+    this.assertOrganizationExists(query.organizationId);
+
+    let matches = this.matches.filter((entry) => entry.organizationId === query.organizationId);
+
+    if (query.sport) {
+      matches = matches.filter((entry) => entry.sport === query.sport);
+    }
+
+    if (query.discipline) {
+      matches = matches.filter((entry) => entry.discipline === query.discipline);
+    }
+
+    if (query.playerId) {
+      matches = matches.filter((entry) =>
+        ['A', 'B'].some((side) => entry.match.sides[side as 'A' | 'B'].players.includes(query.playerId!))
+      );
+    }
+
+    if (query.eventId) {
+      matches = matches.filter((entry) => entry.eventId === query.eventId);
+    }
+
+    if (query.competitionId) {
+      matches = matches.filter((entry) => entry.competitionId === query.competitionId);
+    }
+
+    if (query.startAfter) {
+      const after = new Date(query.startAfter);
+      if (!Number.isNaN(after.getTime())) {
+        matches = matches.filter((entry) => entry.startTime >= after);
+      }
+    }
+
+    if (query.startBefore) {
+      const before = new Date(query.startBefore);
+      if (!Number.isNaN(before.getTime())) {
+        matches = matches.filter((entry) => entry.startTime <= before);
+      }
+    }
+
+    const totalsMap = new Map<MatchInput['sport'], number>();
+    for (const match of matches) {
+      totalsMap.set(match.sport, (totalsMap.get(match.sport) ?? 0) + 1);
+    }
+
+    const totals = Array.from(totalsMap.entries())
+      .map(([sport, totalMatches]) => ({ sport, totalMatches }))
+      .sort((a, b) => a.sport.localeCompare(b.sport));
+
+    return { totals };
   }
 
   async createOrganization(input: OrganizationCreateInput): Promise<OrganizationRecord> {

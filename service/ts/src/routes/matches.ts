@@ -26,7 +26,7 @@ import { MatchLookupError, OrganizationLookupError, PlayerLookupError } from '..
 import { normalizeMatchSubmission } from '../formats/index.js';
 import { normalizeRegion, normalizeTier, isDefaultRegion } from '../store/helpers.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
-import { toMatchSummaryResponse } from './helpers/responders.js';
+import { toMatchSummaryResponse, toMatchSportTotals } from './helpers/responders.js';
 import {
   isMatchMetricRecord,
   normalizeMatchStatistics,
@@ -135,6 +135,30 @@ const MatchListQuerySchema = z
   .refine((data) => data.organization_id || data.organization_slug, {
     message: 'organization_id or organization_slug is required',
     path: ['organization_id'],
+  });
+
+const MatchSportFilterEnum = z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']);
+const MatchDisciplineFilterEnum = z.enum(['SINGLES', 'DOUBLES', 'MIXED']);
+
+const MatchSportTotalsQuerySchema = z
+  .object({
+    organization_id: z.string().optional(),
+    organization_slug: z.string().optional(),
+    sport: MatchSportFilterEnum.optional(),
+    discipline: MatchDisciplineFilterEnum.optional(),
+    player_id: z.string().optional(),
+    event_id: z.string().optional(),
+    competition_id: z.string().optional(),
+    start_after: z.string().datetime().optional(),
+    start_before: z.string().datetime().optional(),
+  })
+  .refine((data) => data.organization_id || data.organization_slug, {
+    message: 'organization_id or organization_slug is required',
+    path: ['organization_id'],
+  })
+  .refine((data) => !data.discipline || data.sport, {
+    message: 'sport is required when discipline provided',
+    path: ['sport'],
   });
 
 const MatchUpdateSchema = z.object({
@@ -465,7 +489,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
               const event = items.find((item) => item.matchId === matchId);
               return event ? { playerId, ratingEventId: event.ratingEventId } : null;
             } catch (lookupError) {
-              console.error('rating_event_lookup_error', { playerId, matchId, lookupError });
+              console.warn('rating_event_lookup_error', { playerId, matchId, error: lookupError });
               return null;
             }
           })
@@ -487,13 +511,15 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         ratings: result.perPlayer.map((p) => {
           const ratingEventId = ratingEventByPlayer.get(p.playerId);
           if (!ratingEventId) {
-            throw new Error(
-              `missing rating event for player ${p.playerId} in match ${matchId}`
-            );
+            console.warn('match_rating_event_missing', {
+              matchId,
+              playerId: p.playerId,
+              providerId,
+            });
           }
           return {
             player_id: p.playerId,
-            rating_event_id: ratingEventId,
+            rating_event_id: ratingEventId ?? null,
             mu_before: p.muBefore,
             mu_after: p.muAfter,
             delta: p.delta,
@@ -580,6 +606,70 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         return res.status(err.status).send({ error: err.code, message: err.message });
       }
       console.error('matches_list_error', err);
+      return res.status(500).send({ error: 'internal_error' });
+    }
+  });
+
+  app.get('/v1/matches/totals/by-sport', requireAuth, async (req, res) => {
+    const parsed = MatchSportTotalsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+    }
+
+    const {
+      organization_id,
+      organization_slug,
+      sport,
+      discipline,
+      player_id,
+      event_id,
+      competition_id,
+      start_after,
+      start_before,
+    } = parsed.data;
+
+    if (!(
+      hasScope(req, 'matches:write') ||
+      hasScope(req, 'matches:read') ||
+      hasScope(req, 'ratings:read')
+    )) {
+      return res.status(403).send({ error: 'insufficient_scope', required: 'matches:read|matches:write|ratings:read' });
+    }
+
+    try {
+      const organization = await resolveOrganization({ organization_id, organization_slug });
+
+      await authorizeOrgAccess(req, organization.organizationId, {
+        permissions: ['matches:write', 'matches:read', 'ratings:read'],
+        sport: sport ?? null,
+        errorCode: 'matches_read_denied',
+        errorMessage: 'Insufficient grants to read matches',
+      });
+
+      const result = await store.countMatchesBySport({
+        organizationId: organization.organizationId,
+        sport: sport ?? undefined,
+        discipline: discipline ?? undefined,
+        playerId: player_id ?? undefined,
+        eventId: event_id ?? undefined,
+        competitionId: competition_id ?? undefined,
+        startAfter: start_after ?? undefined,
+        startBefore: start_before ?? undefined,
+      });
+
+      return res.send({
+        organization_id: organization.organizationId,
+        organization_slug: organization.slug ?? null,
+        sport_totals: toMatchSportTotals(result.totals),
+      });
+    } catch (err) {
+      if (err instanceof OrganizationLookupError) {
+        return res.status(400).send({ error: 'invalid_organization', message: err.message });
+      }
+      if (err instanceof AuthorizationError) {
+        return res.status(err.status).send({ error: err.code, message: err.message });
+      }
+      console.error('match_totals_error', err);
       return res.status(500).send({ error: 'internal_error' });
     }
   });

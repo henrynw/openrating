@@ -108,6 +108,26 @@ export interface MatchListResult {
   nextCursor?: string;
 }
 
+export interface MatchSportTotal {
+  sport: MatchInput['sport'];
+  totalMatches: number;
+}
+
+export interface MatchSportTotalsQuery {
+  organizationId: string;
+  sport?: MatchInput['sport'];
+  discipline?: MatchInput['discipline'];
+  startAfter?: string;
+  startBefore?: string;
+  playerId?: string;
+  eventId?: string;
+  competitionId?: string;
+}
+
+export interface MatchSportTotalsResult {
+  totals: MatchSportTotal[];
+}
+
 export interface MatchUpdateInput {
   startTime?: string;
   venueId?: string | null;

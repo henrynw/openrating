@@ -4,6 +4,7 @@ import type {
   MatchTiming,
   MatchStatistics,
   MatchParticipant,
+  MatchSportTotal,
   OrganizationRecord,
   PlayerRecord,
   PlayerCompetitiveProfile,
@@ -198,6 +199,9 @@ export const toMatchSummaryResponse = (match: MatchSummary, organizationSlug: st
 
   return response;
 };
+
+export const toMatchSportTotals = (totals: MatchSportTotal[]) =>
+  totals.map((item) => ({ sport: item.sport, total_matches: item.totalMatches }));
 
 export const toRatingEventResponse = (event: RatingEventRecord) => ({
   rating_event_id: event.ratingEventId,

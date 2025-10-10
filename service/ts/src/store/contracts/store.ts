@@ -6,7 +6,14 @@ import type {
   OrganizationRecord,
   OrganizationUpdateInput,
 } from './organizations.js';
-import type { MatchListQuery, MatchListResult, MatchSummary, MatchUpdateInput } from './matches.js';
+import type {
+  MatchListQuery,
+  MatchListResult,
+  MatchSummary,
+  MatchUpdateInput,
+  MatchSportTotalsQuery,
+  MatchSportTotalsResult,
+} from './matches.js';
 import type {
   LadderKey,
   EnsurePlayersResult,
@@ -70,6 +77,7 @@ export interface RatingStore {
   getPlayerRating(playerId: string, ladderKey: LadderKey): Promise<PlayerState | null>;
   listPlayers(query: PlayerListQuery): Promise<PlayerListResult>;
   listMatches(query: MatchListQuery): Promise<MatchListResult>;
+  countMatchesBySport(query: MatchSportTotalsQuery): Promise<MatchSportTotalsResult>;
   listRatingEvents(query: RatingEventListQuery): Promise<RatingEventListResult>;
   getRatingEvent(
     identifiers: { ladderKey: LadderKey; playerId: string; ratingEventId: string; organizationId?: string | null }

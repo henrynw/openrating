@@ -626,6 +626,69 @@ paths:
               schema:
                 $ref: '#/components/schemas/MatchListResponse'
 
+  /v1/matches/totals/by-sport:
+    get:
+      tags: [Matches]
+      summary: Total matches grouped by sport
+      operationId: countMatchesBySport
+      parameters:
+        - in: query
+          name: organization_id
+          required: false
+          schema: { type: string }
+          description: 'UUID of the organization (optional if organization_slug provided)'
+        - in: query
+          name: organization_slug
+          required: false
+          schema: { type: string }
+          description: 'Slug identifier for the organization'
+        - in: query
+          name: sport
+          required: false
+          schema:
+            type: string
+            enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+          description: Filter totals to a specific sport
+        - in: query
+          name: discipline
+          required: false
+          schema:
+            type: string
+            enum: [SINGLES, DOUBLES, MIXED]
+          description: Filter totals to matches within a specific discipline (requires sport)
+        - in: query
+          name: player_id
+          required: false
+          schema: { type: string }
+          description: Filter matches that include the specified player
+        - in: query
+          name: event_id
+          required: false
+          schema: { type: string }
+          description: Filter matches belonging to a specific event
+        - in: query
+          name: competition_id
+          required: false
+          schema: { type: string }
+          description: Filter matches belonging to a specific competition
+        - in: query
+          name: start_after
+          required: false
+          schema: { type: string, format: date-time }
+          description: Include matches that begin on or after this timestamp
+        - in: query
+          name: start_before
+          required: false
+          schema: { type: string, format: date-time }
+          description: Include matches that begin on or before this timestamp
+      responses:
+        '200':
+          description: Totals grouped by sport for the requested filters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchSportTotalsResponse'
+
   /v1/matches/{match_id}:
     get:
       tags: [Matches]
@@ -1657,7 +1720,9 @@ components:
             type: object
             properties:
               player_id: { type: string }
-              rating_event_id: { type: string }
+              rating_event_id:
+                type: [string, 'null']
+                description: Rating history entry applied by this match (may be null if auditing is pending).
               mu_before: { type: number }
               mu_after: { type: number }
               delta: { type: number }
@@ -1672,6 +1737,27 @@ components:
             $ref: '#/components/schemas/MatchSummary'
         next_cursor:
           type: [string, 'null']
+    MatchSportTotal:
+      type: object
+      required: [sport, total_matches]
+      properties:
+        sport:
+          type: string
+          enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+        total_matches:
+          type: integer
+          minimum: 0
+    MatchSportTotalsResponse:
+      type: object
+      required: [organization_id, sport_totals]
+      properties:
+        organization_id: { type: string }
+        organization_slug:
+          type: [string, 'null']
+        sport_totals:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchSportTotal'
     OrganizationCreate:
       type: object
       required: [name]

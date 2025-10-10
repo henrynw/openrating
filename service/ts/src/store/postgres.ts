@@ -44,6 +44,8 @@ import type {
   PlayerListResult,
   MatchListQuery,
   MatchListResult,
+  MatchSportTotalsQuery,
+  MatchSportTotalsResult,
   MatchSummary,
   MatchGameSummary,
   MatchTiming,
@@ -4181,5 +4183,68 @@ export class PostgresStore implements RatingStore {
     });
 
     return { items, nextCursor };
+  }
+
+  async countMatchesBySport(query: MatchSportTotalsQuery): Promise<MatchSportTotalsResult> {
+    await this.assertOrganizationExists(query.organizationId);
+
+    const filters: any[] = [eq(matches.organizationId, query.organizationId)];
+
+    if (query.sport) {
+      filters.push(eq(matches.sport, query.sport));
+    }
+
+    if (query.discipline) {
+      filters.push(eq(matches.discipline, query.discipline));
+    }
+
+    if (query.startAfter) {
+      const after = new Date(query.startAfter);
+      if (!Number.isNaN(after.getTime())) {
+        filters.push(sql`${matches.startTime} >= ${after}`);
+      }
+    }
+
+    if (query.startBefore) {
+      const before = new Date(query.startBefore);
+      if (!Number.isNaN(before.getTime())) {
+        filters.push(sql`${matches.startTime} <= ${before}`);
+      }
+    }
+
+    if (query.playerId) {
+      filters.push(
+        sql`EXISTS (SELECT 1 FROM ${matchSidePlayers} msp JOIN ${matchSides} ms ON ms.id = msp.match_side_id WHERE ms.match_id = ${matches.matchId} AND msp.player_id = ${query.playerId})`
+      );
+    }
+
+    if (query.eventId) {
+      filters.push(eq(matches.eventId, query.eventId));
+    }
+
+    if (query.competitionId) {
+      filters.push(eq(matches.competitionId, query.competitionId));
+    }
+
+    const condition = combineFilters(filters);
+
+    let matchQuery = this.db
+      .select({
+        sport: matches.sport,
+        totalMatches: sql<number>`CAST(count(*) AS INTEGER)`,
+      })
+      .from(matches)
+      .groupBy(matches.sport)
+      .orderBy(matches.sport);
+
+    if (condition) {
+      matchQuery = matchQuery.where(condition);
+    }
+
+    const rows = (await matchQuery) as Array<{ sport: MatchInput['sport']; totalMatches: number }>;
+
+    return {
+      totals: rows.map((row) => ({ sport: row.sport, totalMatches: row.totalMatches })),
+    };
   }
 }
