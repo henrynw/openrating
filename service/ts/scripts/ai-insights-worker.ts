@@ -161,6 +161,15 @@ const handleJob = async (job: PlayerInsightAiJob) => {
       errorMessage: null,
     });
 
+    console.info('ai_insights_job_ready', {
+      jobId: job.jobId,
+      playerId: job.playerId,
+      organizationId: job.organizationId,
+      model: MODEL,
+      narrativeLength: narrative.length,
+      tokens,
+    });
+
     completion.success = true;
   } catch (rawError) {
     const err = rawError as Error;
