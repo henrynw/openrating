@@ -321,6 +321,12 @@ paths:
             type: string
             enum: [SINGLES, DOUBLES, MIXED]
           description: Limit insights to a specific discipline when provided
+        - in: query
+          name: include_ai
+          required: false
+          schema:
+            type: boolean
+          description: 'When true, include the latest AI narrative state or enqueue a new generation request.'
         - in: header
           name: If-None-Match
           required: false
@@ -779,6 +785,11 @@ paths:
             type: integer
             minimum: 1
             maximum: 200
+        - in: query
+          name: cursor
+          required: false
+          schema: { type: string }
+          description: Cursor token for pagination (pass the `next_cursor` value from the previous page)
       responses:
         '200':
           description: Leaderboard snapshot for the requested ladder
@@ -1408,6 +1419,10 @@ components:
           $ref: '#/components/schemas/PlayerInsightVolatility'
         cache_keys:
           $ref: '#/components/schemas/PlayerInsightCacheKeys'
+        ai:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/PlayerInsightAiSummary'
     PlayerInsightMeta:
       type: object
       required: [schema_version, generated_at, player_id]
@@ -1574,6 +1589,60 @@ components:
           type: [string, 'null']
         digest:
           type: [string, 'null']
+    PlayerInsightAiSummary:
+      type: object
+      additionalProperties: false
+      required: [status, snapshot_digest, prompt_version]
+      properties:
+        status:
+          type: string
+          description: Current AI generation status
+          enum: [ready, pending, failed, quota_exceeded, disabled]
+        snapshot_digest:
+          type: string
+          description: Digest of the insight snapshot the narrative references
+        prompt_version:
+          type: string
+          description: Prompt template version used for the narrative
+        narrative:
+          type: [string, 'null']
+        model:
+          type: [string, 'null']
+        generated_at:
+          type: [string, 'null']
+          format: date-time
+        last_requested_at:
+          type: [string, 'null']
+          format: date-time
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+        poll_after_ms:
+          type: [integer, 'null']
+          minimum: 0
+        tokens:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            prompt:
+              type: integer
+              minimum: 0
+            completion:
+              type: integer
+              minimum: 0
+            total:
+              type: integer
+              minimum: 0
+        job_id:
+          type: [string, 'null']
+        error:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+            message:
+              type: [string, 'null']
     MatchSubmit:
       type: object
       required: [sport, discipline, format, start_time, sides, games]
@@ -2495,6 +2564,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LeaderboardPlayer'
+        next_cursor:
+          type: [string, 'null']
     LeaderboardMover:
       type: object
       properties:

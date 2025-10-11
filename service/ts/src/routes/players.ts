@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   AuthorizationError,
   authorizeOrgAccess,
+  getSubjectId,
   requireAuth,
   requireScope,
 } from '../auth.js';
@@ -16,6 +17,7 @@ import type {
   PlayerRankingSnapshot,
   PlayerInsightsQuery,
   PlayerRecord,
+  PlayerInsightAiData,
 } from '../store/index.js';
 import { OrganizationLookupError, PlayerLookupError } from '../store/index.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
@@ -144,6 +146,7 @@ const PlayerInsightsQuerySchema = z
     sport: SportEnum.optional(),
     discipline: DisciplineEnum.optional(),
     force_refresh: z.union([z.string(), z.boolean()]).optional(),
+    include_ai: z.union([z.string(), z.boolean()]).optional(),
   })
   .refine((data) => data.organization_id || data.organization_slug, {
     message: 'organization_id or organization_slug is required',
@@ -198,6 +201,18 @@ const PlayerUpdateSchema = z
 type PlayerRankingSnapshotInput = z.infer<typeof PlayerRankingSnapshotSchema>;
 type PlayerCompetitiveProfileInput = z.infer<typeof PlayerCompetitiveProfileSchema>;
 type PlayerAttributesInput = z.infer<typeof PlayerAttributesSchema>;
+
+const parseBooleanParam = (value: unknown): boolean | null => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  }
+  return null;
+};
+
+const AI_PROMPT_VERSION = 'v1';
 
 const mapRankingSnapshotInput = (snapshot: PlayerRankingSnapshotInput): PlayerRankingSnapshot => ({
   source: snapshot.source,
@@ -377,16 +392,9 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
       return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
     }
 
-    const { organization_id, organization_slug, sport, discipline, force_refresh } = parsed.data;
-    const forceRefresh = (() => {
-      if (typeof force_refresh === 'boolean') return force_refresh;
-      if (typeof force_refresh === 'string') {
-        const value = force_refresh.toLowerCase();
-        if (['1', 'true', 'yes', 'on'].includes(value)) return true;
-        if (['0', 'false', 'no', 'off'].includes(value)) return false;
-      }
-      return false;
-    })();
+    const { organization_id, organization_slug, sport, discipline, force_refresh, include_ai } = parsed.data;
+    const forceRefresh = parseBooleanParam(force_refresh) ?? false;
+    const includeAi = parseBooleanParam(include_ai) ?? false;
 
     try {
       const organization = await resolveOrganization({ organization_id, organization_slug });
@@ -426,11 +434,63 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
         return res.status(404).send({ error: 'insights_not_found' });
       }
 
+      let aiState: PlayerInsightAiData | null = null;
+      let aiJobId: string | null = null;
+
+      if (includeAi) {
+        const digest = snapshot.cacheKeys?.digest ?? null;
+        if (digest) {
+          let requestedBy: string | null = null;
+          try {
+            requestedBy = await getSubjectId(req);
+          } catch (err) {
+            requestedBy = null;
+          }
+
+          const ensureResult = await store.ensurePlayerInsightAiState({
+            organizationId: organization.organizationId,
+            playerId: req.params.player_id,
+            sport: sport ?? null,
+            discipline: discipline ?? null,
+            snapshotDigest: digest,
+            promptVersion: AI_PROMPT_VERSION,
+            requestedAt: new Date(),
+            enqueue: true,
+            payload: {
+              requested_by: requestedBy,
+              source: 'api.players.insights',
+            },
+          });
+          aiState = ensureResult.state;
+          aiJobId = ensureResult.jobId ?? null;
+        } else {
+          aiState = {
+            snapshotDigest: 'unavailable',
+            promptVersion: AI_PROMPT_VERSION,
+            status: 'DISABLED',
+            narrative: null,
+            model: null,
+            generatedAt: null,
+            tokens: null,
+            expiresAt: null,
+            lastRequestedAt: null,
+            pollAfterMs: null,
+            errorCode: 'digest_missing',
+            errorMessage: 'Snapshot digest unavailable for AI generation',
+          };
+        }
+      }
+
       if (etag) {
         res.setHeader('ETag', etag);
       }
 
-      return res.send(toPlayerInsightsResponse(snapshot));
+      return res.send(
+        toPlayerInsightsResponse(snapshot, {
+          ai: includeAi ? aiState : null,
+          aiJobId,
+        })
+      );
     } catch (err) {
       if (err instanceof OrganizationLookupError) {
         return res.status(400).send({ error: 'invalid_organization', message: err.message });

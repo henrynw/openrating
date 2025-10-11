@@ -39,6 +39,29 @@ services:
       - key: INSIGHTS_WORKER_POLL_MS
         value: "1000"
 
+  - type: worker
+    name: openrating-ai-insights-worker
+    env: node
+    rootDir: service/ts
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm run ai-insights:worker
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: openrating-db
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AI_INSIGHTS_MODEL
+        value: gpt-4o-mini
+      - key: AI_INSIGHTS_WORKER_ID
+        generateValue: true
+      - key: AI_INSIGHTS_WORKER_POLL_MS
+        value: "1500"
+      - key: AI_INSIGHTS_TTL_HOURS
+        value: "24"
+
   - type: cron
     name: openrating-replay
     env: node

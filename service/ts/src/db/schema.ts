@@ -392,3 +392,61 @@ export const playerInsightJobs = pgTable('player_insight_jobs', {
     .on(table.playerId, table.organizationId, table.scopeKey)
     .where(sql`${table.status} IN ('PENDING', 'IN_PROGRESS')`),
 }));
+
+export const playerInsightAi = pgTable('player_insight_ai', {
+  playerId: text('player_id').references(() => players.playerId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  organizationId: text('organization_id').references(() => organizations.organizationId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  sport: text('sport'),
+  discipline: text('discipline'),
+  scopeKey: text('scope_key').notNull(),
+  promptVersion: text('prompt_version').notNull(),
+  snapshotDigest: text('snapshot_digest').notNull(),
+  status: text('status').notNull(),
+  narrative: text('narrative'),
+  model: text('model'),
+  tokensPrompt: integer('tokens_prompt'),
+  tokensCompletion: integer('tokens_completion'),
+  tokensTotal: integer('tokens_total'),
+  generatedAt: timestamp('generated_at', { withTimezone: true }),
+  lastRequestedAt: timestamp('last_requested_at', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  pollAfterMs: integer('poll_after_ms'),
+  errorCode: text('error_code'),
+  errorMessage: text('error_message'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table: any) => ({
+  pk: primaryKey(table.playerId, table.organizationId, table.scopeKey, table.promptVersion),
+}));
+
+export const playerInsightAiJobs = pgTable('player_insight_ai_jobs', {
+  jobId: text('job_id').primaryKey(),
+  playerId: text('player_id').references(() => players.playerId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  organizationId: text('organization_id').references(() => organizations.organizationId, {
+    onDelete: 'cascade',
+  }).notNull(),
+  sport: text('sport'),
+  discipline: text('discipline'),
+  scopeKey: text('scope_key').notNull(),
+  promptVersion: text('prompt_version').notNull(),
+  snapshotDigest: text('snapshot_digest').notNull(),
+  status: text('status').notNull().default('PENDING'),
+  runAt: timestamp('run_at', { withTimezone: true }).defaultNow().notNull(),
+  lockedAt: timestamp('locked_at', { withTimezone: true }),
+  lockedBy: text('locked_by'),
+  attempts: integer('attempts').default(0).notNull(),
+  payload: jsonb('payload'),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table: any) => ({
+  uniqueScope: uniqueIndex('player_insight_ai_jobs_unique_scope')
+    .on(table.playerId, table.organizationId, table.scopeKey, table.promptVersion)
+    .where(sql`${table.status} IN ('PENDING', 'IN_PROGRESS')`),
+}));

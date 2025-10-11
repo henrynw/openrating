@@ -80,6 +80,14 @@ import type {
   PlayerInsightsJobCompletion,
   PlayerInsightsUpsertResult,
   PlayerInsightsBuildOptions,
+  PlayerInsightAiEnsureInput,
+  PlayerInsightAiEnsureResult,
+  PlayerInsightAiEnqueueInput,
+  PlayerInsightAiJob,
+  PlayerInsightAiJobClaimOptions,
+  PlayerInsightAiJobCompletion,
+  PlayerInsightAiData,
+  PlayerInsightAiResultInput,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
 import { buildLadderId, DEFAULT_REGION, buildPairKey, sortPairPlayers } from './helpers.js';
@@ -255,6 +263,36 @@ const parseRatingEventCursor = (cursor: string) => {
   return { appliedAt: date, id };
 };
 
+interface LeaderboardCursorPayload {
+  mu: number;
+  playerId: string;
+  rank: number;
+}
+
+const encodeLeaderboardCursor = (payload: LeaderboardCursorPayload) =>
+  Buffer.from(JSON.stringify(payload), 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+
+const decodeLeaderboardCursor = (cursor: string): LeaderboardCursorPayload | null => {
+  try {
+    const normalized = cursor.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
+    const json = Buffer.from(padded, 'base64').toString('utf8');
+    const parsed = JSON.parse(json) as Partial<LeaderboardCursorPayload>;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (typeof parsed.mu !== 'number' || Number.isNaN(parsed.mu)) return null;
+    if (typeof parsed.playerId !== 'string' || !parsed.playerId.length) return null;
+    if (typeof parsed.rank !== 'number' || Number.isNaN(parsed.rank)) return null;
+    const safeRank = Math.max(0, Math.floor(parsed.rank));
+    return { mu: parsed.mu, playerId: parsed.playerId, rank: safeRank };
+  } catch {
+    return null;
+  }
+};
+
 const clampValue = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
 
@@ -317,6 +355,9 @@ export class MemoryStore implements RatingStore {
   private playerInsightsSnapshots = new Map<string, PlayerInsightsUpsertResult>();
   private playerInsightJobs = new Map<string, PlayerInsightsJob>();
   private playerInsightJobQueue: string[] = [];
+  private playerInsightAiStates = new Map<string, PlayerInsightAiData>();
+  private playerInsightAiJobs = new Map<string, PlayerInsightAiJob>();
+  private playerInsightAiJobQueue: string[] = [];
   private pairSynergies = new Map<string, MemoryPairSynergy>();
   private pairSynergyHistory: MemoryPairSynergyHistory[] = [];
   private latestStartByLadder = new Map<string, Date>();
@@ -1027,23 +1068,58 @@ export class MemoryStore implements RatingStore {
       return a.player.playerId.localeCompare(b.player.playerId);
     });
 
+    let startIndex = 0;
+    if (params.cursor) {
+      const cursor = decodeLeaderboardCursor(params.cursor);
+      if (cursor) {
+        const directIndex = candidates.findIndex((entry) => entry.player.playerId === cursor.playerId);
+        if (directIndex >= 0) {
+          startIndex = directIndex + 1;
+        } else {
+          const fallbackIndex = candidates.findIndex((entry) => {
+            if (entry.rating.mu < cursor.mu) return true;
+            if (entry.rating.mu > cursor.mu) return false;
+            return entry.player.playerId > cursor.playerId;
+          });
+          if (fallbackIndex >= 0) {
+            startIndex = fallbackIndex;
+          } else {
+            startIndex = Math.min(cursor.rank, candidates.length);
+          }
+        }
+      }
+    }
+
+    const slice = candidates.slice(startIndex, startIndex + limit);
+    const items: LeaderboardEntry[] = slice.map((entry, index) => ({
+      rank: startIndex + index + 1,
+      playerId: entry.player.playerId,
+      displayName: entry.player.displayName,
+      shortName: entry.player.shortName ?? undefined,
+      givenName: entry.player.givenName ?? undefined,
+      familyName: entry.player.familyName ?? undefined,
+      countryCode: entry.player.countryCode ?? undefined,
+      regionId: entry.player.regionId ?? undefined,
+      mu: entry.rating.mu,
+      sigma: entry.rating.sigma,
+      matches: entry.rating.matchesCount,
+      delta: entry.latest?.delta ?? null,
+      lastEventAt: entry.latest ? entry.latest.appliedAt.toISOString() : null,
+      lastMatchId: entry.latest?.matchId ?? null,
+    }));
+
+    const hasMore = candidates.length > startIndex + slice.length;
+    const nextCursor = hasMore && slice.length
+      ? encodeLeaderboardCursor({
+          mu: slice[slice.length - 1].rating.mu,
+          playerId: slice[slice.length - 1].player.playerId,
+          rank: startIndex + slice.length,
+        })
+      : undefined;
+
     return {
-      items: candidates.slice(0, limit).map((entry, index) => ({
-        rank: index + 1,
-        playerId: entry.player.playerId,
-        displayName: entry.player.displayName,
-        shortName: entry.player.shortName ?? undefined,
-        givenName: entry.player.givenName ?? undefined,
-        familyName: entry.player.familyName ?? undefined,
-        countryCode: entry.player.countryCode ?? undefined,
-        regionId: entry.player.regionId ?? undefined,
-        mu: entry.rating.mu,
-        sigma: entry.rating.sigma,
-        matches: entry.rating.matchesCount,
-        delta: entry.latest?.delta ?? null,
-        lastEventAt: entry.latest ? entry.latest.appliedAt.toISOString() : null,
-        lastMatchId: entry.latest?.matchId ?? null,
-      })),
+      items,
+      nextCursor,
     } satisfies LeaderboardResult;
   }
 
@@ -2372,10 +2448,24 @@ export class MemoryStore implements RatingStore {
     return `${query.organizationId}|${query.playerId}|${this.buildInsightScopeKey(query.sport ?? null, query.discipline ?? null)}`;
   }
 
+  private buildInsightAiStateKey(query: PlayerInsightsQuery, promptVersion: string) {
+    return `${this.buildInsightStoreKey(query)}|${promptVersion}`;
+  }
+
   private resortInsightJobQueue() {
     this.playerInsightJobQueue.sort((a, b) => {
       const jobA = this.playerInsightJobs.get(a);
       const jobB = this.playerInsightJobs.get(b);
+      const timeA = jobA ? new Date(jobA.runAt).getTime() : Number.POSITIVE_INFINITY;
+      const timeB = jobB ? new Date(jobB.runAt).getTime() : Number.POSITIVE_INFINITY;
+      return timeA - timeB;
+    });
+  }
+
+  private resortInsightAiJobQueue() {
+    this.playerInsightAiJobQueue.sort((a, b) => {
+      const jobA = this.playerInsightAiJobs.get(a);
+      const jobB = this.playerInsightAiJobs.get(b);
       const timeA = jobA ? new Date(jobA.runAt).getTime() : Number.POSITIVE_INFINITY;
       const timeB = jobB ? new Date(jobB.runAt).getTime() : Number.POSITIVE_INFINITY;
       return timeA - timeB;
@@ -2553,6 +2643,230 @@ export class MemoryStore implements RatingStore {
       this.playerInsightJobQueue.push(job.jobId);
     }
     this.resortInsightJobQueue();
+  }
+
+  async getPlayerInsightAiState(input: PlayerInsightAiEnsureInput): Promise<PlayerInsightAiData | null> {
+    this.assertPlayerInOrganization(input.playerId, input.organizationId);
+    const key = this.buildInsightAiStateKey(input, input.promptVersion);
+    const existing = this.playerInsightAiStates.get(key);
+    if (!existing) return null;
+    return JSON.parse(JSON.stringify(existing)) as PlayerInsightAiData;
+  }
+
+  async ensurePlayerInsightAiState(input: PlayerInsightAiEnsureInput): Promise<PlayerInsightAiEnsureResult> {
+    this.assertPlayerInOrganization(input.playerId, input.organizationId);
+    const key = this.buildInsightAiStateKey(input, input.promptVersion);
+    const now = input.requestedAt ? new Date(input.requestedAt) : new Date();
+    const existing = this.playerInsightAiStates.get(key);
+
+    let state: PlayerInsightAiData;
+
+    if (existing && existing.snapshotDigest === input.snapshotDigest && existing.status === 'READY') {
+      state = {
+        ...existing,
+        lastRequestedAt: now.toISOString(),
+        pollAfterMs: input.pollAfterMs ?? existing.pollAfterMs ?? null,
+      };
+    } else if (existing && existing.snapshotDigest === input.snapshotDigest && existing.status === 'PENDING') {
+      state = {
+        ...existing,
+        lastRequestedAt: now.toISOString(),
+        pollAfterMs: input.pollAfterMs ?? existing.pollAfterMs ?? null,
+      };
+    } else {
+      state = {
+        snapshotDigest: input.snapshotDigest,
+        promptVersion: input.promptVersion,
+        status: 'PENDING',
+        narrative: null,
+        model: null,
+        generatedAt: null,
+        tokens: null,
+        expiresAt: null,
+        lastRequestedAt: now.toISOString(),
+        pollAfterMs: input.pollAfterMs ?? existing?.pollAfterMs ?? 1500,
+        errorCode: null,
+        errorMessage: null,
+      };
+    }
+
+    this.playerInsightAiStates.set(key, JSON.parse(JSON.stringify(state)) as PlayerInsightAiData);
+
+    let jobId: string | null = null;
+    let enqueued = false;
+    if (state.status === 'PENDING' && input.enqueue !== false) {
+      const { jobId: queuedJobId, enqueued: jobEnqueued } = await this.enqueuePlayerInsightAiJob({
+        organizationId: input.organizationId,
+        playerId: input.playerId,
+        sport: input.sport ?? null,
+        discipline: input.discipline ?? null,
+        snapshotDigest: input.snapshotDigest,
+        promptVersion: input.promptVersion,
+        runAt: input.requestedAt ?? now,
+        payload: input.payload ?? null,
+        dedupe: true,
+      });
+      jobId = queuedJobId;
+      enqueued = jobEnqueued;
+    }
+
+    return {
+      state: JSON.parse(JSON.stringify(state)) as PlayerInsightAiData,
+      jobId,
+      enqueued,
+    };
+  }
+
+  async savePlayerInsightAiResult(input: PlayerInsightAiResultInput): Promise<PlayerInsightAiData> {
+    this.assertPlayerInOrganization(input.playerId, input.organizationId);
+    const key = this.buildInsightAiStateKey(input, input.promptVersion);
+    const existing = this.playerInsightAiStates.get(key);
+    const generatedAt = input.generatedAt ? new Date(input.generatedAt).toISOString() : null;
+    const expiresAt = input.expiresAt ? new Date(input.expiresAt).toISOString() : null;
+
+    const state: PlayerInsightAiData = {
+      snapshotDigest: input.snapshotDigest,
+      promptVersion: input.promptVersion,
+      status: input.status,
+      narrative: input.narrative ?? null,
+      model: input.model ?? null,
+      generatedAt,
+      tokens: input.tokens ?? null,
+      expiresAt,
+      lastRequestedAt: existing?.lastRequestedAt ?? null,
+      pollAfterMs: existing?.pollAfterMs ?? null,
+      errorCode: input.errorCode ?? null,
+      errorMessage: input.errorMessage ?? null,
+    };
+
+    this.playerInsightAiStates.set(key, JSON.parse(JSON.stringify(state)) as PlayerInsightAiData);
+    return JSON.parse(JSON.stringify(state)) as PlayerInsightAiData;
+  }
+
+  async enqueuePlayerInsightAiJob(
+    input: PlayerInsightAiEnqueueInput
+  ): Promise<{ jobId: string; enqueued: boolean }> {
+    this.assertPlayerInOrganization(input.playerId, input.organizationId);
+    const scopeKey = this.buildInsightScopeKey(input.sport ?? null, input.discipline ?? null);
+
+    const existing = Array.from(this.playerInsightAiJobs.values()).find(
+      (job) =>
+        job.playerId === input.playerId &&
+        job.organizationId === input.organizationId &&
+        job.scopeKey === scopeKey &&
+        job.promptVersion === input.promptVersion &&
+        job.status !== 'COMPLETED'
+    );
+
+    const runAt = input.runAt ? new Date(input.runAt) : new Date();
+
+    if (existing) {
+      const digestChanged = existing.snapshotDigest !== input.snapshotDigest;
+      if (input.dedupe === false || digestChanged) {
+        existing.status = 'PENDING';
+        existing.runAt = runAt.toISOString();
+        existing.lockedAt = null;
+        existing.lockedBy = null;
+        existing.lastError = null;
+        existing.snapshotDigest = input.snapshotDigest;
+        existing.payload = input.payload ?? existing.payload ?? null;
+        this.playerInsightAiJobs.set(existing.jobId, existing);
+        if (!this.playerInsightAiJobQueue.includes(existing.jobId)) {
+          this.playerInsightAiJobQueue.push(existing.jobId);
+        }
+        this.resortInsightAiJobQueue();
+        return { jobId: existing.jobId, enqueued: true };
+      }
+
+      if (input.payload !== undefined) {
+        existing.payload = input.payload;
+        this.playerInsightAiJobs.set(existing.jobId, existing);
+      }
+
+      return { jobId: existing.jobId, enqueued: false };
+    }
+
+    const jobId = randomUUID();
+    const job: PlayerInsightAiJob = {
+      jobId,
+      playerId: input.playerId,
+      organizationId: input.organizationId,
+      sport: input.sport ?? null,
+      discipline: input.discipline ?? null,
+      scopeKey,
+      promptVersion: input.promptVersion,
+      snapshotDigest: input.snapshotDigest,
+      status: 'PENDING',
+      runAt: runAt.toISOString(),
+      lockedAt: null,
+      lockedBy: null,
+      attempts: 0,
+      payload: input.payload ?? null,
+      lastError: null,
+    };
+    this.playerInsightAiJobs.set(jobId, job);
+    this.playerInsightAiJobQueue.push(jobId);
+    this.resortInsightAiJobQueue();
+    return { jobId, enqueued: true };
+  }
+
+  async claimPlayerInsightAiJob(
+    options: PlayerInsightAiJobClaimOptions
+  ): Promise<PlayerInsightAiJob | null> {
+    const now = new Date();
+    for (const jobId of this.playerInsightAiJobQueue) {
+      const job = this.playerInsightAiJobs.get(jobId);
+      if (!job) continue;
+      if (job.status !== 'PENDING') continue;
+      if (new Date(job.runAt) > now) continue;
+      job.status = 'IN_PROGRESS';
+      job.lockedBy = options.workerId;
+      job.lockedAt = now.toISOString();
+      job.attempts += 1;
+      this.playerInsightAiJobs.set(jobId, job);
+      return JSON.parse(JSON.stringify(job)) as PlayerInsightAiJob;
+    }
+    return null;
+  }
+
+  async completePlayerInsightAiJob(result: PlayerInsightAiJobCompletion): Promise<void> {
+    const job = this.playerInsightAiJobs.get(result.jobId);
+    if (!job) return;
+    if (job.lockedBy && job.lockedBy !== result.workerId) {
+      return;
+    }
+
+    if (result.success) {
+      job.status = 'COMPLETED';
+      job.lockedBy = null;
+      job.lockedAt = null;
+      job.lastError = null;
+      this.playerInsightAiJobs.set(job.jobId, job);
+      this.playerInsightAiJobQueue = this.playerInsightAiJobQueue.filter((id) => id !== job.jobId);
+      return;
+    }
+
+    const rescheduleAt = result.rescheduleAt === undefined ? new Date(Date.now() + 30_000) : result.rescheduleAt;
+    if (rescheduleAt === null) {
+      job.status = 'FAILED';
+      job.lockedBy = null;
+      job.lockedAt = null;
+      job.lastError = result.error ?? null;
+      this.playerInsightAiJobs.set(job.jobId, job);
+      return;
+    }
+
+    const runAt = new Date(rescheduleAt);
+    job.status = 'PENDING';
+    job.lockedBy = null;
+    job.lockedAt = null;
+    job.lastError = result.error ?? null;
+    job.runAt = runAt.toISOString();
+    this.playerInsightAiJobs.set(job.jobId, job);
+    if (!this.playerInsightAiJobQueue.includes(job.jobId)) {
+      this.playerInsightAiJobQueue.push(job.jobId);
+    }
+    this.resortInsightAiJobQueue();
   }
 
   private assertPlayerInOrganization(playerId: string, organizationId: string) {

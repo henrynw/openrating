@@ -15,6 +15,8 @@ import {
   playerRatingHistory,
   playerInsights,
   playerInsightJobs,
+  playerInsightAi,
+  playerInsightAiJobs,
   players,
   providers,
   ratingLadders,
@@ -100,6 +102,14 @@ import type {
   PlayerInsightsJobCompletion,
   PlayerInsightsUpsertResult,
   PlayerInsightsBuildOptions,
+  PlayerInsightAiEnsureInput,
+  PlayerInsightAiEnsureResult,
+  PlayerInsightAiEnqueueInput,
+  PlayerInsightAiJob,
+  PlayerInsightAiJobClaimOptions,
+  PlayerInsightAiJobCompletion,
+  PlayerInsightAiData,
+  PlayerInsightAiResultInput,
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
 import {
@@ -152,6 +162,36 @@ const parseRatingEventCursor = (cursor: string) => {
   const id = Number(idRaw);
   if (!Number.isFinite(id)) return null;
   return { createdAt, id };
+};
+
+interface LeaderboardCursorPayload {
+  mu: number;
+  playerId: string;
+  rank: number;
+}
+
+const encodeLeaderboardCursor = (payload: LeaderboardCursorPayload) =>
+  Buffer.from(JSON.stringify(payload), 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+
+const decodeLeaderboardCursor = (cursor: string): LeaderboardCursorPayload | null => {
+  try {
+    const normalized = cursor.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
+    const json = Buffer.from(padded, 'base64').toString('utf8');
+    const parsed = JSON.parse(json) as Partial<LeaderboardCursorPayload>;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (typeof parsed.mu !== 'number' || Number.isNaN(parsed.mu)) return null;
+    if (typeof parsed.playerId !== 'string' || !parsed.playerId.length) return null;
+    if (typeof parsed.rank !== 'number' || Number.isNaN(parsed.rank)) return null;
+    const safeRank = Math.max(0, Math.floor(parsed.rank));
+    return { mu: parsed.mu, playerId: parsed.playerId, rank: safeRank };
+  } catch {
+    return null;
+  }
 };
 
 const clampValue = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -2971,6 +3011,39 @@ export class PostgresStore implements RatingStore {
       playerFilters.push(eq(players.organizationId, params.organizationId));
     }
 
+    const cursor = params.cursor ? decodeLeaderboardCursor(params.cursor) : null;
+    let startIndex = 0;
+
+    if (cursor) {
+      const precedingFilters = [...playerFilters];
+      precedingFilters.push(
+        or(
+          gt(playerRatings.mu, cursor.mu),
+          and(eq(playerRatings.mu, cursor.mu), lte(playerRatings.playerId, cursor.playerId))
+        )
+      );
+
+      const precedingCondition = combineFilters(precedingFilters);
+      if (precedingCondition) {
+        const countRows = (await this.db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(playerRatings)
+          .innerJoin(players, eq(playerRatings.playerId, players.playerId))
+          .where(precedingCondition)) as Array<{ count: number }>;
+        const counted = countRows.length ? countRows[0].count : cursor.rank;
+        startIndex = Math.max(counted, cursor.rank);
+      } else {
+        startIndex = cursor.rank;
+      }
+
+      playerFilters.push(
+        or(
+          lt(playerRatings.mu, cursor.mu),
+          and(eq(playerRatings.mu, cursor.mu), gt(playerRatings.playerId, cursor.playerId))
+        )
+      );
+    }
+
     const playerCondition = combineFilters(playerFilters);
 
     let playerQuery = this.db
@@ -2989,15 +3062,27 @@ export class PostgresStore implements RatingStore {
       .from(playerRatings)
       .innerJoin(players, eq(playerRatings.playerId, players.playerId))
       .orderBy(desc(playerRatings.mu), playerRatings.playerId)
-      .limit(limit);
+      .limit(limit + 1);
 
     if (playerCondition) {
       playerQuery = playerQuery.where(playerCondition);
     }
 
-    const playerRows = (await playerQuery) as PlayerLeaderboardRow[];
+    const rawRows = (await playerQuery) as PlayerLeaderboardRow[];
+    if (!rawRows.length) {
+      return { items: [] } satisfies LeaderboardResult;
+    }
+
+    const hasMore = rawRows.length > limit;
+    const playerRows = rawRows.slice(0, limit);
     if (!playerRows.length) {
       return { items: [] } satisfies LeaderboardResult;
+    }
+
+    if (!cursor) {
+      startIndex = 0;
+    } else {
+      startIndex = Math.max(startIndex, cursor.rank, 0);
     }
 
     const playerIds = playerRows.map((row) => row.playerId);
@@ -3052,7 +3137,7 @@ export class PostgresStore implements RatingStore {
     const items: LeaderboardEntry[] = playerRows.map((row, index) => {
       const latest = latestByPlayer.get(row.playerId);
       return {
-        rank: index + 1,
+        rank: startIndex + index + 1,
         playerId: row.playerId,
         displayName: row.displayName,
         shortName: row.shortName ?? undefined,
@@ -3069,7 +3154,15 @@ export class PostgresStore implements RatingStore {
       } satisfies LeaderboardEntry;
     });
 
-    return { items } satisfies LeaderboardResult;
+    const nextCursor = hasMore
+      ? encodeLeaderboardCursor({
+          mu: playerRows[playerRows.length - 1].mu,
+          playerId: playerRows[playerRows.length - 1].playerId,
+          rank: startIndex + playerRows.length,
+        })
+      : undefined;
+
+    return { items, nextCursor } satisfies LeaderboardResult;
   }
 
   async listLeaderboardMovers(params: LeaderboardMoversQuery): Promise<LeaderboardMoversResult> {
@@ -4041,6 +4134,561 @@ export class PostgresStore implements RatingStore {
     }
 
     await this.db.update(playerInsightJobs).set(updateData).where(condition);
+  }
+
+  async getPlayerInsightAiState(input: PlayerInsightAiEnsureInput): Promise<PlayerInsightAiData | null> {
+    await this.assertPlayerInOrganization(input.playerId, input.organizationId);
+    const scopeKey = buildInsightScopeKey(input.sport ?? null, input.discipline ?? null);
+
+    const rows = await this.db
+      .select({
+        snapshotDigest: playerInsightAi.snapshotDigest,
+        promptVersion: playerInsightAi.promptVersion,
+        status: playerInsightAi.status,
+        narrative: playerInsightAi.narrative,
+        model: playerInsightAi.model,
+        tokensPrompt: playerInsightAi.tokensPrompt,
+        tokensCompletion: playerInsightAi.tokensCompletion,
+        tokensTotal: playerInsightAi.tokensTotal,
+        generatedAt: playerInsightAi.generatedAt,
+        lastRequestedAt: playerInsightAi.lastRequestedAt,
+        expiresAt: playerInsightAi.expiresAt,
+        pollAfterMs: playerInsightAi.pollAfterMs,
+        errorCode: playerInsightAi.errorCode,
+        errorMessage: playerInsightAi.errorMessage,
+      })
+      .from(playerInsightAi)
+      .where(
+        and(
+          eq(playerInsightAi.playerId, input.playerId),
+          eq(playerInsightAi.organizationId, input.organizationId),
+          eq(playerInsightAi.scopeKey, scopeKey),
+          eq(playerInsightAi.promptVersion, input.promptVersion)
+        )
+      )
+      .limit(1);
+
+    const row = rows.at(0);
+    if (!row) return null;
+    return this.mapAiRow(row);
+  }
+
+  async ensurePlayerInsightAiState(
+    input: PlayerInsightAiEnsureInput
+  ): Promise<PlayerInsightAiEnsureResult> {
+    await this.assertPlayerInOrganization(input.playerId, input.organizationId);
+    const scopeKey = buildInsightScopeKey(input.sport ?? null, input.discipline ?? null);
+    const requestedAt = input.requestedAt ? new Date(input.requestedAt) : now();
+
+    const existingRows = await this.db
+      .select({
+        snapshotDigest: playerInsightAi.snapshotDigest,
+        promptVersion: playerInsightAi.promptVersion,
+        status: playerInsightAi.status,
+        narrative: playerInsightAi.narrative,
+        model: playerInsightAi.model,
+        tokensPrompt: playerInsightAi.tokensPrompt,
+        tokensCompletion: playerInsightAi.tokensCompletion,
+        tokensTotal: playerInsightAi.tokensTotal,
+        generatedAt: playerInsightAi.generatedAt,
+        lastRequestedAt: playerInsightAi.lastRequestedAt,
+        expiresAt: playerInsightAi.expiresAt,
+        pollAfterMs: playerInsightAi.pollAfterMs,
+        errorCode: playerInsightAi.errorCode,
+        errorMessage: playerInsightAi.errorMessage,
+      })
+      .from(playerInsightAi)
+      .where(
+        and(
+          eq(playerInsightAi.playerId, input.playerId),
+          eq(playerInsightAi.organizationId, input.organizationId),
+          eq(playerInsightAi.scopeKey, scopeKey),
+          eq(playerInsightAi.promptVersion, input.promptVersion)
+        )
+      )
+      .limit(1);
+
+    const existing = existingRows.at(0);
+    const pollAfterMs = input.pollAfterMs ?? existing?.pollAfterMs ?? (existing ? existing.pollAfterMs ?? null : 1500);
+
+    const shouldReset =
+      !existing ||
+      existing.snapshotDigest !== input.snapshotDigest ||
+      (existing.status !== 'READY' && existing.status !== 'PENDING');
+
+    if (shouldReset) {
+      await this.db
+        .insert(playerInsightAi)
+        .values({
+          playerId: input.playerId,
+          organizationId: input.organizationId,
+          sport: input.sport ?? null,
+          discipline: input.discipline ?? null,
+          scopeKey,
+          promptVersion: input.promptVersion,
+          snapshotDigest: input.snapshotDigest,
+          status: 'PENDING',
+          narrative: null,
+          model: null,
+          tokensPrompt: null,
+          tokensCompletion: null,
+          tokensTotal: null,
+          generatedAt: null,
+          lastRequestedAt: requestedAt,
+          expiresAt: null,
+          pollAfterMs,
+          errorCode: null,
+          errorMessage: null,
+        })
+        .onConflictDoUpdate({
+          target: [
+            playerInsightAi.playerId,
+            playerInsightAi.organizationId,
+            playerInsightAi.scopeKey,
+            playerInsightAi.promptVersion,
+          ],
+          set: {
+            sport: input.sport ?? null,
+            discipline: input.discipline ?? null,
+            snapshotDigest: input.snapshotDigest,
+            status: 'PENDING',
+            narrative: null,
+            model: null,
+            tokensPrompt: null,
+            tokensCompletion: null,
+            tokensTotal: null,
+            generatedAt: null,
+            lastRequestedAt: requestedAt,
+            expiresAt: null,
+            pollAfterMs,
+            errorCode: null,
+            errorMessage: null,
+            updatedAt: sql`now()`,
+          },
+        });
+    } else {
+      await this.db
+        .update(playerInsightAi)
+        .set({
+          lastRequestedAt: requestedAt,
+          pollAfterMs,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(playerInsightAi.playerId, input.playerId),
+            eq(playerInsightAi.organizationId, input.organizationId),
+            eq(playerInsightAi.scopeKey, scopeKey),
+            eq(playerInsightAi.promptVersion, input.promptVersion)
+          )
+        );
+    }
+
+    const refreshed = await this.db
+      .select({
+        snapshotDigest: playerInsightAi.snapshotDigest,
+        promptVersion: playerInsightAi.promptVersion,
+        status: playerInsightAi.status,
+        narrative: playerInsightAi.narrative,
+        model: playerInsightAi.model,
+        tokensPrompt: playerInsightAi.tokensPrompt,
+        tokensCompletion: playerInsightAi.tokensCompletion,
+        tokensTotal: playerInsightAi.tokensTotal,
+        generatedAt: playerInsightAi.generatedAt,
+        lastRequestedAt: playerInsightAi.lastRequestedAt,
+        expiresAt: playerInsightAi.expiresAt,
+        pollAfterMs: playerInsightAi.pollAfterMs,
+        errorCode: playerInsightAi.errorCode,
+        errorMessage: playerInsightAi.errorMessage,
+      })
+      .from(playerInsightAi)
+      .where(
+        and(
+          eq(playerInsightAi.playerId, input.playerId),
+          eq(playerInsightAi.organizationId, input.organizationId),
+          eq(playerInsightAi.scopeKey, scopeKey),
+          eq(playerInsightAi.promptVersion, input.promptVersion)
+        )
+      )
+      .limit(1);
+
+    const stateRow = refreshed.at(0);
+    if (!stateRow) {
+      throw new Error('Failed to load AI insight state after upsert');
+    }
+
+    const state = this.mapAiRow(stateRow);
+
+    let jobId: string | null = null;
+    let enqueued = false;
+    if (state.status === 'PENDING' && input.enqueue !== false) {
+      const result = await this.enqueuePlayerInsightAiJob({
+        organizationId: input.organizationId,
+        playerId: input.playerId,
+        sport: input.sport ?? null,
+        discipline: input.discipline ?? null,
+        snapshotDigest: input.snapshotDigest,
+        promptVersion: input.promptVersion,
+        runAt: requestedAt,
+        payload: input.payload ?? null,
+        dedupe: true,
+      });
+      jobId = result.jobId;
+      enqueued = result.enqueued;
+    }
+
+    return { state, jobId, enqueued };
+  }
+
+  async savePlayerInsightAiResult(input: PlayerInsightAiResultInput): Promise<PlayerInsightAiData> {
+    await this.assertPlayerInOrganization(input.playerId, input.organizationId);
+    const scopeKey = buildInsightScopeKey(input.sport ?? null, input.discipline ?? null);
+
+    const generatedAt = input.generatedAt ? new Date(input.generatedAt) : null;
+    const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
+
+    const existingRows = await this.db
+      .select({
+        lastRequestedAt: playerInsightAi.lastRequestedAt,
+        pollAfterMs: playerInsightAi.pollAfterMs,
+      })
+      .from(playerInsightAi)
+      .where(
+        and(
+          eq(playerInsightAi.playerId, input.playerId),
+          eq(playerInsightAi.organizationId, input.organizationId),
+          eq(playerInsightAi.scopeKey, scopeKey),
+          eq(playerInsightAi.promptVersion, input.promptVersion)
+        )
+      )
+      .limit(1);
+
+    const existing = existingRows.at(0);
+
+    await this.db
+      .insert(playerInsightAi)
+      .values({
+        playerId: input.playerId,
+        organizationId: input.organizationId,
+        sport: input.sport ?? null,
+        discipline: input.discipline ?? null,
+        scopeKey,
+        promptVersion: input.promptVersion,
+        snapshotDigest: input.snapshotDigest,
+        status: input.status,
+        narrative: input.narrative ?? null,
+        model: input.model ?? null,
+        tokensPrompt: input.tokens?.prompt ?? null,
+        tokensCompletion: input.tokens?.completion ?? null,
+        tokensTotal: input.tokens?.total ?? null,
+        generatedAt,
+        lastRequestedAt: existing?.lastRequestedAt ?? null,
+        expiresAt,
+        pollAfterMs: existing?.pollAfterMs ?? null,
+        errorCode: input.errorCode ?? null,
+        errorMessage: input.errorMessage ?? null,
+      })
+      .onConflictDoUpdate({
+        target: [
+          playerInsightAi.playerId,
+          playerInsightAi.organizationId,
+          playerInsightAi.scopeKey,
+          playerInsightAi.promptVersion,
+        ],
+        set: {
+          sport: input.sport ?? null,
+          discipline: input.discipline ?? null,
+          snapshotDigest: input.snapshotDigest,
+          status: input.status,
+          narrative: input.narrative ?? null,
+          model: input.model ?? null,
+          tokensPrompt: input.tokens?.prompt ?? null,
+          tokensCompletion: input.tokens?.completion ?? null,
+          tokensTotal: input.tokens?.total ?? null,
+          generatedAt,
+          expiresAt,
+          errorCode: input.errorCode ?? null,
+          errorMessage: input.errorMessage ?? null,
+          updatedAt: sql`now()`,
+        },
+      });
+
+    const rows = await this.db
+      .select({
+        snapshotDigest: playerInsightAi.snapshotDigest,
+        promptVersion: playerInsightAi.promptVersion,
+        status: playerInsightAi.status,
+        narrative: playerInsightAi.narrative,
+        model: playerInsightAi.model,
+        tokensPrompt: playerInsightAi.tokensPrompt,
+        tokensCompletion: playerInsightAi.tokensCompletion,
+        tokensTotal: playerInsightAi.tokensTotal,
+        generatedAt: playerInsightAi.generatedAt,
+        lastRequestedAt: playerInsightAi.lastRequestedAt,
+        expiresAt: playerInsightAi.expiresAt,
+        pollAfterMs: playerInsightAi.pollAfterMs,
+        errorCode: playerInsightAi.errorCode,
+        errorMessage: playerInsightAi.errorMessage,
+      })
+      .from(playerInsightAi)
+      .where(
+        and(
+          eq(playerInsightAi.playerId, input.playerId),
+          eq(playerInsightAi.organizationId, input.organizationId),
+          eq(playerInsightAi.scopeKey, scopeKey),
+          eq(playerInsightAi.promptVersion, input.promptVersion)
+        )
+      )
+      .limit(1);
+
+    const row = rows.at(0);
+    if (!row) {
+      throw new Error('Failed to load AI insight state after save');
+    }
+
+    return this.mapAiRow(row);
+  }
+
+  async enqueuePlayerInsightAiJob(
+    input: PlayerInsightAiEnqueueInput
+  ): Promise<{ jobId: string; enqueued: boolean }> {
+    await this.assertPlayerInOrganization(input.playerId, input.organizationId);
+    const scopeKey = buildInsightScopeKey(input.sport ?? null, input.discipline ?? null);
+    const runAt = input.runAt ? new Date(input.runAt) : now();
+
+    const existingRows = await this.db
+      .select({
+        jobId: playerInsightAiJobs.jobId,
+        status: playerInsightAiJobs.status,
+        snapshotDigest: playerInsightAiJobs.snapshotDigest,
+      })
+      .from(playerInsightAiJobs)
+      .where(
+        and(
+          eq(playerInsightAiJobs.playerId, input.playerId),
+          eq(playerInsightAiJobs.organizationId, input.organizationId),
+          eq(playerInsightAiJobs.scopeKey, scopeKey),
+          eq(playerInsightAiJobs.promptVersion, input.promptVersion),
+          sql`${playerInsightAiJobs.status} IN ('PENDING', 'IN_PROGRESS')`
+        )
+      )
+      .limit(1);
+
+    const existing = existingRows.at(0);
+
+    if (existing) {
+      const digestChanged = existing.snapshotDigest !== input.snapshotDigest;
+      if (input.dedupe === false || digestChanged) {
+        const updateData: Record<string, unknown> = {
+          status: 'PENDING',
+          runAt,
+          lockedAt: null,
+          lockedBy: null,
+          updatedAt: sql`now()`,
+          lastError: null,
+          snapshotDigest: input.snapshotDigest,
+        };
+        if (input.payload !== undefined) {
+          updateData.payload = input.payload;
+        }
+        await this.db
+          .update(playerInsightAiJobs)
+          .set(updateData)
+          .where(eq(playerInsightAiJobs.jobId, existing.jobId));
+        return { jobId: existing.jobId, enqueued: true };
+      }
+
+      if (input.payload !== undefined) {
+        await this.db
+          .update(playerInsightAiJobs)
+          .set({ payload: input.payload, updatedAt: sql`now()` })
+          .where(eq(playerInsightAiJobs.jobId, existing.jobId));
+      }
+
+      return { jobId: existing.jobId, enqueued: false };
+    }
+
+    const jobId = randomUUID();
+    await this.db.insert(playerInsightAiJobs).values({
+      jobId,
+      playerId: input.playerId,
+      organizationId: input.organizationId,
+      sport: input.sport ?? null,
+      discipline: input.discipline ?? null,
+      scopeKey,
+      promptVersion: input.promptVersion,
+      snapshotDigest: input.snapshotDigest,
+      status: 'PENDING',
+      runAt,
+      attempts: 0,
+      lockedAt: null,
+      lockedBy: null,
+      payload: input.payload ?? null,
+      lastError: null,
+    });
+
+    return { jobId, enqueued: true };
+  }
+
+  async claimPlayerInsightAiJob(
+    options: PlayerInsightAiJobClaimOptions
+  ): Promise<PlayerInsightAiJob | null> {
+    const result = await this.db.execute(sql`
+      WITH claimed AS (
+        SELECT job_id
+        FROM player_insight_ai_jobs
+        WHERE status = 'PENDING'
+          AND run_at <= now()
+        ORDER BY run_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      )
+      UPDATE player_insight_ai_jobs
+      SET status = 'IN_PROGRESS',
+          locked_at = now(),
+          locked_by = ${options.workerId},
+          attempts = attempts + 1,
+          updated_at = now()
+      WHERE job_id IN (SELECT job_id FROM claimed)
+      RETURNING job_id AS "jobId",
+                player_id AS "playerId",
+                organization_id AS "organizationId",
+                sport,
+                discipline,
+                scope_key AS "scopeKey",
+                prompt_version AS "promptVersion",
+                snapshot_digest AS "snapshotDigest",
+                run_at AS "runAt",
+                status,
+                attempts,
+                locked_at AS "lockedAt",
+                locked_by AS "lockedBy",
+                payload,
+                last_error AS "lastError";
+    `);
+
+    const rows = result.rows as Array<{
+      jobId: string;
+      playerId: string;
+      organizationId: string;
+      sport: string | null;
+      discipline: string | null;
+      scopeKey: string;
+      promptVersion: string;
+      snapshotDigest: string;
+      runAt: Date;
+      status: string;
+      attempts: number;
+      lockedAt: Date | null;
+      lockedBy: string | null;
+      payload: unknown;
+      lastError: string | null;
+    }>;
+    const row = rows?.[0];
+    if (!row) return null;
+    return {
+      jobId: row.jobId,
+      playerId: row.playerId,
+      organizationId: row.organizationId,
+      sport: (row.sport ?? null) as Sport | null,
+      discipline: (row.discipline ?? null) as Discipline | null,
+      scopeKey: row.scopeKey,
+      promptVersion: row.promptVersion,
+      snapshotDigest: row.snapshotDigest,
+      runAt: row.runAt.toISOString(),
+      status: row.status as PlayerInsightAiJob['status'],
+      attempts: row.attempts,
+      lockedAt: row.lockedAt ? row.lockedAt.toISOString() : null,
+      lockedBy: row.lockedBy ?? null,
+      payload: (row.payload ?? null) as Record<string, unknown> | null,
+      lastError: row.lastError ?? null,
+    } satisfies PlayerInsightAiJob;
+  }
+
+  async completePlayerInsightAiJob(result: PlayerInsightAiJobCompletion): Promise<void> {
+    const condition = and(
+      eq(playerInsightAiJobs.jobId, result.jobId),
+      or(
+        sql`${playerInsightAiJobs.lockedBy} IS NULL`,
+        eq(playerInsightAiJobs.lockedBy, result.workerId)
+      )
+    );
+
+    if (result.success) {
+      await this.db
+        .update(playerInsightAiJobs)
+        .set({
+          status: 'COMPLETED',
+          lockedAt: null,
+          lockedBy: null,
+          updatedAt: sql`now()`,
+          lastError: null,
+        })
+        .where(condition);
+      return;
+    }
+
+    const runAt = result.rescheduleAt === undefined
+      ? new Date(Date.now() + 30_000)
+      : result.rescheduleAt === null
+        ? null
+        : new Date(result.rescheduleAt);
+
+    const updateData: Record<string, unknown> = {
+      status: runAt ? 'PENDING' : 'FAILED',
+      lockedAt: null,
+      lockedBy: null,
+      updatedAt: sql`now()`,
+      lastError: result.error ?? null,
+    };
+    if (runAt) {
+      updateData.runAt = runAt;
+    }
+
+    await this.db.update(playerInsightAiJobs).set(updateData).where(condition);
+  }
+
+  private mapAiRow(row: {
+    snapshotDigest: string;
+    promptVersion: string;
+    status: string;
+    narrative: string | null;
+    model: string | null;
+    tokensPrompt: number | null;
+    tokensCompletion: number | null;
+    tokensTotal: number | null;
+    generatedAt: Date | null;
+    lastRequestedAt: Date | null;
+    expiresAt: Date | null;
+    pollAfterMs: number | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+  }): PlayerInsightAiData {
+    const hasTokens =
+      row.tokensPrompt !== null || row.tokensCompletion !== null || row.tokensTotal !== null;
+    return {
+      snapshotDigest: row.snapshotDigest,
+      promptVersion: row.promptVersion,
+      status: row.status as PlayerInsightAiData['status'],
+      narrative: row.narrative ?? null,
+      model: row.model ?? null,
+      generatedAt: row.generatedAt ? row.generatedAt.toISOString() : null,
+      tokens: hasTokens
+        ? {
+            prompt: row.tokensPrompt ?? 0,
+            completion: row.tokensCompletion ?? 0,
+            total:
+              row.tokensTotal ??
+              (row.tokensPrompt ?? 0) +
+                (row.tokensCompletion ?? 0),
+          }
+        : null,
+      lastRequestedAt: row.lastRequestedAt ? row.lastRequestedAt.toISOString() : null,
+      expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+      pollAfterMs: row.pollAfterMs ?? null,
+      errorCode: row.errorCode ?? null,
+      errorMessage: row.errorMessage ?? null,
+    } satisfies PlayerInsightAiData;
   }
 
   async listPlayers(query: PlayerListQuery): Promise<PlayerListResult> {

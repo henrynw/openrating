@@ -34,6 +34,9 @@ npm run dev
 # 5. (optional) Run the insights worker in another terminal to build player
 # insight snapshots and keep them fresh
 npm run insights:worker
+
+# 6. (optional) Run the AI narrative worker to generate on-demand summaries
+npm run ai-insights:worker
 ```
 
 > Tip: if `DATABASE_URL` is omitted the service falls back to the in-memory store (handy for demos, no persistence).
@@ -66,9 +69,10 @@ You control the variants (resize, format, etc.) inside Cloudflare Images—defin
 2. Accept the detected `render.yaml` blueprint — it provisions:
    - `openrating-api` (web) with auto deploy and automated migrations.
    - `openrating-insights-worker` (worker) that continuously refreshes player insights.
+   - `openrating-ai-insights-worker` (worker) that generates AI narratives on demand (requires `OPENAI_API_KEY`).
    - `openrating-db` (Postgres).
-3. Render runs the web build `npm install && npm run build && npm run db:migrate` and the worker build `npm install && npm run build`. Both services auto-deploy on each push (toggle `autoDeploy` in Render if you prefer manual approvals).
-4. Verify the API at `/health` and check the worker logs for insight job activity.
+3. Render runs the web build `npm install && npm run build && npm run db:migrate` and each worker build `npm install && npm run build`. All services auto-deploy on each push (toggle `autoDeploy` in Render if you prefer manual approvals).
+4. Verify the API at `/health`, confirm the insights worker is processing jobs, and point the AI worker at a valid `OPENAI_API_KEY` before setting `include_ai=1` in clients.
 
 > Tip: edit `render.yaml` if you need different plans, regions, or environment settings.
 
@@ -114,6 +118,12 @@ The CLI reads credentials from environment variables so provider secrets stay ou
 - Enqueue refreshes by calling `store.enqueuePlayerInsightsRefresh({ organizationId, playerId, sport, discipline })` wherever you ingest matches or rating changes. Jobs are deduped by scope, and multiple workers can run concurrently.
 - For backfills, enqueue jobs for every player (or wipe the table) and let the worker regenerate snapshots; it’s safe to replay history.
 - To pause processing, stop the worker. Pending jobs remain in the queue until the worker resumes.
+
+### AI insight narratives
+- Set `OPENAI_API_KEY` anywhere you run `npm run ai-insights:worker` (and on the API service in production). Optional overrides: `AI_INSIGHTS_MODEL` (defaults to `gpt-4o-mini`), `AI_INSIGHTS_TEMPERATURE`, `AI_INSIGHTS_MAX_OUTPUT_TOKENS`, and `AI_INSIGHTS_TTL_HOURS`.
+- The AI worker consumes `player_insight_ai_jobs`, reads the latest snapshot, calls the OpenAI Responses API, and stores the narrative with token accounting and expiry metadata.
+- Clients request a narrative with `/v1/players/{player_id}/insights?include_ai=1`. The API immediately returns the numeric snapshot; if the narrative is missing it enqueues a job and responds with `ai.status = "pending"` plus polling hints.
+- Narratives are cached by snapshot digest—when the underlying stats change, the next `include_ai=1` call triggers a fresh job while existing cache entries keep serving until expiry.
 
 ### Rating replay & backfills
 - Match ingestion records the current ladder state. If you later insert a match with a `start_time` earlier than what has already been processed, the ladder is marked dirty and a replay entry is queued automatically.

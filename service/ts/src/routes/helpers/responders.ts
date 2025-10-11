@@ -12,6 +12,7 @@ import type {
   PlayerRankingSnapshot,
   RatingEventRecord,
   PlayerInsightsSnapshot,
+  PlayerInsightAiData,
 } from '../../store/index.js';
 
 export const toOrganizationResponse = (
@@ -293,7 +294,39 @@ const serializeTrendPoints = (snapshot: PlayerInsightsSnapshot) =>
     sample_count: point.sampleCount ?? null,
   }));
 
-export const toPlayerInsightsResponse = (snapshot: PlayerInsightsSnapshot) => {
+const serializeAiSummary = (ai: PlayerInsightAiData | null | undefined, jobId?: string | null) => {
+  if (!ai) return null;
+  return {
+    status: ai.status.toLowerCase(),
+    snapshot_digest: ai.snapshotDigest,
+    prompt_version: ai.promptVersion,
+    narrative: ai.narrative ?? null,
+    model: ai.model ?? null,
+    generated_at: ai.generatedAt ?? null,
+    last_requested_at: ai.lastRequestedAt ?? null,
+    expires_at: ai.expiresAt ?? null,
+    poll_after_ms: ai.pollAfterMs ?? null,
+    tokens: ai.tokens
+      ? {
+          prompt: ai.tokens.prompt,
+          completion: ai.tokens.completion,
+          total: ai.tokens.total,
+        }
+      : null,
+    job_id: jobId ?? null,
+    error: ai.errorCode
+      ? {
+          code: ai.errorCode,
+          message: ai.errorMessage ?? null,
+        }
+      : null,
+  };
+};
+
+export const toPlayerInsightsResponse = (
+  snapshot: PlayerInsightsSnapshot,
+  options?: { ai?: PlayerInsightAiData | null; aiJobId?: string | null }
+) => {
   const { meta } = snapshot;
   const ratingTrend = snapshot.ratingTrend;
   const formSummary = serializeFormSummary(snapshot.formSummary);
@@ -366,5 +399,6 @@ export const toPlayerInsightsResponse = (snapshot: PlayerInsightsSnapshot) => {
           digest: snapshot.cacheKeys.digest ?? null,
         }
       : null,
+    ai: serializeAiSummary(options?.ai ?? null, options?.aiJobId ?? null),
   };
 };

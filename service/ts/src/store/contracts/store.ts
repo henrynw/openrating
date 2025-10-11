@@ -63,6 +63,14 @@ import type {
   PlayerInsightsJobCompletion,
   PlayerInsightsUpsertResult,
   PlayerInsightsBuildOptions,
+  PlayerInsightAiEnsureInput,
+  PlayerInsightAiEnsureResult,
+  PlayerInsightAiEnqueueInput,
+  PlayerInsightAiJob,
+  PlayerInsightAiJobClaimOptions,
+  PlayerInsightAiJobCompletion,
+  PlayerInsightAiData,
+  PlayerInsightAiResultInput,
 } from './insights.js';
 
 export interface RatingStore {
@@ -122,4 +130,12 @@ export interface RatingStore {
   ): Promise<{ jobId: string; enqueued: boolean }>;
   claimPlayerInsightsJob(options: PlayerInsightsJobClaimOptions): Promise<PlayerInsightsJob | null>;
   completePlayerInsightsJob(result: PlayerInsightsJobCompletion): Promise<void>;
+  getPlayerInsightAiState(input: PlayerInsightAiEnsureInput): Promise<PlayerInsightAiData | null>;
+  ensurePlayerInsightAiState(input: PlayerInsightAiEnsureInput): Promise<PlayerInsightAiEnsureResult>;
+  savePlayerInsightAiResult(input: PlayerInsightAiResultInput): Promise<PlayerInsightAiData>;
+  enqueuePlayerInsightAiJob(
+    input: PlayerInsightAiEnqueueInput
+  ): Promise<{ jobId: string; enqueued: boolean }>;
+  claimPlayerInsightAiJob(options: PlayerInsightAiJobClaimOptions): Promise<PlayerInsightAiJob | null>;
+  completePlayerInsightAiJob(result: PlayerInsightAiJobCompletion): Promise<void>;
 }
