@@ -12,7 +12,11 @@ const { createTestApp } = await import('../helpers/app.js');
 const ladderQuery = {
   sport: 'BADMINTON',
   discipline: 'SINGLES',
-  format: 'MS',
+};
+
+const matchFormat = {
+  family: ladderQuery.sport,
+  code: 'MS',
 };
 
 let agent: request.SuperTest<request.Test>;
@@ -50,7 +54,7 @@ const submitSinglesMatch = async (
       organization_id: organizationId,
       sport: ladderQuery.sport,
       discipline: ladderQuery.discipline,
-      format: ladderQuery.format,
+      format: matchFormat,
       start_time: new Date().toISOString(),
       sides: {
         A: { players: [playerA] },
