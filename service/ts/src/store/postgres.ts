@@ -4576,16 +4576,24 @@ export class PostgresStore implements RatingStore {
       scopeKey: string;
       promptVersion: string;
       snapshotDigest: string;
-      runAt: Date;
+      runAt: Date | string;
       status: string;
       attempts: number;
-      lockedAt: Date | null;
+      lockedAt: Date | string | null;
       lockedBy: string | null;
       payload: unknown;
       lastError: string | null;
     }>;
     const row = rows?.[0];
     if (!row) return null;
+    const toIso = (value: Date | string | null | undefined) => {
+      if (!value) return null;
+      if (value instanceof Date) {
+        return Number.isNaN(value.getTime()) ? null : value.toISOString();
+      }
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+    };
     return {
       jobId: row.jobId,
       playerId: row.playerId,
@@ -4595,10 +4603,10 @@ export class PostgresStore implements RatingStore {
       scopeKey: row.scopeKey,
       promptVersion: row.promptVersion,
       snapshotDigest: row.snapshotDigest,
-      runAt: row.runAt.toISOString(),
+      runAt: toIso(row.runAt) ?? new Date().toISOString(),
       status: row.status as PlayerInsightAiJob['status'],
       attempts: row.attempts,
-      lockedAt: row.lockedAt ? row.lockedAt.toISOString() : null,
+      lockedAt: toIso(row.lockedAt),
       lockedBy: row.lockedBy ?? null,
       payload: (row.payload ?? null) as Record<string, unknown> | null,
       lastError: row.lastError ?? null,
