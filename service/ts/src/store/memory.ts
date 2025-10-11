@@ -186,6 +186,36 @@ interface MemoryPairSynergyHistory {
   createdAt: Date;
 }
 
+interface MemoryMatchRecord {
+  matchId: string;
+  ladderId: string;
+  providerId: string;
+  externalRef?: string | null;
+  competitionId?: string | null;
+  match: MatchInput;
+  result: UpdateResult | null;
+  startTime: Date;
+  organizationId: string;
+  sport: MatchInput['sport'];
+  discipline: MatchInput['discipline'];
+  format: string;
+  tier?: string;
+  venueId?: string | null;
+  regionId?: string | null;
+  eventId?: string | null;
+  timing?: MatchTiming | null;
+  statistics?: MatchStatistics;
+  segments?: MatchSegment[] | null;
+  sideParticipants?: Record<'A' | 'B', MatchParticipant[] | null | undefined> | null;
+  gameDetails?: Array<{
+    gameNo: number;
+    segments?: MatchSegment[] | null;
+    statistics?: MatchStatistics;
+  }>;
+  ratingStatus: MatchRatingStatus;
+  ratingSkipReason: MatchRatingSkipReason | null;
+}
+
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 
@@ -280,33 +310,7 @@ export class MemoryStore implements RatingStore {
   private competitionsBySlug = new Map<string, string>();
   private competitionsByProviderRef = new Map<string, string>();
   private players = new Map<string, MemoryPlayerRecord>();
-  private matches: Array<{
-    matchId: string;
-    ladderId: string;
-    providerId: string;
-    externalRef?: string | null;
-    competitionId?: string | null;
-    match: MatchInput;
-    result: UpdateResult;
-    startTime: Date;
-    organizationId: string;
-    sport: MatchInput['sport'];
-    discipline: MatchInput['discipline'];
-    format: string;
-    tier?: string;
-    venueId?: string | null;
-    regionId?: string | null;
-    eventId?: string | null;
-    timing?: MatchTiming | null;
-    statistics?: MatchStatistics;
-    segments?: MatchSegment[] | null;
-    sideParticipants?: Record<'A' | 'B', MatchParticipant[] | null | undefined> | null;
-    gameDetails?: Array<{
-      gameNo: number;
-      segments?: MatchSegment[] | null;
-      statistics?: MatchStatistics;
-    }>;
-  }> = [];
+  private matches: MemoryMatchRecord[] = [];
   private ratingEvents = new Map<string, Map<string, MemoryRatingEvent[]>>();
   private playerInsightsSnapshots = new Map<string, PlayerInsightsUpsertResult>();
   private playerInsightJobs = new Map<string, PlayerInsightsJob>();
