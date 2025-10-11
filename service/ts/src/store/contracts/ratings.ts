@@ -74,10 +74,12 @@ export interface LeaderboardQuery {
   scope?: string | null;
   organizationId?: string | null;
   limit?: number;
+  cursor?: string;
 }
 
 export interface LeaderboardResult {
   items: LeaderboardEntry[];
+  nextCursor?: string;
 }
 
 export interface LeaderboardMoverEntry extends LeaderboardPlayerInfo {
