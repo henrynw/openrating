@@ -55,6 +55,7 @@ import type {
   MatchStatistics,
   MatchParticipant,
   MatchSideSummary,
+  MatchStage,
   OrganizationCreateInput,
   OrganizationListQuery,
   OrganizationListResult,
@@ -155,6 +156,59 @@ const parseRatingEventCursor = (cursor: string) => {
 
 const clampValue = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
+
+const MATCH_STAGE_TYPES: ReadonlySet<MatchStage['type']> = new Set([
+  'ROUND_OF',
+  'GROUP',
+  'QUARTERFINAL',
+  'SEMIFINAL',
+  'FINAL',
+  'PLAYOFF',
+  'OTHER',
+]);
+
+const serializeStageForStorage = (stage: MatchStage | null | undefined) => {
+  if (stage === undefined) return undefined;
+  if (stage === null) return null;
+  const payload: Record<string, unknown> = { type: stage.type };
+  if (stage.value !== undefined) payload.value = stage.value;
+  if (stage.label !== undefined) payload.label = stage.label;
+  return payload;
+};
+
+const extractMatchStageFromRaw = (raw: unknown): MatchStage | null => {
+  if (!raw || typeof raw !== 'object') return null;
+  const stage = (raw as Record<string, unknown>).stage;
+  if (!stage || typeof stage !== 'object') return null;
+  const record = stage as Record<string, unknown>;
+  const type = record.type;
+  if (typeof type !== 'string' || !MATCH_STAGE_TYPES.has(type as MatchStage['type'])) {
+    return null;
+  }
+
+  const normalized: MatchStage = { type: type as MatchStage['type'] };
+
+  if (record.value === undefined || record.value === null) {
+    normalized.value = null;
+  } else if (typeof record.value === 'number' && Number.isInteger(record.value) && record.value >= 1) {
+    normalized.value = record.value;
+  } else if (typeof record.value === 'string') {
+    const parsed = Number.parseInt(record.value, 10);
+    if (Number.isInteger(parsed) && parsed >= 1) {
+      normalized.value = parsed;
+    } else {
+      normalized.value = null;
+    }
+  }
+
+  if (record.label === undefined || record.label === null) {
+    normalized.label = null;
+  } else if (typeof record.label === 'string' && record.label.length) {
+    normalized.label = record.label;
+  }
+
+  return normalized;
+};
 
 type RatingEventRow = {
   id: number;
@@ -791,6 +845,8 @@ export class PostgresStore implements RatingStore {
         statistics: matches.statistics,
         segments: matches.segments,
         sideParticipants: matches.sideParticipants,
+        rawPayload: matches.rawPayload,
+        rawPayload: matches.rawPayload,
       })
       .from(matches)
       .leftJoin(competitions, eq(competitions.competitionId, matches.competitionId))
@@ -849,6 +905,7 @@ export class PostgresStore implements RatingStore {
     }));
 
     const sideParticipants = (matchRow.sideParticipants as Record<'A' | 'B', MatchParticipant[] | null | undefined> | null) ?? null;
+    const stage = extractMatchStageFromRaw(matchRow.rawPayload);
 
     const sides: MatchSideSummary[] = ['A', 'B'].map((side) => ({
       side: side as 'A' | 'B',
@@ -865,6 +922,7 @@ export class PostgresStore implements RatingStore {
       discipline: matchRow.discipline as MatchInput['discipline'],
       format: matchRow.format,
       tier: matchRow.tier ?? undefined,
+      stage,
       startTime: matchRow.startTime.toISOString(),
       venueId: matchRow.venueId ?? null,
       regionId: matchRow.regionId ?? null,
@@ -2270,6 +2328,14 @@ export class PostgresStore implements RatingStore {
       const latestStartTime = latestRows.at(0)?.latestStart ?? null;
       const replayRequired = result && latestStartTime ? matchStartTime < latestStartTime : false;
 
+      const rawPayloadSource =
+        params.submissionMeta.rawPayload && typeof params.submissionMeta.rawPayload === 'object'
+          ? { ...(params.submissionMeta.rawPayload as Record<string, unknown>) }
+          : {};
+      if (params.stage !== undefined) {
+        rawPayloadSource.stage = serializeStageForStorage(params.stage ?? null);
+      }
+
       await tx.insert(matches).values({
         matchId,
         ladderId: params.ladderId,
@@ -2292,7 +2358,7 @@ export class PostgresStore implements RatingStore {
         statistics: params.statistics ?? null,
         segments: params.segments ?? null,
         sideParticipants: params.sideParticipants ?? null,
-        rawPayload: params.submissionMeta.rawPayload as object,
+        rawPayload: rawPayloadSource,
         createdAt: now(),
       });
 
@@ -2479,6 +2545,7 @@ export class PostgresStore implements RatingStore {
         eventId: matches.eventId,
         startTime: matches.startTime,
         ladderId: matches.ladderId,
+        rawPayload: matches.rawPayload,
       })
       .from(matches)
       .where(eq(matches.matchId, matchId))
@@ -2493,6 +2560,11 @@ export class PostgresStore implements RatingStore {
     }
 
     const updates: Record<string, any> = {};
+    const rawPayloadBase =
+      existing.rawPayload && typeof existing.rawPayload === 'object'
+        ? { ...(existing.rawPayload as Record<string, unknown>) }
+        : {};
+    let rawPayloadUpdated = false;
     let ensureCompetitionId: string | null = null;
     let replayStartTime: Date | null = null;
 
@@ -2559,6 +2631,15 @@ export class PostgresStore implements RatingStore {
     }
     if (input.segments !== undefined) {
       updates.segments = input.segments ?? null;
+    }
+
+    if (input.stage !== undefined) {
+      rawPayloadBase.stage = serializeStageForStorage(input.stage ?? null);
+      rawPayloadUpdated = true;
+    }
+
+    if (rawPayloadUpdated) {
+      updates.rawPayload = rawPayloadBase;
     }
 
     if (Object.keys(updates).length) {
@@ -4156,6 +4237,7 @@ export class PostgresStore implements RatingStore {
       statistics: unknown | null;
       segments: unknown | null;
       sideParticipants: unknown | null;
+      rawPayload: unknown | null;
     }>;
 
     const hasMore = rows.length > limit;
@@ -4233,6 +4315,7 @@ export class PostgresStore implements RatingStore {
         participants: participants?.[side as 'A' | 'B'] ?? null,
       }));
       const gameList = gamesMap.get(row.matchId) ?? [];
+      const stage = extractMatchStageFromRaw(row.rawPayload);
       return {
         matchId: row.matchId,
         providerId: row.providerId,
@@ -4242,6 +4325,7 @@ export class PostgresStore implements RatingStore {
         discipline: row.discipline as MatchInput['discipline'],
         format: row.format,
         tier: row.tier ?? undefined,
+        stage,
         startTime: row.startTime.toISOString(),
         venueId: row.venueId ?? null,
         regionId: row.regionId ?? null,

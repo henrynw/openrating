@@ -18,6 +18,21 @@ export type MatchParticipantRole = 'STARTER' | 'SUBSTITUTE' | 'RESERVE' | 'LEAD'
 
 export type MatchParticipantStatus = 'ACTIVE' | 'STARTER' | 'BENCH' | 'WITHDRAWN' | 'INACTIVE' | 'OTHER';
 
+export type MatchStageType =
+  | 'ROUND_OF'
+  | 'GROUP'
+  | 'QUARTERFINAL'
+  | 'SEMIFINAL'
+  | 'FINAL'
+  | 'PLAYOFF'
+  | 'OTHER';
+
+export interface MatchStage {
+  type: MatchStageType;
+  value?: number | null;
+  label?: string | null;
+}
+
 export interface MatchParticipant {
   playerId: string;
   role?: MatchParticipantRole | null;
@@ -82,6 +97,7 @@ export interface MatchSummary {
   discipline: MatchInput['discipline'];
   format: string;
   tier?: string;
+  stage?: MatchStage | null;
   eventId?: string | null;
   competitionId?: string | null;
   competitionSlug?: string | null;
@@ -141,6 +157,7 @@ export interface MatchUpdateInput {
   regionId?: string | null;
   eventId?: string | null;
   competitionId?: string | null;
+  stage?: MatchStage | null;
   timing?: MatchTiming | null;
   statistics?: MatchStatistics;
   segments?: MatchSegment[] | null;

@@ -26,27 +26,40 @@ const OptionalSportEnum = z
 
 const OptionalDisciplineEnum = z.enum(['SINGLES', 'DOUBLES', 'MIXED']).nullable().optional();
 
+const CompetitionFormatFamilyEnum = z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL', 'OTHER']);
+
+const CompetitionFormatSchema = z
+  .object({
+    family: CompetitionFormatFamilyEnum,
+    code: z.string().min(1),
+    name: z.string().min(1).nullable().optional(),
+  })
+  .strict();
+
+const CompetitionGradeFamilyEnum = z.enum([
+  'BWF',
+  'ATP',
+  'WTA',
+  'ITF',
+  'PSA',
+  'PICKLEBALL_TOUR',
+  'NATIONAL_FEDERATION',
+  'OTHER',
+]);
+
+const CompetitionGradeSchema = z
+  .object({
+    family: CompetitionGradeFamilyEnum,
+    code: z.string().min(1),
+    name: z.string().min(1).nullable().optional(),
+  })
+  .strict();
+
 const CompetitionClassificationSchema = z.object({
   level: z.enum(['WORLD_TOUR', 'CONTINENTAL', 'NATIONAL', 'REGIONAL', 'CLUB', 'SCHOOL', 'COMMUNITY', 'OTHER'])
     .nullable()
     .optional(),
-  grade: z
-    .enum([
-      'SUPER_1000',
-      'SUPER_750',
-      'SUPER_500',
-      'SUPER_300',
-      'GOLD',
-      'SILVER',
-      'BRONZE',
-      'MAJOR',
-      'DIVISION_1',
-      'DIVISION_2',
-      'OPEN',
-      'OTHER',
-    ])
-    .nullable()
-    .optional(),
+  grade: CompetitionGradeSchema.nullable().optional(),
   age_group: z
     .enum(['U11', 'U13', 'U15', 'U17', 'U19', 'U21', 'SENIOR', 'ADULT', 'VETERAN', 'MASTER', 'OPEN', 'OTHER'])
     .nullable()
@@ -70,9 +83,8 @@ const CompetitionCreateSchema = z.object({
   slug: z.string().optional(),
   sport: OptionalSportEnum,
   discipline: OptionalDisciplineEnum,
-  format: z.string().nullable().optional(),
+  format: CompetitionFormatSchema.nullable().optional(),
   tier: z.string().nullable().optional(),
-  status: z.string().nullable().optional(),
   draw_size: z.number().int().positive().nullable().optional(),
   start_date: z.string().datetime().nullable().optional(),
   end_date: z.string().datetime().nullable().optional(),
@@ -88,9 +100,8 @@ const CompetitionUpdateSchema = z.object({
   slug: z.string().optional(),
   sport: OptionalSportEnum,
   discipline: OptionalDisciplineEnum,
-  format: z.string().nullable().optional(),
+  format: CompetitionFormatSchema.nullable().optional(),
   tier: z.string().nullable().optional(),
-  status: z.string().nullable().optional(),
   draw_size: z.number().int().positive().nullable().optional(),
   start_date: z.string().datetime().nullable().optional(),
   end_date: z.string().datetime().nullable().optional(),
@@ -167,9 +178,8 @@ export const registerCompetitionRoutes = (app: Express, deps: CompetitionRouteDe
         slug: parsed.data.slug ?? null,
         sport: parsed.data.sport ?? null,
         discipline: parsed.data.discipline ?? null,
-        format: parsed.data.format ?? null,
+        format: mapCompetitionFormatInput(parsed.data.format) ?? null,
         tier: parsed.data.tier ?? null,
-        status: parsed.data.status ?? null,
         drawSize: parsed.data.draw_size ?? null,
         startDate: parsed.data.start_date ?? null,
         endDate: parsed.data.end_date ?? null,
@@ -276,9 +286,11 @@ export const registerCompetitionRoutes = (app: Express, deps: CompetitionRouteDe
         slug: parsed.data.slug ?? undefined,
         sport: parsed.data.sport ?? undefined,
         discipline: parsed.data.discipline ?? undefined,
-        format: parsed.data.format ?? undefined,
+        format:
+          parsed.data.format !== undefined
+            ? mapCompetitionFormatInput(parsed.data.format) ?? null
+            : undefined,
         tier: parsed.data.tier ?? undefined,
-        status: parsed.data.status ?? undefined,
         drawSize: parsed.data.draw_size ?? undefined,
         startDate: parsed.data.start_date ?? undefined,
         endDate: parsed.data.end_date ?? undefined,
@@ -382,6 +394,28 @@ export const registerCompetitionRoutes = (app: Express, deps: CompetitionRouteDe
 };
 type CompetitionClassificationInput = z.infer<typeof CompetitionClassificationSchema>;
 type CompetitionMediaLinksInput = z.infer<typeof CompetitionMediaLinksSchema>;
+type CompetitionFormatInput = z.infer<typeof CompetitionFormatSchema>;
+type CompetitionGradeInput = z.infer<typeof CompetitionGradeSchema>;
+
+const mapCompetitionFormatInput = (
+  input: CompetitionFormatInput | null | undefined
+): string | null | undefined => {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  return input.code;
+};
+
+const mapCompetitionGradeInput = (
+  input: CompetitionGradeInput | null | undefined
+): EventClassification['grade'] | null | undefined => {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  return {
+    family: input.family,
+    code: input.code,
+    name: input.name ?? null,
+  };
+};
 
 const mapCompetitionClassificationInput = (
   input: CompetitionClassificationInput | null | undefined
@@ -390,7 +424,7 @@ const mapCompetitionClassificationInput = (
   if (input === null) return null;
   return {
     level: input.level ?? null,
-    grade: input.grade ?? null,
+    grade: mapCompetitionGradeInput(input.grade),
     ageGroup: input.age_group ?? null,
     tour: input.tour ?? null,
     category: input.category ?? null,

@@ -3,6 +3,7 @@ import type { MatchRatingSkipReason, MatchRatingStatus } from './matches.js';
 import type {
   MatchParticipant,
   MatchSegment,
+  MatchStage,
   MatchStatistics,
   MatchTiming,
 } from './matches.js';
@@ -37,6 +38,7 @@ export interface RecordMatchParams {
   competitionId?: string | null;
   playerStates: Map<string, PlayerState>;
   pairUpdates?: PairUpdate[];
+  stage?: MatchStage | null;
   timing?: MatchTiming | null;
   statistics?: MatchStatistics;
   segments?: MatchSegment[] | null;

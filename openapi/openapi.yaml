@@ -1612,6 +1612,8 @@ components:
           format: uuid
           description: Optional competition identifier nested under the parent event
         start_time: { type: string, format: date-time }
+        stage:
+          $ref: '#/components/schemas/MatchStage'
         timing:
           $ref: '#/components/schemas/MatchTiming'
         venue_region_id: { type: string }
@@ -1656,6 +1658,10 @@ components:
                   items:
                     $ref: '#/components/schemas/MatchParticipant'
         games:
+          description: >-
+            Ordered list of game scores. For badminton you may submit an empty array to capture
+            result-only matches, but you must include `winner` when doing so and the match will be
+            stored as unrated with a missing-scores reason.
           type: array
           items:
             type: object
@@ -1675,6 +1681,12 @@ components:
                   Experimental: optional per-game performance metrics. Subject to breaking changes while
                   we iterate on structured telemetry support.
                 $ref: '#/components/schemas/MatchStatistics'
+        winner:
+          type: [string, 'null']
+          enum: [A, B, null]
+          description: >-
+            Optional winner indicator. Submit this when sending badminton matches without game scores so
+            the API can persist them as unrated results with a missing-scores reason.
     MatchUpdate:
       type: object
       properties:
@@ -1693,6 +1705,8 @@ components:
           format: uuid
         timing:
           $ref: '#/components/schemas/MatchTiming'
+        stage:
+          $ref: '#/components/schemas/MatchStage'
         statistics:
           description: >-
             Experimental: optional performance metrics captured by the submitter. Subject to breaking
@@ -1826,6 +1840,8 @@ components:
           type: [string, 'null']
         region_id:
           type: [string, 'null']
+        stage:
+          $ref: '#/components/schemas/MatchStage'
         event_id:
           type: [string, 'null']
         competition_id:
@@ -2327,6 +2343,22 @@ components:
       type: string
       description: Identifier for the match side credited in a segment.
       enum: [A, B, HOME, AWAY]
+    MatchStage:
+      type: [object, 'null']
+      description: Structured indicator of a match's bracket position when applicable.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [ROUND_OF, GROUP, QUARTERFINAL, SEMIFINAL, FINAL, PLAYOFF, OTHER]
+          description: Stage archetype for filtering and grouping.
+        value:
+          type: [integer, 'null']
+          minimum: 1
+          description: Numeric qualifier such as the "16" in ROUND_OF_16.
+        label:
+          type: [string, 'null']
+          description: Optional human-friendly stage label (e.g. "Pool B Match 2").
     MatchParticipantRole:
       type: string
       description: Role designation for a participant.

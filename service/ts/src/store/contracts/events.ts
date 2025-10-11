@@ -18,19 +18,21 @@ export type EventLevel =
   | 'COMMUNITY'
   | 'OTHER';
 
-export type EventGrade =
-  | 'SUPER_1000'
-  | 'SUPER_750'
-  | 'SUPER_500'
-  | 'SUPER_300'
-  | 'GOLD'
-  | 'SILVER'
-  | 'BRONZE'
-  | 'MAJOR'
-  | 'DIVISION_1'
-  | 'DIVISION_2'
-  | 'OPEN'
+export type EventGradeFamily =
+  | 'BWF'
+  | 'ATP'
+  | 'WTA'
+  | 'ITF'
+  | 'PSA'
+  | 'PICKLEBALL_TOUR'
+  | 'NATIONAL_FEDERATION'
   | 'OTHER';
+
+export interface EventGrade {
+  family: EventGradeFamily;
+  code: string;
+  name?: string | null;
+}
 
 export type EventAgeGroup =
   | 'U11'

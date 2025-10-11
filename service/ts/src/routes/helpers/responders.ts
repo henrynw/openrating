@@ -130,6 +130,25 @@ const serializeMatchGame = (game: MatchSummary['games'][number]) => {
   };
 };
 
+const serializeMatchFormat = (match: MatchSummary) => {
+  if (!match.format) return null;
+  return {
+    family: match.sport,
+    code: match.format,
+    name: null,
+  };
+};
+
+const serializeMatchStage = (stage: MatchSummary['stage']) => {
+  if (stage === undefined) return undefined;
+  if (stage === null) return null;
+  return {
+    type: stage.type,
+    value: stage.value ?? null,
+    label: stage.label ?? null,
+  };
+};
+
 export const toPlayerResponse = (
   player: PlayerRecord,
   organizationSlug: string | null,
@@ -181,7 +200,7 @@ export const toMatchSummaryResponse = (match: MatchSummary, organizationSlug: st
     organization_slug: organizationSlug,
     sport: match.sport,
     discipline: match.discipline,
-    format: match.format,
+    format: serializeMatchFormat(match),
     tier: match.tier,
     start_time: match.startTime,
     venue_id: match.venueId,
@@ -199,6 +218,8 @@ export const toMatchSummaryResponse = (match: MatchSummary, organizationSlug: st
   if (timing !== undefined) response.timing = timing;
   if (statistics !== undefined) response.statistics = statistics;
   if (segments !== undefined) response.segments = segments;
+  const stage = serializeMatchStage(match.stage);
+  if (stage !== undefined) response.stage = stage;
 
   return response;
 };

@@ -82,6 +82,24 @@ const MatchGameSchema = z.object({
   statistics: MatchStatisticsSchema.optional(),
 });
 
+const MatchFormatFamilyEnum = z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL', 'OTHER']);
+
+const MatchFormatSchema = z
+  .object({
+    family: MatchFormatFamilyEnum,
+    code: z.string().min(1),
+    name: z.string().min(1).nullable().optional(),
+  })
+  .strict();
+
+const MatchStageSchema = z
+  .object({
+    type: z.enum(['ROUND_OF', 'GROUP', 'QUARTERFINAL', 'SEMIFINAL', 'FINAL', 'PLAYOFF', 'OTHER']),
+    value: z.number().int().min(1).nullable().optional(),
+    label: z.string().min(1).nullable().optional(),
+  })
+  .strict();
+
 const MatchSubmitSchema = z
   .object({
     provider_id: z.string().optional(),
@@ -90,13 +108,14 @@ const MatchSubmitSchema = z
     organization_slug: z.string().optional(),
     sport: z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']),
     discipline: z.enum(['SINGLES', 'DOUBLES', 'MIXED']),
-    format: z.string(),
+    format: MatchFormatSchema,
     start_time: z.string(),
     venue_id: z.string().optional(),
     venue_region_id: z.string().optional(),
     tier: z.enum(['SANCTIONED', 'LEAGUE', 'SOCIAL', 'EXHIBITION']).optional(),
     event_id: z.string().uuid().optional(),
     competition_id: z.string().uuid().optional(),
+    stage: MatchStageSchema.nullable().optional(),
     timing: MatchTimingSchema.nullable().optional(),
     statistics: MatchStatisticsSchema.optional(),
     segments: z.array(MatchSegmentSchema).nullable().optional(),
@@ -169,6 +188,7 @@ const MatchUpdateSchema = z.object({
   venue_region_id: z.string().nullable().optional(),
   event_id: z.string().uuid().nullable().optional(),
   competition_id: z.string().uuid().nullable().optional(),
+  stage: MatchStageSchema.nullable().optional(),
   timing: MatchTimingSchema.nullable().optional(),
   statistics: MatchStatisticsSchema.optional(),
   segments: z.array(MatchSegmentSchema).nullable().optional(),
@@ -189,6 +209,20 @@ type MatchSegmentInput = z.infer<typeof MatchSegmentSchema>;
 type MatchParticipantInput = z.infer<typeof MatchParticipantSchema>;
 type MatchStatisticsInput = z.infer<typeof MatchStatisticsSchema>;
 type MatchGameInput = z.infer<typeof MatchGameSchema>;
+type MatchStageInput = z.infer<typeof MatchStageSchema>;
+type MatchFormatInput = z.infer<typeof MatchFormatSchema>;
+
+const mapMatchStageInput = (
+  input: MatchStageInput | null | undefined
+): MatchUpdateInput['stage'] => {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  return {
+    type: input.type,
+    value: input.value ?? null,
+    label: input.label ?? null,
+  };
+};
 
 const mapMatchTimingInput = (
   input: MatchTimingInput | null | undefined
@@ -328,10 +362,18 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       b: game.b,
     }));
 
+    const formatCode = parsed.data.format.code;
+    if (parsed.data.format.family !== parsed.data.sport && parsed.data.format.family !== 'OTHER') {
+      return res.status(400).send({
+        error: 'invalid_format_family',
+        message: 'format.family must match the submitted sport or be OTHER',
+      });
+    }
+
     const normalization = normalizeMatchSubmission({
       sport: parsed.data.sport,
       discipline: parsed.data.discipline,
-      format: parsed.data.format,
+      format: formatCode,
       tier: parsed.data.tier,
       sides: normalizedSides,
       games: normalizedGames,
@@ -358,7 +400,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       : {
           sport: parsed.data.sport,
           discipline: parsed.data.discipline,
-          format: parsed.data.format,
+          format: formatCode,
           tier: parsed.data.tier,
           sides: normalizedSides,
           games: sortedGames,
@@ -405,6 +447,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       const timing = mapMatchTimingInput(parsed.data.timing);
       const statistics = mapMatchStatisticsInput(parsed.data.statistics);
       const segments = mapMatchSegmentsInput(parsed.data.segments);
+      const stage = mapMatchStageInput(parsed.data.stage);
       const sideParticipants = mapSideParticipantsInput(parsed.data.sides);
       const gameDetails = mapGameDetailsInput(parsed.data.games);
 
@@ -481,6 +524,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         ...(timing !== undefined ? { timing } : {}),
         ...(statistics !== undefined ? { statistics } : {}),
         ...(segments !== undefined ? { segments } : {}),
+        ...(stage !== undefined ? { stage } : {}),
         ...(sideParticipants !== undefined ? { sideParticipants } : {}),
         ...(gameDetails !== undefined ? { gameDetails } : {}),
         submissionMeta: {
@@ -811,6 +855,10 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       const segmentsUpdate = mapMatchSegmentsInput(parsed.data.segments);
       if (segmentsUpdate !== undefined) {
         updateInput.segments = segmentsUpdate;
+      }
+      const stageUpdate = mapMatchStageInput(parsed.data.stage);
+      if (stageUpdate !== undefined) {
+        updateInput.stage = stageUpdate;
       }
 
       const updated = await store.updateMatch(req.params.match_id, organization.organizationId, updateInput);

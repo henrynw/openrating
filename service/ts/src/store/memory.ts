@@ -31,6 +31,7 @@ import type {
   MatchSegment,
   MatchStatistics,
   MatchParticipant,
+  MatchStage,
   MatchUpdateInput,
   MatchSportTotalsQuery,
   MatchSportTotalsResult,
@@ -200,6 +201,7 @@ interface MemoryMatchRecord {
   discipline: MatchInput['discipline'];
   format: string;
   tier?: string;
+  stage?: MatchStage | null;
   venueId?: string | null;
   regionId?: string | null;
   eventId?: string | null;
@@ -614,6 +616,7 @@ export class MemoryStore implements RatingStore {
       discipline: params.match.discipline,
       format: params.match.format,
       tier: params.match.tier,
+      stage: params.stage ?? null,
       venueId: params.submissionMeta.venueId ?? null,
       regionId: params.submissionMeta.regionId ?? null,
       eventId,
@@ -770,6 +773,10 @@ export class MemoryStore implements RatingStore {
       match.segments = input.segments ?? null;
     }
 
+    if (input.stage !== undefined) {
+      match.stage = input.stage ?? null;
+    }
+
     const competition = match.competitionId ? this.competitions.get(match.competitionId) : undefined;
 
     return {
@@ -781,6 +788,7 @@ export class MemoryStore implements RatingStore {
       discipline: match.discipline,
       format: match.format,
       tier: match.tier,
+      stage: match.stage ?? null,
       startTime: match.startTime.toISOString(),
       venueId: match.venueId ?? null,
       regionId: match.regionId ?? null,
@@ -829,6 +837,7 @@ export class MemoryStore implements RatingStore {
       discipline: match.discipline,
       format: match.format,
       tier: match.tier,
+      stage: match.stage ?? null,
       startTime: match.startTime.toISOString(),
       venueId: match.venueId ?? null,
       regionId: match.regionId ?? null,
@@ -1553,6 +1562,7 @@ export class MemoryStore implements RatingStore {
       discipline: entry.discipline,
       format: entry.format,
       tier: entry.tier,
+      stage: entry.stage ?? null,
       startTime: entry.startTime.toISOString(),
       venueId: entry.venueId ?? null,
       regionId: entry.regionId ?? null,
