@@ -1714,6 +1714,14 @@ components:
           type: [string, 'null']
         competition_id:
           type: [string, 'null']
+        rating_status:
+          type: string
+          enum: [RATED, UNRATED]
+          description: Indicates whether the match affected ratings.
+        rating_skip_reason:
+          type: [string, 'null']
+          enum: [MISSING_SCORES, UNKNOWN, null]
+          description: Populated when rating_status is UNRATED to explain why no rating delta was applied.
         ratings:
           type: array
           items:
@@ -1835,6 +1843,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MatchSegment'
+        rating_status:
+          type: string
+          enum: [RATED, UNRATED]
+        rating_skip_reason:
+          type: [string, 'null']
+          enum: [MISSING_SCORES, UNKNOWN, null]
+        winner:
+          type: [string, 'null']
+          enum: [A, B, null]
         sides:
           type: object
           additionalProperties:

@@ -34,6 +34,8 @@ import type {
   MatchUpdateInput,
   MatchSportTotalsQuery,
   MatchSportTotalsResult,
+  MatchRatingStatus,
+  MatchRatingSkipReason,
   OrganizationCreateInput,
   OrganizationUpdateInput,
   OrganizationListQuery,
@@ -579,12 +581,19 @@ export class MemoryStore implements RatingStore {
     const matchCompletedAt = parseTimestamp(params.timing?.completedAt ?? null);
     const appliedAtBase = matchCompletedAt ?? matchStartTime;
 
+    const result = params.result ?? null;
+    const pairUpdates = params.pairUpdates ?? [];
+    const ratingStatus: MatchRatingStatus = params.ratingStatus ?? (result ? 'RATED' : 'UNRATED');
+    const ratingSkipReason: MatchRatingSkipReason | null = params.ratingSkipReason ?? null;
+
     const latestStart = this.latestStartByLadder.get(ladderId);
-    if (latestStart && matchStartTime < latestStart) {
-      this.enqueueReplay(ladderId, matchStartTime);
-    }
-    if (!latestStart || matchStartTime > latestStart) {
-      this.latestStartByLadder.set(ladderId, new Date(matchStartTime));
+    if (result) {
+      if (latestStart && matchStartTime < latestStart) {
+        this.enqueueReplay(ladderId, matchStartTime);
+      }
+      if (!latestStart || matchStartTime > latestStart) {
+        this.latestStartByLadder.set(ladderId, new Date(matchStartTime));
+      }
     }
 
     this.matches.push({
@@ -594,7 +603,7 @@ export class MemoryStore implements RatingStore {
       externalRef: params.submissionMeta.externalRef ?? null,
       competitionId,
       match: params.match,
-      result: params.result,
+      result,
       startTime: matchStartTime,
       organizationId: params.submissionMeta.organizationId,
       sport: params.match.sport,
@@ -609,39 +618,43 @@ export class MemoryStore implements RatingStore {
       segments: params.segments ?? null,
       sideParticipants: params.sideParticipants ?? null,
       gameDetails: params.gameDetails ?? [],
+      ratingStatus,
+      ratingSkipReason,
     });
 
     const ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
-    for (const entry of params.result.perPlayer) {
-      const appliedAt = new Date(appliedAtBase);
-      const event: MemoryRatingEvent = {
-        ratingEventId: randomUUID(),
-        organizationId: params.submissionMeta.organizationId,
-        playerId: entry.playerId,
-        ladderId,
-        matchId,
-        appliedAt,
-        muBefore: entry.muBefore,
-        muAfter: entry.muAfter,
-        delta: entry.delta,
-        sigmaBefore: entry.sigmaBefore,
-        sigmaAfter: entry.sigmaAfter,
-        winProbPre: entry.winProbPre,
-        movWeight: params.match.movWeight ?? null,
-      };
+    if (result) {
+      for (const entry of result.perPlayer) {
+        const appliedAt = new Date(appliedAtBase);
+        const event: MemoryRatingEvent = {
+          ratingEventId: randomUUID(),
+          organizationId: params.submissionMeta.organizationId,
+          playerId: entry.playerId,
+          ladderId,
+          matchId,
+          appliedAt,
+          muBefore: entry.muBefore,
+          muAfter: entry.muAfter,
+          delta: entry.delta,
+          sigmaBefore: entry.sigmaBefore,
+          sigmaAfter: entry.sigmaAfter,
+          winProbPre: entry.winProbPre,
+          movWeight: params.match.movWeight ?? null,
+        };
 
-      const bucket = this.getRatingEventBucket(ladderId, entry.playerId, true)!;
-      bucket.unshift(event);
-      ratingEvents.push({
-        playerId: entry.playerId,
-        ratingEventId: event.ratingEventId,
-        appliedAt: appliedAt.toISOString(),
-      });
+        const bucket = this.getRatingEventBucket(ladderId, entry.playerId, true)!;
+        bucket.unshift(event);
+        ratingEvents.push({
+          playerId: entry.playerId,
+          ratingEventId: event.ratingEventId,
+          appliedAt: appliedAt.toISOString(),
+        });
 
-      const player = this.players.get(entry.playerId);
-      const ratingRecord = player?.ratings.get(ladderId);
-      if (ratingRecord) {
-        ratingRecord.updatedAt = appliedAt;
+        const player = this.players.get(entry.playerId);
+        const ratingRecord = player?.ratings.get(ladderId);
+        if (ratingRecord) {
+          ratingRecord.updatedAt = appliedAt;
+        }
       }
     }
 
@@ -649,37 +662,39 @@ export class MemoryStore implements RatingStore {
       await this.ensureCompetitionParticipants(competitionId, Array.from(playerIds));
     }
 
-    const pairTimestamp = new Date(appliedAtBase);
-    for (const update of params.pairUpdates) {
-      const key = `${ladderId}::${update.pairId}`;
-      let record = this.pairSynergies.get(key);
-      if (!record) {
-        record = {
-          key,
+    if (result) {
+      const pairTimestamp = new Date(appliedAtBase);
+      for (const update of pairUpdates) {
+        const key = `${ladderId}::${update.pairId}`;
+        let record = this.pairSynergies.get(key);
+        if (!record) {
+          record = {
+            key,
+            pairId: update.pairId,
+            ladderId,
+            players: update.players,
+            gamma: update.gammaAfter,
+            matches: update.matchesAfter,
+            updatedAt: pairTimestamp,
+          };
+          this.pairSynergies.set(key, record);
+        } else {
+          record.gamma = update.gammaAfter;
+          record.matches = update.matchesAfter;
+          record.players = update.players;
+          record.updatedAt = pairTimestamp;
+        }
+
+        this.pairSynergyHistory.push({
           pairId: update.pairId,
           ladderId,
-          players: update.players,
-          gamma: update.gammaAfter,
-          matches: update.matchesAfter,
-          updatedAt: pairTimestamp,
-        };
-        this.pairSynergies.set(key, record);
-      } else {
-        record.gamma = update.gammaAfter;
-        record.matches = update.matchesAfter;
-        record.players = update.players;
-        record.updatedAt = pairTimestamp;
+          matchId,
+          gammaBefore: update.gammaBefore,
+          gammaAfter: update.gammaAfter,
+          delta: update.delta,
+          createdAt: pairTimestamp,
+        });
       }
-
-      this.pairSynergyHistory.push({
-        pairId: update.pairId,
-        ladderId,
-        matchId,
-        gammaBefore: update.gammaBefore,
-        gammaAfter: update.gammaAfter,
-        delta: update.delta,
-        createdAt: pairTimestamp,
-      });
     }
 
     return { matchId, ratingEvents };
@@ -786,6 +801,9 @@ export class MemoryStore implements RatingStore {
           statistics: details?.statistics ?? null,
         } satisfies MatchGameSummary;
       }),
+      ratingStatus: match.ratingStatus ?? 'RATED',
+      ratingSkipReason: match.ratingSkipReason ?? null,
+      winnerSide: match.match.winner ?? null,
     } satisfies MatchSummary;
   }
 
@@ -831,6 +849,9 @@ export class MemoryStore implements RatingStore {
           statistics: details?.statistics ?? null,
         } satisfies MatchGameSummary;
       }),
+      ratingStatus: match.ratingStatus ?? 'RATED',
+      ratingSkipReason: match.ratingSkipReason ?? null,
+      winnerSide: match.match.winner ?? null,
     };
   }
 
@@ -1270,6 +1291,14 @@ export class MemoryStore implements RatingStore {
     let lastApplied: Date | null = null;
 
     for (const match of sorted) {
+      if (match.ratingStatus && match.ratingStatus !== 'RATED') {
+        continue;
+      }
+
+      if (!match.result) {
+        continue;
+      }
+
       match.match.sides.A.players.forEach(ensurePlayerState);
       match.match.sides.B.players.forEach(ensurePlayerState);
 
@@ -1546,6 +1575,9 @@ export class MemoryStore implements RatingStore {
           statistics: details?.statistics ?? null,
         } satisfies MatchGameSummary;
       }),
+      ratingStatus: entry.ratingStatus ?? 'RATED',
+      ratingSkipReason: entry.ratingSkipReason ?? null,
+      winnerSide: entry.match.winner ?? null,
     }));
 
     return { items, nextCursor };

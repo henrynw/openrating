@@ -1,4 +1,8 @@
-import type { MatchInput } from '../../engine/types.js';
+import type { MatchInput, WinnerSide } from '../../engine/types.js';
+
+export type MatchRatingStatus = 'RATED' | 'UNRATED';
+
+export type MatchRatingSkipReason = 'MISSING_SCORES' | 'UNKNOWN';
 
 export type MatchStatus =
   | 'SCHEDULED'
@@ -89,6 +93,9 @@ export interface MatchSummary {
   segments?: MatchSegment[] | null;
   sides: MatchSideSummary[];
   games: MatchGameSummary[];
+  ratingStatus: MatchRatingStatus;
+  ratingSkipReason?: MatchRatingSkipReason | null;
+  winnerSide?: WinnerSide | null;
 }
 
 export interface MatchListQuery {

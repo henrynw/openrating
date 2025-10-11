@@ -191,6 +191,9 @@ export const toMatchSummaryResponse = (match: MatchSummary, organizationSlug: st
     competition_slug: match.competitionSlug ?? null,
     sides,
     games: match.games.map(serializeMatchGame),
+    rating_status: match.ratingStatus,
+    rating_skip_reason: match.ratingSkipReason ?? null,
+    winner: match.winnerSide ?? null,
   };
 
   if (timing !== undefined) response.timing = timing;

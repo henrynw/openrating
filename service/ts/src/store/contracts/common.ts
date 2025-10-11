@@ -1,4 +1,5 @@
 import type { MatchInput, PairState, PairUpdate, PlayerState, UpdateResult } from '../../engine/types.js';
+import type { MatchRatingSkipReason, MatchRatingStatus } from './matches.js';
 import type {
   MatchParticipant,
   MatchSegment,
@@ -31,11 +32,11 @@ export interface RecordMatchParams {
   ladderId: string;
   ladderKey: LadderKey;
   match: MatchInput;
-  result: UpdateResult;
+  result?: UpdateResult | null;
   eventId?: string | null;
   competitionId?: string | null;
   playerStates: Map<string, PlayerState>;
-  pairUpdates: PairUpdate[];
+  pairUpdates?: PairUpdate[];
   timing?: MatchTiming | null;
   statistics?: MatchStatistics;
   segments?: MatchSegment[] | null;
@@ -54,6 +55,8 @@ export interface RecordMatchParams {
     venueId?: string | null;
     regionId?: string | null;
   };
+  ratingStatus?: MatchRatingStatus;
+  ratingSkipReason?: MatchRatingSkipReason | null;
 }
 
 export interface RecordMatchResult {

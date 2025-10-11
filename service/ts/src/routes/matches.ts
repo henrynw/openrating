@@ -337,13 +337,37 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       games: normalizedGames,
     });
 
-    if (!normalization.ok) {
+    const sortedGames = [...normalizedGames].sort((a, b) => a.game_no - b.game_no);
+
+    const canRecordWithoutScores =
+      !normalization.ok &&
+      parsed.data.sport === 'BADMINTON' &&
+      sortedGames.length === 0 &&
+      Boolean(parsed.data.winner);
+
+    if (!normalization.ok && !canRecordWithoutScores) {
       return res.status(400).send({
         error: normalization.error,
         message: normalization.message,
         issues: normalization.issues,
       });
     }
+
+    const matchInput: MatchInput = normalization.ok
+      ? normalization.match
+      : {
+          sport: parsed.data.sport,
+          discipline: parsed.data.discipline,
+          format: parsed.data.format,
+          tier: parsed.data.tier,
+          sides: normalizedSides,
+          games: sortedGames,
+          winner: parsed.data.winner,
+        };
+
+    const ratingStatus: 'RATED' | 'UNRATED' = normalization.ok ? 'RATED' : 'UNRATED';
+    const ratingSkipReason: 'MISSING_SCORES' | 'UNKNOWN' | null =
+      ratingStatus === 'UNRATED' ? 'MISSING_SCORES' : null;
 
     try {
       const organization = await resolveOrganization({
@@ -367,13 +391,13 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         }
         eventId = competition.eventId;
 
-        if (competition.sport && competition.sport !== normalization.match.sport) {
+        if (competition.sport && competition.sport !== matchInput.sport) {
           return res.status(400).send({ error: 'invalid_competition', message: 'Competition sport does not match submission' });
         }
-        if (competition.discipline && competition.discipline !== normalization.match.discipline) {
+        if (competition.discipline && competition.discipline !== matchInput.discipline) {
           return res.status(400).send({ error: 'invalid_competition', message: 'Competition discipline does not match submission' });
         }
-        if (competition.format && competition.format !== normalization.match.format) {
+        if (competition.format && competition.format !== matchInput.format) {
           return res.status(400).send({ error: 'invalid_competition', message: 'Competition format does not match submission' });
         }
       }
@@ -384,21 +408,21 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       const sideParticipants = mapSideParticipantsInput(parsed.data.sides);
       const gameDetails = mapGameDetailsInput(parsed.data.games);
 
-      const ladderKey = buildLadderKey(organization.organizationId, normalization.match, {
+      const ladderKey = buildLadderKey(organization.organizationId, matchInput, {
         tier: parsed.data.tier,
         regionId: parsed.data.venue_region_id ?? null,
       });
 
       const uniquePlayerIds = Array.from(
         new Set([
-          ...normalization.match.sides.A.players,
-          ...normalization.match.sides.B.players,
+          ...matchInput.sides.A.players,
+          ...matchInput.sides.B.players,
         ])
       );
 
       await enforceMatchWrite(req, {
         organizationId: organization.organizationId,
-        sport: normalization.match.sport,
+        sport: matchInput.sport,
         regionId: ladderKey.regionId ?? 'GLOBAL',
       });
 
@@ -406,31 +430,35 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         organizationId: organization.organizationId,
       });
 
-      const pairDescriptors: Array<{ pairId: string; players: string[] }> = [];
-      const collectPair = (sidePlayers: string[]) => {
-        if (sidePlayers.length < 2) return;
-        const sorted = sortPairPlayers(sidePlayers);
-        pairDescriptors.push({ pairId: buildPairKey(sorted), players: sorted });
-      };
-
-      collectPair(normalization.match.sides.A.players);
-      collectPair(normalization.match.sides.B.players);
-
       let pairStates: Map<string, PairState> = new Map();
-      if (pairDescriptors.length) {
-        pairStates = await store.ensurePairSynergies({ ladderId, ladderKey, pairs: pairDescriptors });
-      }
+      let result: ReturnType<typeof updateMatch> | null = null;
 
-      const result = updateMatch(normalization.match, {
-        getPlayer: (id) => {
-          const state = players.get(id);
-          if (!state) throw new Error(`missing player state for ${id}`);
-          return state;
-        },
-        getPair: pairDescriptors.length
-          ? (sidePlayers) => pairStates.get(buildPairKey(sidePlayers))
-          : undefined,
-      });
+      if (ratingStatus === 'RATED') {
+        const pairDescriptors: Array<{ pairId: string; players: string[] }> = [];
+        const collectPair = (sidePlayers: string[]) => {
+          if (sidePlayers.length < 2) return;
+          const sorted = sortPairPlayers(sidePlayers);
+          pairDescriptors.push({ pairId: buildPairKey(sorted), players: sorted });
+        };
+
+        collectPair(matchInput.sides.A.players);
+        collectPair(matchInput.sides.B.players);
+
+        if (pairDescriptors.length) {
+          pairStates = await store.ensurePairSynergies({ ladderId, ladderKey, pairs: pairDescriptors });
+        }
+
+        result = updateMatch(matchInput, {
+          getPlayer: (id) => {
+            const state = players.get(id);
+            if (!state) throw new Error(`missing player state for ${id}`);
+            return state;
+          },
+          getPair: pairDescriptors.length
+            ? (sidePlayers) => pairStates.get(buildPairKey(sidePlayers))
+            : undefined,
+        });
+      }
 
       const subjectProviderId = await getSubjectId(req);
       if (parsed.data.provider_id && parsed.data.provider_id !== subjectProviderId) {
@@ -445,8 +473,8 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       const { matchId, ratingEvents } = await store.recordMatch({
         ladderId,
         ladderKey,
-        match: normalization.match,
-        result,
+        match: matchInput,
+        result: result ?? null,
         eventId,
         competitionId: competition?.competitionId ?? parsed.data.competition_id ?? null,
         playerStates: players,
@@ -464,51 +492,58 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
           venueId: parsed.data.venue_id ?? null,
           regionId: parsed.data.venue_region_id ?? null,
         },
-        pairUpdates: result.pairUpdates,
+        pairUpdates: ratingStatus === 'RATED' && result ? result.pairUpdates : [],
+        ratingStatus,
+        ratingSkipReason,
       });
 
-      const ratingEventByPlayer = new Map(
-        ratingEvents.map((event) => [event.playerId, event.ratingEventId])
-      );
+      let ratingsPayload: Array<{
+        player_id: string;
+        rating_event_id: string | null;
+        mu_before: number;
+        mu_after: number;
+        delta: number;
+        sigma_after: number;
+        win_probability_pre: number;
+      }> = [];
 
-      const missingRatingEvents = result.perPlayer
-        .filter((p) => !ratingEventByPlayer.has(p.playerId))
-        .map((p) => p.playerId);
-
-      if (missingRatingEvents.length) {
-        const fetched = await Promise.all(
-          missingRatingEvents.map(async (playerId) => {
-            try {
-              const { items } = await store.listRatingEvents({
-                ladderKey,
-                playerId,
-                organizationId: organization.organizationId,
-                matchId,
-                limit: 1,
-              });
-              const event = items.find((item) => item.matchId === matchId);
-              return event ? { playerId, ratingEventId: event.ratingEventId } : null;
-            } catch (lookupError) {
-              console.warn('rating_event_lookup_error', { playerId, matchId, error: lookupError });
-              return null;
-            }
-          })
+      if (ratingStatus === 'RATED' && result) {
+        const ratingEventByPlayer = new Map(
+          ratingEvents.map((event) => [event.playerId, event.ratingEventId])
         );
 
-        for (const entry of fetched) {
-          if (entry) {
-            ratingEventByPlayer.set(entry.playerId, entry.ratingEventId);
+        const missingRatingEvents = result.perPlayer
+          .filter((p) => !ratingEventByPlayer.has(p.playerId))
+          .map((p) => p.playerId);
+
+        if (missingRatingEvents.length) {
+          const fetched = await Promise.all(
+            missingRatingEvents.map(async (playerId) => {
+              try {
+                const { items } = await store.listRatingEvents({
+                  ladderKey,
+                  playerId,
+                  organizationId: organization.organizationId,
+                  matchId,
+                  limit: 1,
+                });
+                const event = items.find((item) => item.matchId === matchId);
+                return event ? { playerId, ratingEventId: event.ratingEventId } : null;
+              } catch (lookupError) {
+                console.warn('rating_event_lookup_error', { playerId, matchId, error: lookupError });
+                return null;
+              }
+            })
+          );
+
+          for (const entry of fetched) {
+            if (entry) {
+              ratingEventByPlayer.set(entry.playerId, entry.ratingEventId);
+            }
           }
         }
-      }
 
-      return res.send({
-        match_id: matchId,
-        organization_id: organization.organizationId,
-        organization_slug: organization.slug,
-        event_id: eventId,
-        competition_id: competition?.competitionId ?? parsed.data.competition_id ?? null,
-        ratings: result.perPlayer.map((p) => {
+        ratingsPayload = result.perPlayer.map((p) => {
           const ratingEventId = ratingEventByPlayer.get(p.playerId);
           if (!ratingEventId) {
             console.warn('match_rating_event_missing', {
@@ -526,7 +561,18 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
             sigma_after: p.sigmaAfter,
             win_probability_pre: p.winProbPre,
           };
-        }),
+        });
+      }
+
+      return res.send({
+        match_id: matchId,
+        organization_id: organization.organizationId,
+        organization_slug: organization.slug,
+        event_id: eventId,
+        competition_id: competition?.competitionId ?? parsed.data.competition_id ?? null,
+        rating_status: ratingStatus,
+        rating_skip_reason: ratingSkipReason,
+        ratings: ratingsPayload,
       });
     } catch (err) {
       if (err instanceof PlayerLookupError) {

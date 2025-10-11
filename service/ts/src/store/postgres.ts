@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { and, eq, inArray, or, lt, lte, gt, gte, sql, desc } from 'drizzle-orm';
-import type { PlayerState, MatchInput, PairState, PairUpdate, Sport, Discipline } from '../engine/types.js';
+import type { PlayerState, MatchInput, PairState, PairUpdate, Sport, Discipline, WinnerSide } from '../engine/types.js';
 import { updateMatch as runMatchUpdate } from '../engine/rating.js';
 import { P } from '../engine/params.js';
 import { getDb } from '../db/client.js';
@@ -44,6 +44,8 @@ import type {
   PlayerListResult,
   MatchListQuery,
   MatchListResult,
+  MatchRatingStatus,
+  MatchRatingSkipReason,
   MatchSportTotalsQuery,
   MatchSportTotalsResult,
   MatchSummary,
@@ -776,6 +778,9 @@ export class PostgresStore implements RatingStore {
         discipline: matches.discipline,
         format: matches.format,
         tier: matches.tier,
+        winnerSide: matches.winnerSide,
+        ratingStatus: matches.ratingStatus,
+        ratingSkipReason: matches.ratingSkipReason,
         startTime: matches.startTime,
         venueId: matches.venueId,
         regionId: matches.regionId,
@@ -871,6 +876,10 @@ export class PostgresStore implements RatingStore {
       segments: (matchRow.segments as MatchSegment[] | null) ?? null,
       sides,
       games,
+      ratingStatus: (matchRow.ratingStatus as MatchRatingStatus) ?? 'RATED',
+      ratingSkipReason:
+        (matchRow.ratingSkipReason as MatchRatingSkipReason | null) ?? null,
+      winnerSide: (matchRow.winnerSide as WinnerSide | null) ?? null,
     };
   }
 
@@ -2178,6 +2187,10 @@ export class PostgresStore implements RatingStore {
 
     const matchId = randomUUID();
     const movWeight = params.match.movWeight ?? null;
+    const result = params.result ?? null;
+    const pairUpdates = params.pairUpdates ?? [];
+    const ratingStatus: MatchRatingStatus = params.ratingStatus ?? (result ? 'RATED' : 'UNRATED');
+    const ratingSkipReason: MatchRatingSkipReason | null = params.ratingSkipReason ?? null;
 
     await this.ensureProvider(params.submissionMeta.providerId);
     await this.assertOrganizationExists(params.submissionMeta.organizationId);
@@ -2255,7 +2268,7 @@ export class PostgresStore implements RatingStore {
         .from(matches)
         .where(eq(matches.ladderId, params.ladderId));
       const latestStartTime = latestRows.at(0)?.latestStart ?? null;
-      const replayRequired = latestStartTime ? matchStartTime < latestStartTime : false;
+      const replayRequired = result && latestStartTime ? matchStartTime < latestStartTime : false;
 
       await tx.insert(matches).values({
         matchId,
@@ -2267,6 +2280,9 @@ export class PostgresStore implements RatingStore {
         discipline: params.match.discipline,
         format: params.match.format,
         tier: params.match.tier ?? 'UNSPECIFIED',
+        winnerSide: params.match.winner ?? null,
+        ratingStatus,
+        ratingSkipReason,
         venueId,
         regionId: submissionRegionId ?? null,
         eventId,
@@ -2316,10 +2332,11 @@ export class PostgresStore implements RatingStore {
         });
       }
 
-      for (const entry of params.result.perPlayer) {
-        const playerState = params.playerStates.get(entry.playerId);
-        await tx
-          .update(playerRatings)
+      if (result) {
+        for (const entry of result.perPlayer) {
+          const playerState = params.playerStates.get(entry.playerId);
+          await tx
+            .update(playerRatings)
           .set({
             mu: entry.muAfter,
             sigma: entry.sigmaAfter,
@@ -2353,40 +2370,41 @@ export class PostgresStore implements RatingStore {
             createdAt: playerRatingHistory.createdAt,
           });
 
-        if (historyRow) {
-          ratingEvents.push({
-            playerId: entry.playerId,
-            ratingEventId: String(historyRow.id),
-            appliedAt: historyRow.createdAt.toISOString(),
+          if (historyRow) {
+            ratingEvents.push({
+              playerId: entry.playerId,
+              ratingEventId: String(historyRow.id),
+              appliedAt: historyRow.createdAt.toISOString(),
+            });
+          }
+        }
+
+        for (const update of pairUpdates) {
+          await tx
+            .update(pairSynergies)
+            .set({
+              gamma: update.gammaAfter,
+              matches: update.matchesAfter,
+              players: update.players,
+              updatedAt: appliedAt,
+            })
+            .where(
+              and(
+                eq(pairSynergies.ladderId, params.ladderId),
+                eq(pairSynergies.pairKey, update.pairId)
+              )
+            );
+
+          await tx.insert(pairSynergyHistory).values({
+            ladderId: params.ladderId,
+            pairKey: update.pairId,
+            matchId,
+            gammaBefore: update.gammaBefore,
+            gammaAfter: update.gammaAfter,
+            delta: update.delta,
+            createdAt: appliedAt,
           });
         }
-      }
-
-      for (const update of params.pairUpdates) {
-        await tx
-          .update(pairSynergies)
-          .set({
-            gamma: update.gammaAfter,
-            matches: update.matchesAfter,
-            players: update.players,
-            updatedAt: appliedAt,
-          })
-          .where(
-            and(
-              eq(pairSynergies.ladderId, params.ladderId),
-              eq(pairSynergies.pairKey, update.pairId)
-            )
-          );
-
-        await tx.insert(pairSynergyHistory).values({
-          ladderId: params.ladderId,
-          pairKey: update.pairId,
-          matchId,
-          gammaBefore: update.gammaBefore,
-          gammaAfter: update.gammaAfter,
-          delta: update.delta,
-          createdAt: appliedAt,
-        });
       }
 
       if (competitionId) {
@@ -2398,8 +2416,12 @@ export class PostgresStore implements RatingStore {
       }
     });
 
+    if (!result) {
+      return { matchId, ratingEvents: [] };
+    }
+
     const eventByPlayer = new Map(ratingEvents.map((event) => [event.playerId, event]));
-    const missingForPlayers = params.result.perPlayer
+    const missingForPlayers = result.perPlayer
       .map((entry) => entry.playerId)
       .filter((playerId) => !eventByPlayer.has(playerId));
 
@@ -2434,7 +2456,7 @@ export class PostgresStore implements RatingStore {
 
     const orderedRatingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
 
-    for (const entry of params.result.perPlayer) {
+    for (const entry of result.perPlayer) {
       const event = eventByPlayer.get(entry.playerId);
       if (!event) {
         throw new Error(`missing rating event for player ${entry.playerId} in match ${matchId}`);
@@ -4089,6 +4111,9 @@ export class PostgresStore implements RatingStore {
         discipline: matches.discipline,
         format: matches.format,
         tier: matches.tier,
+        winnerSide: matches.winnerSide,
+        ratingStatus: matches.ratingStatus,
+        ratingSkipReason: matches.ratingSkipReason,
         startTime: matches.startTime,
         venueId: matches.venueId,
         regionId: matches.regionId,
@@ -4118,6 +4143,9 @@ export class PostgresStore implements RatingStore {
       discipline: string;
       format: string;
       tier: string | null;
+      winnerSide: string | null;
+      ratingStatus: string | null;
+      ratingSkipReason: string | null;
       startTime: Date;
       venueId: string | null;
       regionId: string | null;
@@ -4221,12 +4249,15 @@ export class PostgresStore implements RatingStore {
         competitionId: row.competitionId ?? null,
         competitionSlug: row.competitionSlug ?? null,
         timing: (row.timing as MatchTiming | null) ?? null,
-        statistics: (row.statistics as MatchStatistics) ?? null,
-        segments: (row.segments as MatchSegment[] | null) ?? null,
-        sides,
-        games: gameList,
-      };
-    });
+      statistics: (row.statistics as MatchStatistics) ?? null,
+      segments: (row.segments as MatchSegment[] | null) ?? null,
+      sides,
+      games: gameList,
+      ratingStatus: (row.ratingStatus as MatchRatingStatus) ?? 'RATED',
+      ratingSkipReason: (row.ratingSkipReason as MatchRatingSkipReason | null) ?? null,
+      winnerSide: (row.winnerSide as WinnerSide | null) ?? null,
+    };
+  });
 
     return { items, nextCursor };
   }

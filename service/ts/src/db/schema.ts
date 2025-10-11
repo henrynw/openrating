@@ -198,6 +198,9 @@ export const matches = pgTable('matches', {
   discipline: text('discipline').notNull(),
   format: text('format').notNull(),
   tier: text('tier').notNull(),
+  winnerSide: text('winner_side'),
+  ratingStatus: text('rating_status').default('RATED').notNull(),
+  ratingSkipReason: text('rating_skip_reason'),
   venueId: text('venue_id').references(() => venues.venueId, {
     onDelete: 'set null',
   }),
