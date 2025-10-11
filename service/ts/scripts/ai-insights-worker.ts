@@ -19,7 +19,8 @@ const FAILURE_BACKOFF_MS = Number(process.env.AI_INSIGHTS_FAILURE_BACKOFF_MS ?? 
 const QUOTA_BACKOFF_MS = Number(process.env.AI_INSIGHTS_QUOTA_BACKOFF_MS ?? '300000');
 const TTL_HOURS = Number(process.env.AI_INSIGHTS_TTL_HOURS ?? '24');
 const MODEL = process.env.AI_INSIGHTS_MODEL ?? 'gpt-4o-mini';
-const TEMPERATURE = Number(process.env.AI_INSIGHTS_TEMPERATURE ?? '0.7');
+const RAW_TEMPERATURE = process.env.AI_INSIGHTS_TEMPERATURE;
+const TEMPERATURE = RAW_TEMPERATURE !== undefined ? Number(RAW_TEMPERATURE) : null;
 const MAX_OUTPUT_TOKENS = Number(process.env.AI_INSIGHTS_MAX_OUTPUT_TOKENS ?? '400');
 const OPENAI_BASE_URL = process.env.OPENAI_API_BASE;
 
@@ -122,15 +123,20 @@ const handleJob = async (job: PlayerInsightAiJob) => {
 
     const { system, user } = buildAiPrompt({ snapshot, playerName });
 
-    const response = await openai.responses.create({
+    const request: Parameters<typeof openai.responses.create>[0] = {
       model: MODEL,
-      temperature: Number.isFinite(TEMPERATURE) ? TEMPERATURE : 0.7,
       max_output_tokens: Number.isFinite(MAX_OUTPUT_TOKENS) && MAX_OUTPUT_TOKENS > 0 ? MAX_OUTPUT_TOKENS : 400,
       input: [
         { role: 'system', content: system },
         { role: 'user', content: user },
       ],
-    });
+    };
+
+    if (TEMPERATURE !== null && Number.isFinite(TEMPERATURE)) {
+      request.temperature = TEMPERATURE;
+    }
+
+    const response = await openai.responses.create(request);
 
     const narrative = response.output_text?.trim();
     if (!narrative) {
