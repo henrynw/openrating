@@ -1596,11 +1596,13 @@ components:
           enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
         discipline: { type: string, enum: [SINGLES, DOUBLES, MIXED] }
         format:
-          type: string
-          example: MS
+          $ref: '#/components/schemas/CompetitionFormat'
+          example:
+            family: BADMINTON
+            code: MS
           description: >-
-            Match format code (MS, WS, BS, GS for singles; MD, WD, BD, GD for doubles; XD for mixed).
-            Note: Ratings are calculated per sport+discipline, not per format.
+            Structured format descriptor. The family scopes the code namespace (usually aligning to the sport)
+            and the code captures the specific draw type (e.g. MS, WD, XD). Ratings remain scoped to sport + discipline.
         event_id:
           type: string
           format: uuid
@@ -1815,7 +1817,8 @@ components:
           type: [string, 'null']
         sport: { $ref: '#/components/schemas/MatchSubmit/properties/sport' }
         discipline: { $ref: '#/components/schemas/MatchSubmit/properties/discipline' }
-        format: { type: string }
+        format:
+          $ref: '#/components/schemas/CompetitionFormat'
         tier:
           type: [string, 'null']
         start_time: { type: string, format: date-time }
@@ -2105,10 +2108,8 @@ components:
           type: [string, 'null']
           enum: [SINGLES, DOUBLES, MIXED]
         format:
-          type: [string, 'null']
+          $ref: '#/components/schemas/CompetitionFormat'
         tier:
-          type: [string, 'null']
-        status:
           type: [string, 'null']
         draw_size:
           type: [integer, 'null']
@@ -2154,10 +2155,8 @@ components:
           type: [string, 'null']
           enum: [SINGLES, DOUBLES, MIXED]
         format:
-          type: [string, 'null']
+          $ref: '#/components/schemas/CompetitionFormat'
         tier:
-          type: [string, 'null']
-        status:
           type: [string, 'null']
         draw_size:
           type: [integer, 'null']
@@ -2190,10 +2189,8 @@ components:
           type: [string, 'null']
           enum: [SINGLES, DOUBLES, MIXED]
         format:
-          type: [string, 'null']
+          $ref: '#/components/schemas/CompetitionFormat'
         tier:
-          type: [string, 'null']
-        status:
           type: [string, 'null']
         draw_size:
           type: [integer, 'null']
@@ -2269,7 +2266,7 @@ components:
           description: High-level tour or competition grade (e.g. WORLD_TOUR, NATIONAL, CLUB).
         grade:
           $ref: '#/components/schemas/EventGrade'
-          description: Fine-grained grade within the level (e.g. SUPER_750, MAJOR, DIVISION_1).
+          description: Fine-grained grade keyed by governing family (e.g. family BWF + code SUPER_750).
         age_group:
           $ref: '#/components/schemas/EventAgeGroup'
           description: Target age bracket if applicable (e.g. U19, SENIOR).
@@ -2279,6 +2276,21 @@ components:
         category:
           type: [string, 'null']
           description: Discipline-specific category, draw, or bracket label.
+    CompetitionFormat:
+      type: [object, 'null']
+      description: Structured format descriptor aligning draw codes with the taxonomy that defines them.
+      required: [family, code]
+      properties:
+        family:
+          type: string
+          enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL, OTHER]
+          description: Sport or taxonomy namespace that scopes the format code.
+        code:
+          type: string
+          description: Format identifier scoped to the family (e.g. MS, WD, BO5).
+        name:
+          type: [string, 'null']
+          description: Optional display label for UI contexts.
     EventMediaLinks:
       type: object
       description: Links to event resources across digital channels.
@@ -2336,9 +2348,20 @@ components:
       description: Top-level classification tier for an event.
       enum: [WORLD_TOUR, CONTINENTAL, NATIONAL, REGIONAL, CLUB, SCHOOL, COMMUNITY, OTHER, null]
     EventGrade:
-      type: [string, 'null']
-      description: Grade within a level, often tied to ranking points.
-      enum: [SUPER_1000, SUPER_750, SUPER_500, SUPER_300, GOLD, SILVER, BRONZE, MAJOR, DIVISION_1, DIVISION_2, OPEN, OTHER, null]
+      type: [object, 'null']
+      description: Grade within a level, scoped to a governing family for cross-sport interoperability.
+      required: [family, code]
+      properties:
+        family:
+          type: string
+          enum: [BWF, ATP, WTA, ITF, PSA, PICKLEBALL_TOUR, NATIONAL_FEDERATION, OTHER]
+          description: Governing family responsible for the grade taxonomy.
+        code:
+          type: string
+          description: Grade identifier defined by the family (e.g. SUPER_750, ATP_250).
+        name:
+          type: [string, 'null']
+          description: Optional display label when the governing body uses a non-code brand name.
     EventAgeGroup:
       type: [string, 'null']
       description: Target age bracket for participants.
