@@ -846,7 +846,6 @@ export class PostgresStore implements RatingStore {
         segments: matches.segments,
         sideParticipants: matches.sideParticipants,
         rawPayload: matches.rawPayload,
-        rawPayload: matches.rawPayload,
       })
       .from(matches)
       .leftJoin(competitions, eq(competitions.competitionId, matches.competitionId))
