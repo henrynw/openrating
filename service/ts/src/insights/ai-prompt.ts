@@ -59,6 +59,41 @@ export const buildAiPrompt = ({ snapshot, playerName }: BuildAiPromptParams) => 
     return total;
   }, 0);
 
+  const disciplineEntries = Object.values(snapshot.disciplineOverview ?? {});
+  const aggregateRecord = disciplineEntries.reduce<
+    | {
+        matches: number;
+        wins: number;
+        losses: number;
+        rating_events: number;
+      }
+    | null
+  >((acc, discipline) => {
+    if (!discipline) return acc;
+
+    const matches = typeof discipline.matchesPlayed === 'number' ? discipline.matchesPlayed : 0;
+    const wins = typeof discipline.wins === 'number' ? discipline.wins : 0;
+    const losses = typeof discipline.losses === 'number' ? discipline.losses : 0;
+    const ratingEvents = typeof discipline.eventsPlayed === 'number' ? discipline.eventsPlayed : Math.max(matches, 0);
+
+    if (!acc) {
+      return {
+        matches,
+        wins,
+        losses,
+        rating_events: ratingEvents,
+      };
+    }
+
+    return {
+      matches: acc.matches + matches,
+      wins: acc.wins + wins,
+      losses: acc.losses + losses,
+      rating_events: acc.rating_events + ratingEvents,
+    };
+  }, null);
+  const recordSummary = aggregateRecord && aggregateRecord.matches > 0 ? aggregateRecord : null;
+
   const formSummary = snapshot.formSummary;
   const summaryPayload = {
     player: {
@@ -103,20 +138,25 @@ export const buildAiPrompt = ({ snapshot, playerName }: BuildAiPromptParams) => 
       last_30d: formSummary.last_30d ?? null,
       last_90d: formSummary.last_90d ?? null,
     },
+    aggregate_record: recordSummary,
     discipline_overview: snapshot.disciplineOverview,
     streaks: pickNotableStreaks(snapshot.streaks, 3),
     milestones: pickNotableMilestones(snapshot.milestones, 2),
     volatility: snapshot.volatility,
   };
 
-  const system =
-    'You are an analytics assistant that transforms racket-sport rating data into concise, factual insights focused on the player\'s story. Keep responses under 120 words, use two to three plain sentences, stay neutral and data-driven, avoid speculation, and never fabricate numbers.';
+  const system = [
+    'You are an analytics writer who turns racket-sport rating data into a neutral player recap.',
+    'Work strictly from the provided data, keep the answer under 120 words, and respond with a single paragraph of two or three sentences.',
+    'Do not describe your process, include headings, or add bullet lists.',
+  ].join(' ');
 
   const directive = [
-    `Tell the story of ${playerName ?? 'the player'}'s rating journey using only the provided data.`,
-    'Open by naming the player (or "This player" if the name is missing) and anchoring their current rating against where it started, including timeframe and total change when available.',
-    'Weave in recent momentum, notable streaks or milestones, and comment on volatility or sample depth only when the data makes it meaningful.',
-    'Write one player-centric paragraph in two or three sentences, avoid list formatting, and acknowledge limited data instead of guessing.',
+    `Write one concise paragraph about ${playerName ?? 'the player'}'s rating history and recent form using only the supplied data.`,
+    'Start with the player name (or "This player") plus their current rating, referencing peak rating or net change when available.',
+    'Mention match volume or win–loss record if provided, highlight recent rating momentum, streaks, milestones, or volatility when supported by the data, and acknowledge limited samples instead of guessing.',
+    'Maintain a neutral, analytical tone, avoid speculation, and output the paragraph only—no lead-in text or explanations.',
+    'Example style: "Pin-Chian Chiu currently holds a rating of around 1500, slightly below the mid-2025 peak of 1538. With 22 singles matches and a 7-15 record, the season has been volatile but recent events produced a 35-point upswing. That history shows sharp swings alongside modest net gains, pointing to elevated volatility."',
   ].join(' ');
 
   const user = `${directive}\n\nData:\n${JSON.stringify(summaryPayload, null, 2)}`;
