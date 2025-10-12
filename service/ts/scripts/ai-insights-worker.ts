@@ -138,7 +138,29 @@ const handleJob = async (job: PlayerInsightAiJob) => {
 
     const response = await openai.responses.create(request);
 
-    const narrative = response.output_text?.trim();
+    const extractNarrative = () => {
+      const direct = response.output_text?.trim();
+      if (direct) return direct;
+      const chunks: string[] = [];
+      const outputs = (response as any)?.output ?? [];
+      for (const message of outputs) {
+        const contents = message?.content ?? [];
+        for (const part of contents) {
+          if (part?.type === 'text') {
+            const value = part?.text?.value ?? part?.text ?? null;
+            if (typeof value === 'string' && value.trim().length) {
+              chunks.push(value.trim());
+            }
+          }
+        }
+      }
+      if (chunks.length) {
+        return chunks.join('\n').trim();
+      }
+      return '';
+    };
+
+    const narrative = extractNarrative();
     if (!narrative) {
       throw new Error('empty_narrative');
     }
