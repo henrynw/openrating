@@ -24,6 +24,32 @@ const TEMPERATURE = RAW_TEMPERATURE !== undefined ? Number(RAW_TEMPERATURE) : nu
 const MAX_OUTPUT_TOKENS = Number(process.env.AI_INSIGHTS_MAX_OUTPUT_TOKENS ?? '400');
 const OPENAI_BASE_URL = process.env.OPENAI_API_BASE;
 
+const normalizeReasoningEffort = (value: string | null | undefined) => {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'low' || normalized === 'medium' || normalized === 'high' ? normalized : null;
+};
+
+const normalizeReasoningSummary = (value: string | null | undefined) => {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'auto' || normalized === 'concise' || normalized === 'detailed' ? normalized : null;
+};
+
+const DEFAULT_REASONING_EFFORT = normalizeReasoningEffort(process.env.AI_INSIGHTS_REASONING_EFFORT) ?? 'medium';
+const DEFAULT_REASONING_SUMMARY = normalizeReasoningSummary(process.env.AI_INSIGHTS_REASONING_SUMMARY) ?? 'auto';
+const MIN_REASONING_OUTPUT_TOKENS = Number(process.env.AI_INSIGHTS_REASONING_MIN_OUTPUT_TOKENS ?? '600');
+
+const isReasoningModel = (model: string) => {
+  const normalized = model.toLowerCase();
+  if (normalized.startsWith('gpt-5')) return true;
+  if (normalized.startsWith('o1')) return true;
+  if (normalized.startsWith('o2')) return true;
+  if (normalized.startsWith('o3')) return true;
+  if (normalized.startsWith('o4')) return true;
+  return normalized.includes('-reasoning');
+};
+
 const apiKey = process.env.OPENAI_API_KEY;
 if (!apiKey) {
   console.error('ai_insights_worker_missing_api_key');
@@ -46,6 +72,20 @@ const safeSleep = async (ms: number) => {
       throw err;
     }
   }
+};
+
+const resolveMaxOutputTokens = () => {
+  const fallback = 400;
+  const configured = Number.isFinite(MAX_OUTPUT_TOKENS) && MAX_OUTPUT_TOKENS > 0 ? MAX_OUTPUT_TOKENS : fallback;
+  if (!isReasoningModel(MODEL)) {
+    return configured;
+  }
+
+  const minReasoning = Number.isFinite(MIN_REASONING_OUTPUT_TOKENS) && MIN_REASONING_OUTPUT_TOKENS > 0
+    ? MIN_REASONING_OUTPUT_TOKENS
+    : 600;
+
+  return Math.max(configured, minReasoning);
 };
 
 const jobToQuery = (job: PlayerInsightAiJob): PlayerInsightsQuery => ({
@@ -125,7 +165,7 @@ const handleJob = async (job: PlayerInsightAiJob) => {
 
     const request: Parameters<typeof openai.responses.create>[0] = {
       model: MODEL,
-      max_output_tokens: Number.isFinite(MAX_OUTPUT_TOKENS) && MAX_OUTPUT_TOKENS > 0 ? MAX_OUTPUT_TOKENS : 400,
+      max_output_tokens: resolveMaxOutputTokens(),
       input: [
         { role: 'system', content: system },
         { role: 'user', content: user },
@@ -134,6 +174,13 @@ const handleJob = async (job: PlayerInsightAiJob) => {
 
     if (TEMPERATURE !== null && Number.isFinite(TEMPERATURE)) {
       request.temperature = TEMPERATURE;
+    }
+
+    if (isReasoningModel(MODEL)) {
+      request.reasoning = {
+        effort: DEFAULT_REASONING_EFFORT,
+        summary: DEFAULT_REASONING_SUMMARY,
+      };
     }
 
     const response = await openai.responses.create(request);
@@ -181,6 +228,29 @@ const handleJob = async (job: PlayerInsightAiJob) => {
           }
         } else {
           visitContent(message);
+        }
+      }
+
+      if (!chunks.length) {
+        const reasoningSummaries = outputs
+          .filter((item: any) => item?.type === 'reasoning')
+          .flatMap((item: any) =>
+            Array.isArray(item?.summary)
+              ? item.summary
+                  .map((entry: any) => (typeof entry?.text === 'string' ? entry.text.trim() : ''))
+                  .filter((entry: string) => entry.length > 0)
+              : []
+          );
+
+        if (reasoningSummaries.length) {
+          const summaryText = reasoningSummaries.join('\n').trim();
+          if (summaryText) {
+            console.info('ai_insights_narrative_from_reasoning_summary', {
+              jobId: job.jobId,
+              model: MODEL,
+            });
+            return summaryText;
+          }
         }
       }
 
