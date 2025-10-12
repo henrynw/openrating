@@ -23,6 +23,7 @@ const BaseFilterSchema = z.object({
 
 const LeaderboardQuerySchema = BaseFilterSchema.extend({
   limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().trim().min(1).optional(),
 });
 
 const MoversQuerySchema = BaseFilterSchema.extend({
@@ -105,13 +106,23 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         scope: query.data.scope ?? null,
         organizationId: organization?.organizationId ?? null,
         limit: query.data.limit ?? undefined,
+        cursor: query.data.cursor ?? undefined,
       });
+
+      const totalPages = leaderboard.totalCount
+        ? Math.ceil(leaderboard.totalCount / leaderboard.pageSize)
+        : 0;
 
       return res.send({
         sport: params.data.sport,
         discipline: params.data.discipline,
         scope: query.data.scope ?? null,
         organization_id: organization ? organization.organizationId : null,
+        total_players: leaderboard.totalCount,
+        page_size: leaderboard.pageSize,
+        total_pages: totalPages,
+        has_more: Boolean(leaderboard.nextCursor),
+        next_cursor: leaderboard.nextCursor ?? null,
         players: leaderboard.items.map((player) => ({
           rank: player.rank,
           player_id: player.playerId,

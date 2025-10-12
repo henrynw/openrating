@@ -1058,8 +1058,10 @@ export class MemoryStore implements RatingStore {
       candidates.push({ player, rating, latest });
     }
 
-    if (!candidates.length) {
-      return { items: [] };
+    const totalCount = candidates.length;
+
+    if (!totalCount) {
+      return { items: [], totalCount: 0, pageSize: limit };
     }
 
     candidates.sort((a, b) => {
@@ -1120,6 +1122,8 @@ export class MemoryStore implements RatingStore {
     return {
       items,
       nextCursor,
+      totalCount,
+      pageSize: limit,
     } satisfies LeaderboardResult;
   }
 

@@ -80,6 +80,8 @@ export interface LeaderboardQuery {
 export interface LeaderboardResult {
   items: LeaderboardEntry[];
   nextCursor?: string;
+  totalCount: number;
+  pageSize: number;
 }
 
 export interface LeaderboardMoverEntry extends LeaderboardPlayerInfo {

@@ -3005,17 +3005,37 @@ export class PostgresStore implements RatingStore {
     const ladderId = await this.ensureLadder(ladderKey);
     const limit = clampLimit(params.limit);
 
-    const playerFilters: any[] = [eq(playerRatings.ladderId, ladderId)];
+    const organizationFilter = params.organizationId ? eq(players.organizationId, params.organizationId) : null;
+
+    const baseFilters: any[] = [eq(playerRatings.ladderId, ladderId)];
     if (params.organizationId) {
       await this.assertOrganizationExists(params.organizationId);
-      playerFilters.push(eq(players.organizationId, params.organizationId));
+      baseFilters.push(organizationFilter);
     }
+
+    const totalCondition = combineFilters(baseFilters);
+    let totalQuery = this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(playerRatings)
+      .innerJoin(players, eq(playerRatings.playerId, players.playerId));
+
+    if (totalCondition) {
+      totalQuery = totalQuery.where(totalCondition);
+    }
+
+    const totalRows = (await totalQuery) as Array<{ count: number }>;
+    const totalCount = totalRows[0]?.count ?? 0;
+    if (!totalCount) {
+      return { items: [], totalCount: 0, pageSize: limit } satisfies LeaderboardResult;
+    }
+
+    const playerFilters: any[] = [...baseFilters];
 
     const cursor = params.cursor ? decodeLeaderboardCursor(params.cursor) : null;
     let startIndex = 0;
 
     if (cursor) {
-      const precedingFilters = [...playerFilters];
+      const precedingFilters = [...baseFilters];
       precedingFilters.push(
         or(
           gt(playerRatings.mu, cursor.mu),
@@ -3070,13 +3090,13 @@ export class PostgresStore implements RatingStore {
 
     const rawRows = (await playerQuery) as PlayerLeaderboardRow[];
     if (!rawRows.length) {
-      return { items: [] } satisfies LeaderboardResult;
+      return { items: [], totalCount, pageSize: limit } satisfies LeaderboardResult;
     }
 
     const hasMore = rawRows.length > limit;
     const playerRows = rawRows.slice(0, limit);
     if (!playerRows.length) {
-      return { items: [] } satisfies LeaderboardResult;
+      return { items: [], totalCount, pageSize: limit } satisfies LeaderboardResult;
     }
 
     if (!cursor) {
@@ -3162,7 +3182,7 @@ export class PostgresStore implements RatingStore {
         })
       : undefined;
 
-    return { items, nextCursor } satisfies LeaderboardResult;
+    return { items, nextCursor, totalCount, pageSize: limit } satisfies LeaderboardResult;
   }
 
   async listLeaderboardMovers(params: LeaderboardMoversQuery): Promise<LeaderboardMoversResult> {

@@ -2560,6 +2560,17 @@ components:
           type: [string, 'null']
         organization_id:
           type: [string, 'null']
+        total_players:
+          type: integer
+          minimum: 0
+        page_size:
+          type: integer
+          minimum: 1
+        total_pages:
+          type: integer
+          minimum: 0
+        has_more:
+          type: boolean
         players:
           type: array
           items:
