@@ -126,6 +126,7 @@ const handleJob = async (job: PlayerInsightAiJob) => {
     const request: Parameters<typeof openai.responses.create>[0] = {
       model: MODEL,
       max_output_tokens: Number.isFinite(MAX_OUTPUT_TOKENS) && MAX_OUTPUT_TOKENS > 0 ? MAX_OUTPUT_TOKENS : 400,
+      response_format: { type: 'text' },
       input: [
         { role: 'system', content: system },
         { role: 'user', content: user },
@@ -147,19 +148,28 @@ const handleJob = async (job: PlayerInsightAiJob) => {
         if (typeof value === 'string' && value.trim().length) {
           chunks.push(value.trim());
         }
+        if (Array.isArray(value)) {
+          for (const entry of value) {
+            pushText(entry);
+          }
+        }
       };
 
       const visitContent = (content: any) => {
         if (!content) return;
         const type = content.type ?? null;
         if (type === 'text' || type === 'output_text') {
-          pushText(content.text?.value ?? content.text);
+          pushText(content.text?.value ?? content.text ?? content.output_text);
         } else if (type === 'message') {
           for (const part of content.content ?? []) {
             visitContent(part);
           }
         } else if (typeof content === 'string') {
           pushText(content);
+        } else if (Array.isArray(content)) {
+          for (const entry of content) {
+            visitContent(entry);
+          }
         }
       };
 
@@ -178,12 +188,15 @@ const handleJob = async (job: PlayerInsightAiJob) => {
       if (!chunks.length) {
         const messages = (response as any)?.output?.map((entry: any) => ({
           type: entry?.type ?? null,
-          hasContent: Array.isArray(entry?.content) ? entry.content.length > 0 : !!entry?.content,
+          contentTypes: Array.isArray(entry?.content)
+            ? entry.content.map((part: any) => part?.type ?? typeof part ?? null)
+            : entry?.content ?? null,
         })) ?? null;
         console.warn('ai_insights_empty_narrative_response', {
           jobId: job.jobId,
           model: MODEL,
           outputSummary: messages,
+          rawOutput: (response as any)?.output ?? null,
         });
         return '';
       }
