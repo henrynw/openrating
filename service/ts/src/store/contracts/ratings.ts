@@ -73,6 +73,13 @@ export interface LeaderboardQuery {
   discipline: LadderKey['discipline'];
   scope?: string | null;
   organizationId?: string | null;
+  sex?: 'M' | 'F' | 'X' | null;
+  countryCode?: string | null;
+  regionId?: string | null;
+  ageGroup?: string | null;
+  ageFrom?: number | null;
+  ageTo?: number | null;
+  ageCutoff?: string | null;
   limit?: number;
   cursor?: string;
 }

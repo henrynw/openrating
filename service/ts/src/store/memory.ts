@@ -93,6 +93,8 @@ import type {
 } from './types.js';
 import { PlayerLookupError, OrganizationLookupError, MatchLookupError, EventLookupError } from './types.js';
 import { buildLadderId, DEFAULT_REGION, buildPairKey, sortPairPlayers } from './helpers.js';
+import { reconcileBirthDetails } from './birth.js';
+import { resolveAgeFilter, type ResolvedAgeFilter } from './age.js';
 import {
   buildPlayerInsightsSnapshot as buildInsightsSnapshot,
   enrichSnapshotWithCache,
@@ -308,6 +310,7 @@ const toPlayerRecord = (player: MemoryPlayerRecord): PlayerRecord => ({
   familyName: player.familyName,
   sex: player.sex,
   birthYear: player.birthYear,
+  birthDate: player.birthDate,
   countryCode: player.countryCode,
   regionId: player.regionId,
   externalRef: player.externalRef,
@@ -368,6 +371,13 @@ export class MemoryStore implements RatingStore {
   async createPlayer(input: PlayerCreateInput): Promise<PlayerRecord> {
     const playerId = randomUUID();
     this.assertOrganizationExists(input.organizationId);
+
+    const birthPatch: { birthYear?: number | null; birthDate?: string | null } = {};
+    if (input.birthYear !== undefined) birthPatch.birthYear = input.birthYear;
+    if (input.birthDate !== undefined) birthPatch.birthDate = input.birthDate;
+
+    const birth = reconcileBirthDetails({}, birthPatch);
+
     const record: MemoryPlayerRecord = {
       playerId,
       organizationId: input.organizationId,
@@ -377,7 +387,8 @@ export class MemoryStore implements RatingStore {
       givenName: input.givenName,
       familyName: input.familyName,
       sex: input.sex,
-      birthYear: input.birthYear,
+      birthYear: birth.birthYear ?? undefined,
+      birthDate: birth.birthDate ?? undefined,
       countryCode: input.countryCode,
       regionId: input.regionId,
       externalRef: input.externalRef,
@@ -420,7 +431,19 @@ export class MemoryStore implements RatingStore {
     if (input.givenName !== undefined) player.givenName = input.givenName ?? undefined;
     if (input.familyName !== undefined) player.familyName = input.familyName ?? undefined;
     if (input.sex !== undefined) player.sex = (input.sex ?? undefined) as MemoryPlayerRecord['sex'];
-    if (input.birthYear !== undefined) player.birthYear = input.birthYear ?? undefined;
+
+    if (input.birthYear !== undefined || input.birthDate !== undefined) {
+      const birthPatch: { birthYear?: number | null; birthDate?: string | null } = {};
+      if (input.birthYear !== undefined) birthPatch.birthYear = input.birthYear;
+      if (input.birthDate !== undefined) birthPatch.birthDate = input.birthDate;
+      const currentBirth = {
+        birthYear: player.birthYear ?? null,
+        birthDate: player.birthDate ?? null,
+      };
+      const birth = reconcileBirthDetails(currentBirth, birthPatch);
+      player.birthYear = birth.birthYear ?? undefined;
+      player.birthDate = birth.birthDate ?? undefined;
+    }
     if (input.countryCode !== undefined) player.countryCode = input.countryCode ?? undefined;
     if (input.regionId !== undefined) player.regionId = input.regionId ?? undefined;
     if (input.competitiveProfile !== undefined) {
@@ -1050,7 +1073,41 @@ export class MemoryStore implements RatingStore {
 
   async listLeaderboard(params: LeaderboardQuery): Promise<LeaderboardResult> {
     const limit = clampLimit(params.limit);
-    const ladderId = buildLadderId({ sport: params.sport, discipline: params.discipline });
+    const ladderKey = { sport: params.sport, discipline: params.discipline } as const;
+    const ladderId = buildLadderId(ladderKey);
+
+    const wantsAgeFilter =
+      params.ageGroup != null ||
+      params.ageFrom !== undefined ||
+      params.ageTo !== undefined ||
+      params.ageCutoff != null;
+
+    let ageFilterBounds: ResolvedAgeFilter | null = null;
+    if (wantsAgeFilter) {
+      ageFilterBounds = resolveAgeFilter(ladderKey, null, {
+        ageGroup: params.ageGroup ?? null,
+        ageFrom: params.ageFrom ?? null,
+        ageTo: params.ageTo ?? null,
+        ageCutoff: params.ageCutoff ?? null,
+      });
+    }
+
+    const passesAgeFilter = (player: MemoryPlayerRecord) => {
+      if (!ageFilterBounds) return true;
+      if (player.birthDate) {
+        const date = new Date(`${player.birthDate}T00:00:00.000Z`);
+        if (Number.isNaN(date.getTime())) return false;
+        if (ageFilterBounds.minBirthDate && date < ageFilterBounds.minBirthDate) return false;
+        if (ageFilterBounds.maxBirthDate && date > ageFilterBounds.maxBirthDate) return false;
+        return true;
+      }
+      if (player.birthYear != null) {
+        if (ageFilterBounds.minBirthYear != null && player.birthYear < ageFilterBounds.minBirthYear) return false;
+        if (ageFilterBounds.maxBirthYear != null && player.birthYear > ageFilterBounds.maxBirthYear) return false;
+        return true;
+      }
+      return false;
+    };
 
     const candidates: Array<{ player: MemoryPlayerRecord; rating: MemoryRatingRecord; latest?: MemoryRatingEvent }> = [];
 
@@ -1058,6 +1115,11 @@ export class MemoryStore implements RatingStore {
       if (params.organizationId && player.organizationId !== params.organizationId) {
         continue;
       }
+
+      if (params.sex && player.sex !== params.sex) continue;
+      if (params.countryCode && player.countryCode !== params.countryCode) continue;
+      if (params.regionId && player.regionId !== params.regionId) continue;
+      if (!passesAgeFilter(player)) continue;
 
       const rating = player.ratings.get(ladderId);
       if (!rating || (rating.matchesCount ?? 0) <= 0) continue;

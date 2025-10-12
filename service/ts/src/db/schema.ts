@@ -8,6 +8,7 @@ import {
   primaryKey,
   serial,
   uniqueIndex,
+  date,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -158,6 +159,7 @@ export const players = pgTable('players', {
   familyName: text('family_name'),
   sex: text('sex'),
   birthYear: integer('birth_year'),
+  birthDate: date('birth_date'),
   countryCode: text('country_code'),
   regionId: text('region_id').references(() => regions.regionId, {
     onDelete: 'set null',
@@ -176,6 +178,8 @@ export const ratingLadders = pgTable('rating_ladders', {
     onDelete: 'restrict',
   }).notNull(),
   discipline: text('discipline').notNull(),
+  defaultAgeCutoff: date('default_age_cutoff'),
+  ageBands: jsonb('age_bands'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });

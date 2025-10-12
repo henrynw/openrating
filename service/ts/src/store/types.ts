@@ -8,3 +8,4 @@ export * from './errors.js';
 export * from './contracts/events.js';
 export * from './contracts/competitions.js';
 export * from './contracts/insights.js';
+export { InvalidBirthInputError } from './birth.js';

@@ -31,3 +31,13 @@ export class MatchLookupError extends Error {
     this.name = 'MatchLookupError';
   }
 }
+
+export class InvalidLeaderboardFilterError extends Error {
+  constructor(
+    message: string,
+    public readonly code: 'invalid_age_group' | 'invalid_age_range' | 'invalid_age_cutoff'
+  ) {
+    super(message);
+    this.name = 'InvalidLeaderboardFilterError';
+  }
+}

@@ -44,6 +44,7 @@ export interface PlayerCreateInput {
   familyName?: string;
   sex?: 'M' | 'F' | 'X';
   birthYear?: number;
+  birthDate?: string;
   countryCode?: string;
   regionId?: string;
   competitiveProfile?: PlayerCompetitiveProfile | null;
@@ -61,6 +62,7 @@ export interface PlayerUpdateInput {
   familyName?: string | null;
   sex?: 'M' | 'F' | 'X' | null;
   birthYear?: number | null;
+  birthDate?: string | null;
   countryCode?: string | null;
   regionId?: string | null;
   competitiveProfile?: PlayerCompetitiveProfile | null;
@@ -79,6 +81,7 @@ export interface PlayerRecord {
   familyName?: string;
   sex?: 'M' | 'F' | 'X';
   birthYear?: number;
+  birthDate?: string;
   countryCode?: string;
   regionId?: string;
   externalRef?: string;

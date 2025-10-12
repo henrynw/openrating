@@ -830,6 +830,51 @@ paths:
           schema: { type: string }
           description: Optional organization filter when viewing scoped ladders
         - in: query
+          name: sex
+          required: false
+          schema:
+            type: string
+            enum: [M, F, X]
+          description: Filter to players with a matching registered sex
+        - in: query
+          name: country_code
+          required: false
+          schema:
+            type: string
+            pattern: '^[A-Za-z]{2,3}$'
+          description: Restrict the leaderboard to players with a matching country code
+        - in: query
+          name: region_id
+          required: false
+          schema: { type: string }
+          description: Restrict the leaderboard to players assigned to the supplied region identifier
+        - in: query
+          name: age_group
+          required: false
+          schema: { type: string }
+          description: Named age band defined for the ladder (e.g. U17, U19)
+        - in: query
+          name: age_from
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Minimum age (inclusive) as of the season cutoff. Use with `age_cutoff` to override defaults.
+        - in: query
+          name: age_to
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Maximum age (inclusive) as of the season cutoff.
+        - in: query
+          name: age_cutoff
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Cutoff date used to evaluate age filters. Defaults to the ladder's configured value (Dec 31 of the current season if unspecified).
+        - in: query
           name: limit
           required: false
           schema:
@@ -1184,6 +1229,9 @@ components:
             family_name: { type: string }
             sex: { type: string, enum: [M, F, X] }
             birth_year: { type: integer }
+            birth_date:
+              type: string
+              format: date
             country_code: { type: string }
             region_id: { type: string }
             competitive_profile:
@@ -1215,6 +1263,9 @@ components:
               enum: [M, F, X, null]
             birth_year:
               type: [integer, 'null']
+            birth_date:
+              type: [string, 'null']
+              format: date
             country_code:
               type: [string, 'null']
             region_id:
@@ -1247,6 +1298,9 @@ components:
           enum: [M, F, X, null]
         birth_year:
           type: [integer, 'null']
+        birth_date:
+          type: [string, 'null']
+          format: date
         country_code:
           type: [string, 'null']
         region_id:

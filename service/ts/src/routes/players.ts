@@ -19,7 +19,7 @@ import type {
   PlayerRecord,
   PlayerInsightAiData,
 } from '../store/index.js';
-import { OrganizationLookupError, PlayerLookupError } from '../store/index.js';
+import { OrganizationLookupError, PlayerLookupError, InvalidBirthInputError } from '../store/index.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
 import { toPlayerResponse, toPlayerInsightsResponse, toPlayerSportTotals } from './helpers/responders.js';
 import type { ProfilePhotoService } from '../services/profile-photos.js';
@@ -106,6 +106,7 @@ const PlayerUpsertSchema = z
     family_name: z.string().optional(),
     sex: z.enum(['M', 'F', 'X']).optional(),
     birth_year: z.number().int().optional(),
+    birth_date: z.string().date().optional(),
     country_code: z.string().optional(),
     region_id: z.string().optional(),
     competitive_profile: PlayerCompetitiveProfileSchema.nullable().optional(),
@@ -183,6 +184,7 @@ const PlayerUpdateSchema = z
     family_name: z.string().nullable().optional(),
     sex: z.enum(['M', 'F', 'X']).nullable().optional(),
     birth_year: z.number().int().nullable().optional(),
+    birth_date: z.string().date().nullable().optional(),
     country_code: z.string().nullable().optional(),
     region_id: z.string().nullable().optional(),
     competitive_profile: PlayerCompetitiveProfileSchema.nullable().optional(),
@@ -202,6 +204,7 @@ const PlayerUpdateSchema = z
       data.family_name !== undefined ||
       data.sex !== undefined ||
       data.birth_year !== undefined ||
+      data.birth_date !== undefined ||
       data.country_code !== undefined ||
       data.region_id !== undefined ||
       data.competitive_profile !== undefined ||
@@ -313,6 +316,7 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
         familyName: parsed.data.family_name,
         sex: parsed.data.sex,
         birthYear: parsed.data.birth_year,
+        birthDate: parsed.data.birth_date ?? undefined,
         countryCode: parsed.data.country_code,
         regionId: parsed.data.region_id,
         ...(competitiveProfile !== undefined ? { competitiveProfile } : {}),
@@ -323,6 +327,9 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
     } catch (err) {
       if (err instanceof OrganizationLookupError) {
         return res.status(400).send({ error: 'invalid_organization', message: err.message });
+      }
+      if (err instanceof InvalidBirthInputError) {
+        return res.status(400).send({ error: err.code, message: err.message });
       }
       console.error('player_create_error', err);
       return res.status(500).send({ error: 'internal_error' });
@@ -819,6 +826,7 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
       if (parsed.data.family_name !== undefined) updateInput.familyName = parsed.data.family_name;
       if (parsed.data.sex !== undefined) updateInput.sex = parsed.data.sex;
       if (parsed.data.birth_year !== undefined) updateInput.birthYear = parsed.data.birth_year;
+      if (parsed.data.birth_date !== undefined) updateInput.birthDate = parsed.data.birth_date;
       if (parsed.data.country_code !== undefined) updateInput.countryCode = parsed.data.country_code;
       if (parsed.data.region_id !== undefined) updateInput.regionId = parsed.data.region_id;
       if (parsed.data.competitive_profile !== undefined) {
@@ -846,6 +854,9 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
           return res.status(403).send({ error: 'players_update_denied', message: err.message });
         }
         return res.status(400).send({ error: 'invalid_player', message: err.message });
+      }
+      if (err instanceof InvalidBirthInputError) {
+        return res.status(400).send({ error: err.code, message: err.message });
       }
       console.error('player_update_error', err);
       return res.status(500).send({ error: 'internal_error' });

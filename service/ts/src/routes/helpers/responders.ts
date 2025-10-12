@@ -170,6 +170,7 @@ export const toPlayerResponse = (
     family_name: maybe(player.familyName),
     sex: maybe(player.sex),
     birth_year: maybe(player.birthYear),
+    birth_date: maybe(player.birthDate),
     country_code: maybe(player.countryCode),
     region_id: maybe(player.regionId),
     external_ref: maybe(player.externalRef),

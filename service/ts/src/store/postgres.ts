@@ -123,6 +123,13 @@ import {
   buildPairKey,
   sortPairPlayers,
 } from './helpers.js';
+import { reconcileBirthDetails } from './birth.js';
+import {
+  resolveAgeFilter,
+  type LadderAgePolicy,
+  type ResolvedAgeFilter,
+  type AgeBandDefinition,
+} from './age.js';
 import {
   buildPlayerInsightsSnapshot as buildInsightsSnapshot,
   enrichSnapshotWithCache,
@@ -434,6 +441,7 @@ export class PostgresStore implements RatingStore {
     familyName: string | null;
     sex: string | null;
     birthYear: number | null;
+    birthDate: Date | null;
     countryCode: string | null;
     regionId: string | null;
     competitiveProfile: unknown | null;
@@ -452,6 +460,7 @@ export class PostgresStore implements RatingStore {
       familyName: row.familyName ?? undefined,
       sex: (row.sex ?? undefined) as 'M' | 'F' | 'X' | undefined,
       birthYear: row.birthYear ?? undefined,
+      birthDate: row.birthDate ? row.birthDate.toISOString().slice(0, 10) : undefined,
       countryCode: row.countryCode ?? undefined,
       regionId: row.regionId ?? undefined,
       competitiveProfile: (row.competitiveProfile as PlayerCompetitiveProfile | null) ?? null,
@@ -1962,6 +1971,13 @@ export class PostgresStore implements RatingStore {
     await this.assertOrganizationExists(input.organizationId);
     const regionId = await this.ensureRegion(input.regionId ?? null, input.organizationId);
 
+    const birthPatch: { birthYear?: number | null; birthDate?: string | null } = {};
+    if (input.birthYear !== undefined) birthPatch.birthYear = input.birthYear;
+    if (input.birthDate !== undefined) birthPatch.birthDate = input.birthDate;
+    const birth = reconcileBirthDetails({}, birthPatch);
+
+    const birthDateValue = birth.birthDate ? new Date(`${birth.birthDate}T00:00:00.000Z`) : null;
+
     const profilePhotoUploadedAt = input.profilePhotoUploadedAt
       ? new Date(input.profilePhotoUploadedAt)
       : input.profilePhotoId
@@ -1978,7 +1994,8 @@ export class PostgresStore implements RatingStore {
       givenName: input.givenName,
       familyName: input.familyName,
       sex: input.sex,
-      birthYear: input.birthYear,
+      birthYear: birth.birthYear,
+      birthDate: birthDateValue,
       countryCode: input.countryCode,
       regionId,
       competitiveProfile: input.competitiveProfile ?? null,
@@ -1998,7 +2015,8 @@ export class PostgresStore implements RatingStore {
       givenName: input.givenName,
       familyName: input.familyName,
       sex: input.sex,
-      birthYear: input.birthYear,
+      birthYear: birth.birthYear ?? undefined,
+      birthDate: birth.birthDate ?? undefined,
       countryCode: input.countryCode,
       regionId: regionId ?? undefined,
       externalRef: input.externalRef,
@@ -2050,6 +2068,7 @@ export class PostgresStore implements RatingStore {
       familyName: players.familyName,
       sex: players.sex,
       birthYear: players.birthYear,
+      birthDate: players.birthDate,
       countryCode: players.countryCode,
       regionId: players.regionId,
       competitiveProfile: players.competitiveProfile,
@@ -2084,7 +2103,18 @@ export class PostgresStore implements RatingStore {
     if (input.givenName !== undefined) updates.givenName = input.givenName ?? null;
     if (input.familyName !== undefined) updates.familyName = input.familyName ?? null;
     if (input.sex !== undefined) updates.sex = input.sex ?? null;
-    if (input.birthYear !== undefined) updates.birthYear = input.birthYear ?? null;
+    const birthPatch: { birthYear?: number | null; birthDate?: string | null } = {};
+    if (input.birthYear !== undefined) birthPatch.birthYear = input.birthYear;
+    if (input.birthDate !== undefined) birthPatch.birthDate = input.birthDate;
+    if (Object.keys(birthPatch).length) {
+      const currentBirth = {
+        birthYear: existing.birthYear,
+        birthDate: existing.birthDate ? existing.birthDate.toISOString().slice(0, 10) : null,
+      };
+      const birth = reconcileBirthDetails(currentBirth, birthPatch);
+      updates.birthYear = birth.birthYear;
+      updates.birthDate = birth.birthDate ? new Date(`${birth.birthDate}T00:00:00.000Z`) : null;
+    }
     if (input.countryCode !== undefined) updates.countryCode = input.countryCode ?? null;
     if (input.competitiveProfile !== undefined) {
       updates.competitiveProfile = input.competitiveProfile ?? null;
@@ -2148,6 +2178,25 @@ export class PostgresStore implements RatingStore {
       .onConflictDoNothing({ target: ratingLadders.ladderId });
 
     return ladderId;
+  }
+
+  private async getLadderAgePolicy(ladderId: string): Promise<LadderAgePolicy | null> {
+    const rows = await this.db
+      .select({
+        cutoff: ratingLadders.defaultAgeCutoff,
+        groups: ratingLadders.ageBands,
+      })
+      .from(ratingLadders)
+      .where(eq(ratingLadders.ladderId, ladderId))
+      .limit(1);
+
+    const row = rows.at(0);
+    if (!row) return null;
+    const groups = row.groups as Record<string, AgeBandDefinition> | null;
+    return {
+      cutoff: row.cutoff ? row.cutoff.toISOString().slice(0, 10) : null,
+      groups,
+    };
   }
 
   async ensurePlayers(
@@ -3069,6 +3118,65 @@ export class PostgresStore implements RatingStore {
     if (params.organizationId) {
       await this.assertOrganizationExists(params.organizationId);
       baseFilters.push(organizationFilter);
+    }
+
+    if (params.sex) {
+      baseFilters.push(eq(players.sex, params.sex));
+    }
+    if (params.countryCode) {
+      baseFilters.push(eq(players.countryCode, params.countryCode));
+    }
+    if (params.regionId) {
+      baseFilters.push(eq(players.regionId, params.regionId));
+    }
+
+    let ageBounds: ResolvedAgeFilter | null = null;
+    const wantsAgeFilter =
+      params.ageGroup != null ||
+      params.ageFrom !== undefined ||
+      params.ageTo !== undefined ||
+      params.ageCutoff != null;
+
+    if (wantsAgeFilter) {
+      const agePolicy = await this.getLadderAgePolicy(ladderId);
+      ageBounds = resolveAgeFilter(ladderKey, agePolicy, {
+        ageGroup: params.ageGroup ?? null,
+        ageFrom: params.ageFrom ?? null,
+        ageTo: params.ageTo ?? null,
+        ageCutoff: params.ageCutoff ?? null,
+      });
+    }
+
+    if (ageBounds) {
+      let birthDateClause: any | null = null;
+      if (ageBounds.minBirthDate || ageBounds.maxBirthDate) {
+        birthDateClause = sql`${players.birthDate} IS NOT NULL`;
+        if (ageBounds.minBirthDate) {
+          birthDateClause = and(birthDateClause, gte(players.birthDate, ageBounds.minBirthDate));
+        }
+        if (ageBounds.maxBirthDate) {
+          birthDateClause = and(birthDateClause, lte(players.birthDate, ageBounds.maxBirthDate));
+        }
+      }
+
+      let birthYearClause: any | null = null;
+      if (ageBounds.minBirthYear != null || ageBounds.maxBirthYear != null) {
+        birthYearClause = sql`${players.birthDate} IS NULL`;
+        if (ageBounds.minBirthYear != null) {
+          birthYearClause = and(birthYearClause, gte(players.birthYear, ageBounds.minBirthYear));
+        }
+        if (ageBounds.maxBirthYear != null) {
+          birthYearClause = and(birthYearClause, lte(players.birthYear, ageBounds.maxBirthYear));
+        }
+      }
+
+      if (birthDateClause && birthYearClause) {
+        baseFilters.push(or(birthDateClause, birthYearClause));
+      } else if (birthDateClause) {
+        baseFilters.push(birthDateClause);
+      } else if (birthYearClause) {
+        baseFilters.push(birthYearClause);
+      }
     }
 
     const totalCondition = combineFilters(baseFilters);
@@ -4802,7 +4910,8 @@ export class PostgresStore implements RatingStore {
         givenName: players.givenName,
         familyName: players.familyName,
         sex: players.sex,
-        birthYear: players.birthYear,
+      birthYear: players.birthYear,
+      birthDate: players.birthDate,
         countryCode: players.countryCode,
         regionId: players.regionId,
         externalRef: players.externalRef,
@@ -4829,6 +4938,7 @@ export class PostgresStore implements RatingStore {
         familyName: string | null;
         sex: string | null;
         birthYear: number | null;
+        birthDate: Date | null;
         countryCode: string | null;
         regionId: string | null;
         externalRef: string | null;
@@ -4852,6 +4962,7 @@ export class PostgresStore implements RatingStore {
       familyName: row.familyName ?? undefined,
       sex: (row.sex ?? undefined) as 'M' | 'F' | 'X' | undefined,
       birthYear: row.birthYear ?? undefined,
+      birthDate: row.birthDate ? row.birthDate.toISOString().slice(0, 10) : undefined,
       countryCode: row.countryCode ?? undefined,
       regionId: row.regionId ?? undefined,
       externalRef: row.externalRef ?? undefined,

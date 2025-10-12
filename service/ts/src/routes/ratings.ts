@@ -8,7 +8,7 @@ import {
   requireAuth,
 } from '../auth.js';
 import type { RatingStore, OrganizationRecord, LadderKey } from '../store/index.js';
-import { OrganizationLookupError, PlayerLookupError } from '../store/index.js';
+import { OrganizationLookupError, PlayerLookupError, InvalidLeaderboardFilterError } from '../store/index.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
 import { toRatingEventResponse } from './helpers/responders.js';
 import { buildLadderKey } from './helpers/ladder.js';
@@ -24,6 +24,17 @@ const BaseFilterSchema = z.object({
 const LeaderboardQuerySchema = BaseFilterSchema.extend({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().trim().min(1).optional(),
+  sex: z.enum(['M', 'F', 'X']).optional(),
+  country_code: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z]{2,3}$/)
+    .optional(),
+  region_id: z.string().trim().optional(),
+  age_group: z.string().trim().min(1).optional(),
+  age_from: z.coerce.number().int().min(0).optional(),
+  age_to: z.coerce.number().int().min(0).optional(),
+  age_cutoff: z.string().date().optional(),
 });
 
 const MoversQuerySchema = BaseFilterSchema.extend({
@@ -105,6 +116,13 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         discipline: params.data.discipline,
         scope: query.data.scope ?? null,
         organizationId: organization?.organizationId ?? null,
+        sex: query.data.sex ?? null,
+        countryCode: query.data.country_code ? query.data.country_code.toUpperCase() : null,
+        regionId: query.data.region_id ?? null,
+        ageGroup: query.data.age_group,
+        ageFrom: query.data.age_from,
+        ageTo: query.data.age_to,
+        ageCutoff: query.data.age_cutoff,
         limit: query.data.limit ?? undefined,
         cursor: query.data.cursor ?? undefined,
       });
@@ -146,6 +164,9 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
       }
       if (err instanceof AuthorizationError) {
         return res.status(err.status).send({ error: err.code, message: err.message });
+      }
+      if (err instanceof InvalidLeaderboardFilterError) {
+        return res.status(400).send({ error: err.code, message: err.message });
       }
       console.error('leaderboard_error', err);
       return res.status(500).send({ error: 'internal_error' });
