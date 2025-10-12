@@ -156,6 +156,15 @@ const MatchListQuerySchema = z
     path: ['organization_id'],
   });
 
+const MatchIncludeEnum = z.enum(['rating_events']);
+const MatchIncludeParamSchema = z
+  .union([MatchIncludeEnum, z.array(MatchIncludeEnum)])
+  .optional()
+  .transform((value) => {
+    if (!value) return [];
+    return Array.isArray(value) ? value : [value];
+  });
+
 const MatchSportFilterEnum = z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']);
 const MatchDisciplineFilterEnum = z.enum(['SINGLES', 'DOUBLES', 'MIXED']);
 
@@ -636,7 +645,20 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
   });
 
   app.get('/v1/matches', requireAuth, async (req, res) => {
-    const parsed = MatchListQuerySchema.safeParse(req.query);
+    const includeParsed = MatchIncludeParamSchema.safeParse(req.query.include);
+    if (!includeParsed.success) {
+      return res
+        .status(400)
+        .send({ error: 'validation_error', details: includeParsed.error.flatten() });
+    }
+
+    const includeValues = includeParsed.data;
+    const includeRatingEvents = includeValues.includes('rating_events');
+
+    const queryWithoutInclude = { ...req.query } as Record<string, unknown>;
+    delete queryWithoutInclude.include;
+
+    const parsed = MatchListQuerySchema.safeParse(queryWithoutInclude);
     if (!parsed.success) {
       return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
     }
@@ -682,6 +704,7 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         limit,
         startAfter: start_after ?? undefined,
         startBefore: start_before ?? undefined,
+        includeRatingEvents,
       });
 
       return res.send({
@@ -765,7 +788,20 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
   });
 
   app.get('/v1/matches/:match_id', requireAuth, async (req, res) => {
-    const parsed = MatchGetQuerySchema.safeParse(req.query);
+    const includeParsed = MatchIncludeParamSchema.safeParse(req.query.include);
+    if (!includeParsed.success) {
+      return res
+        .status(400)
+        .send({ error: 'validation_error', details: includeParsed.error.flatten() });
+    }
+
+    const includeValues = includeParsed.data;
+    const includeRatingEvents = includeValues.includes('rating_events');
+
+    const queryWithoutInclude = { ...req.query } as Record<string, unknown>;
+    delete queryWithoutInclude.include;
+
+    const parsed = MatchGetQuerySchema.safeParse(queryWithoutInclude);
     if (!parsed.success) {
       return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
     }
@@ -782,7 +818,9 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         errorMessage: 'Insufficient grants to read matches',
       });
 
-      const match = await store.getMatch(req.params.match_id, organization.organizationId);
+      const match = await store.getMatch(req.params.match_id, organization.organizationId, {
+        includeRatingEvents,
+      });
       if (!match) {
         return res.status(404).send({ error: 'match_not_found' });
       }

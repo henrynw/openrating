@@ -1,4 +1,5 @@
 import type { MatchInput, WinnerSide } from '../../engine/types.js';
+import type { RatingEventRecord } from './ratings.js';
 
 export type MatchRatingStatus = 'RATED' | 'UNRATED';
 
@@ -112,6 +113,7 @@ export interface MatchSummary {
   ratingStatus: MatchRatingStatus;
   ratingSkipReason?: MatchRatingSkipReason | null;
   winnerSide?: WinnerSide | null;
+  ratingEvents?: RatingEventRecord[] | null;
 }
 
 export interface MatchListQuery {
@@ -124,6 +126,7 @@ export interface MatchListQuery {
   limit?: number;
   startAfter?: string;
   startBefore?: string;
+  includeRatingEvents?: boolean;
 }
 
 export interface MatchListResult {

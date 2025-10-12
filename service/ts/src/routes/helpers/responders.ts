@@ -221,6 +221,11 @@ export const toMatchSummaryResponse = (match: MatchSummary, organizationSlug: st
   if (segments !== undefined) response.segments = segments;
   const stage = serializeMatchStage(match.stage);
   if (stage !== undefined) response.stage = stage;
+  if (match.ratingEvents !== undefined) {
+    response.rating_events = match.ratingEvents
+      ? match.ratingEvents.map(toRatingEventResponse)
+      : null;
+  }
 
   return response;
 };

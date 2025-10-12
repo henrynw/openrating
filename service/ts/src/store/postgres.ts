@@ -861,7 +861,10 @@ export class PostgresStore implements RatingStore {
     }
   }
 
-  private async getMatchSummaryById(matchId: string): Promise<MatchSummary | null> {
+  private async getMatchSummaryById(
+    matchId: string,
+    options?: { includeRatingEvents?: boolean }
+  ): Promise<MatchSummary | null> {
     const rows = await this.db
       .select({
         matchId: matches.matchId,
@@ -952,7 +955,7 @@ export class PostgresStore implements RatingStore {
       participants: sideParticipants?.[side as 'A' | 'B'] ?? null,
     }));
 
-    return {
+    const summary: MatchSummary = {
       matchId: matchRow.matchId,
       providerId: matchRow.providerId,
       externalRef: matchRow.externalRef ?? null,
@@ -978,6 +981,55 @@ export class PostgresStore implements RatingStore {
         (matchRow.ratingSkipReason as MatchRatingSkipReason | null) ?? null,
       winnerSide: (matchRow.winnerSide as WinnerSide | null) ?? null,
     };
+
+    if (options?.includeRatingEvents) {
+      const eventsMap = await this.getRatingEventsForMatches([matchRow.matchId]);
+      summary.ratingEvents = eventsMap.get(matchRow.matchId) ?? [];
+    }
+
+    return summary;
+  }
+
+  private async getRatingEventsForMatches(
+    matchIds: string[]
+  ): Promise<Map<string, RatingEventRecord[]>> {
+    if (!matchIds.length) {
+      return new Map();
+    }
+
+    const rows = (await this.db
+      .select({
+        id: playerRatingHistory.id,
+        playerId: playerRatingHistory.playerId,
+        ladderId: playerRatingHistory.ladderId,
+        matchId: playerRatingHistory.matchId,
+        createdAt: playerRatingHistory.createdAt,
+        muBefore: playerRatingHistory.muBefore,
+        muAfter: playerRatingHistory.muAfter,
+        delta: playerRatingHistory.delta,
+        sigmaBefore: playerRatingHistory.sigmaBefore,
+        sigmaAfter: playerRatingHistory.sigmaAfter,
+        winProbPre: playerRatingHistory.winProbPre,
+        movWeight: playerRatingHistory.movWeight,
+        organizationId: matches.organizationId,
+      })
+      .from(playerRatingHistory)
+      .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId))
+      .where(inArray(playerRatingHistory.matchId, matchIds))
+      .orderBy(playerRatingHistory.matchId, playerRatingHistory.createdAt, playerRatingHistory.id)) as Array<
+      RatingEventRow & { matchId: string | null }
+    >;
+
+    const results = new Map<string, RatingEventRecord[]>();
+    for (const row of rows) {
+      if (!row.matchId) continue;
+      const record = this.toRatingEventRecord(row);
+      const existing = results.get(row.matchId) ?? [];
+      existing.push(record);
+      results.set(row.matchId, existing);
+    }
+
+    return results;
   }
 
   private async assertOrganizationExists(id: string) {
@@ -2714,8 +2766,12 @@ export class PostgresStore implements RatingStore {
     return summary;
   }
 
-  async getMatch(matchId: string, organizationId: string): Promise<MatchSummary | null> {
-    const summary = await this.getMatchSummaryById(matchId);
+  async getMatch(
+    matchId: string,
+    organizationId: string,
+    options?: { includeRatingEvents?: boolean }
+  ): Promise<MatchSummary | null> {
+    const summary = await this.getMatchSummaryById(matchId, options);
     if (!summary) return null;
     if (summary.organizationId !== organizationId) {
       return null;
@@ -5011,12 +5067,19 @@ export class PostgresStore implements RatingStore {
       statistics: (row.statistics as MatchStatistics) ?? null,
       segments: (row.segments as MatchSegment[] | null) ?? null,
       sides,
-      games: gameList,
-      ratingStatus: (row.ratingStatus as MatchRatingStatus) ?? 'RATED',
-      ratingSkipReason: (row.ratingSkipReason as MatchRatingSkipReason | null) ?? null,
-      winnerSide: (row.winnerSide as WinnerSide | null) ?? null,
-    };
-  });
+        games: gameList,
+        ratingStatus: (row.ratingStatus as MatchRatingStatus) ?? 'RATED',
+        ratingSkipReason: (row.ratingSkipReason as MatchRatingSkipReason | null) ?? null,
+        winnerSide: (row.winnerSide as WinnerSide | null) ?? null,
+      };
+    });
+
+    if (query.includeRatingEvents) {
+      const ratingEventsMap = await this.getRatingEventsForMatches(matchIds);
+      for (const item of items) {
+        item.ratingEvents = ratingEventsMap.get(item.matchId) ?? [];
+      }
+    }
 
     return { items, nextCursor };
   }

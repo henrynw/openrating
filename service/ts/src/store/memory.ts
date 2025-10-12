@@ -860,7 +860,11 @@ export class MemoryStore implements RatingStore {
     } satisfies MatchSummary;
   }
 
-  async getMatch(matchId: string, organizationId: string): Promise<MatchSummary | null> {
+  async getMatch(
+    matchId: string,
+    organizationId: string,
+    options?: { includeRatingEvents?: boolean }
+  ): Promise<MatchSummary | null> {
     const match = this.matches.find((entry) => entry.matchId === matchId);
     if (!match) return null;
     if (match.organizationId !== organizationId) {
@@ -869,7 +873,7 @@ export class MemoryStore implements RatingStore {
 
     const competition = match.competitionId ? this.competitions.get(match.competitionId) : undefined;
 
-    return {
+    const summary: MatchSummary = {
       matchId: match.matchId,
       providerId: match.providerId,
       externalRef: match.externalRef ?? null,
@@ -907,6 +911,12 @@ export class MemoryStore implements RatingStore {
       ratingSkipReason: match.ratingSkipReason ?? null,
       winnerSide: match.match.winner ?? null,
     };
+
+    if (options?.includeRatingEvents) {
+      summary.ratingEvents = this.getMatchRatingEvents(match);
+    }
+
+    return summary;
   }
 
   async getPlayerRating(playerId: string, ladderKey: LadderKey): Promise<PlayerState | null> {
@@ -1633,46 +1643,59 @@ export class MemoryStore implements RatingStore {
       ? buildMatchCursor(slice[slice.length - 1].startTime, slice[slice.length - 1].matchId)
       : undefined;
 
-    const items: MatchSummary[] = slice.map((entry) => ({
-      matchId: entry.matchId,
-      providerId: entry.providerId,
-      externalRef: entry.externalRef ?? null,
-      organizationId: entry.organizationId,
-      sport: entry.sport,
-      discipline: entry.discipline,
-      format: entry.format,
-      tier: entry.tier,
-      stage: entry.stage ?? null,
-      startTime: entry.startTime.toISOString(),
-      venueId: entry.venueId ?? null,
-      regionId: entry.regionId ?? null,
-      eventId: entry.eventId ?? null,
-      competitionId: entry.competitionId ?? null,
-      competitionSlug: entry.competitionId
+    const items: MatchSummary[] = slice.map((entry) => {
+      const competitionSlug = entry.competitionId
         ? this.competitions.get(entry.competitionId)?.slug ?? null
-        : null,
-      timing: entry.timing ?? null,
-      statistics: entry.statistics ?? null,
-      segments: entry.segments ?? null,
-      sides: ['A', 'B'].map((side) => ({
-        side: side as 'A' | 'B',
-        players: entry.match.sides[side as 'A' | 'B'].players,
-        participants: entry.sideParticipants?.[side as 'A' | 'B'] ?? null,
-      })),
-      games: entry.match.games.map((g) => {
-        const details = entry.gameDetails?.find((item) => item.gameNo === g.game_no);
-        return {
-          gameNo: g.game_no,
-          a: g.a,
-          b: g.b,
-          segments: details?.segments ?? null,
-          statistics: details?.statistics ?? null,
-        } satisfies MatchGameSummary;
-      }),
-      ratingStatus: entry.ratingStatus ?? 'RATED',
-      ratingSkipReason: entry.ratingSkipReason ?? null,
-      winnerSide: entry.match.winner ?? null,
-    }));
+        : null;
+      const ratingEvents = query.includeRatingEvents
+        ? this.getMatchRatingEvents(entry)
+        : undefined;
+
+      const summary: MatchSummary = {
+        matchId: entry.matchId,
+        providerId: entry.providerId,
+        externalRef: entry.externalRef ?? null,
+        organizationId: entry.organizationId,
+        sport: entry.sport,
+        discipline: entry.discipline,
+        format: entry.format,
+        tier: entry.tier,
+        stage: entry.stage ?? null,
+        startTime: entry.startTime.toISOString(),
+        venueId: entry.venueId ?? null,
+        regionId: entry.regionId ?? null,
+        eventId: entry.eventId ?? null,
+        competitionId: entry.competitionId ?? null,
+        competitionSlug,
+        timing: entry.timing ?? null,
+        statistics: entry.statistics ?? null,
+        segments: entry.segments ?? null,
+        sides: ['A', 'B'].map((side) => ({
+          side: side as 'A' | 'B',
+          players: entry.match.sides[side as 'A' | 'B'].players,
+          participants: entry.sideParticipants?.[side as 'A' | 'B'] ?? null,
+        })),
+        games: entry.match.games.map((g) => {
+          const details = entry.gameDetails?.find((item) => item.gameNo === g.game_no);
+          return {
+            gameNo: g.game_no,
+            a: g.a,
+            b: g.b,
+            segments: details?.segments ?? null,
+            statistics: details?.statistics ?? null,
+          } satisfies MatchGameSummary;
+        }),
+        ratingStatus: entry.ratingStatus ?? 'RATED',
+        ratingSkipReason: entry.ratingSkipReason ?? null,
+        winnerSide: entry.match.winner ?? null,
+      } satisfies MatchSummary;
+
+      if (ratingEvents !== undefined) {
+        summary.ratingEvents = ratingEvents;
+      }
+
+      return summary;
+    });
 
     return { items, nextCursor };
   }
@@ -2267,6 +2290,23 @@ export class MemoryStore implements RatingStore {
       createdAt: competition.createdAt.toISOString(),
       updatedAt: competition.updatedAt.toISOString(),
     } satisfies CompetitionRecord;
+  }
+
+  private getMatchRatingEvents(match: MemoryMatchRecord): RatingEventRecord[] {
+    const ladderBuckets = this.ratingEvents.get(match.ladderId);
+    if (!ladderBuckets) return [];
+
+    const events: MemoryRatingEvent[] = [];
+    for (const bucket of ladderBuckets.values()) {
+      for (const event of bucket) {
+        if (event.matchId === match.matchId && event.organizationId === match.organizationId) {
+          events.push(event);
+        }
+      }
+    }
+
+    events.sort((a, b) => a.appliedAt.getTime() - b.appliedAt.getTime());
+    return events.map((event) => this.toRatingEventRecord(event));
   }
 
   private toRatingEventRecord(event: MemoryRatingEvent): RatingEventRecord {
