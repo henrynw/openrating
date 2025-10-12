@@ -47,12 +47,12 @@ export const buildAiPrompt = ({ snapshot, playerName }: BuildAiPromptParams) => 
   };
 
   const system =
-    'You are an analytics assistant that transforms racket-sport rating data into concise, factual insights. Keep responses under 120 words, use two to three sentences, stay neutral and data-driven, avoid speculation, and never fabricate numbers.';
+    'You are an analytics assistant that transforms racket-sport rating data into concise, factual insights focused on the player\'s story. Keep responses under 120 words, use two to three plain sentences, stay neutral and data-driven, avoid speculation, and never fabricate numbers.';
 
   const directive = [
-    `Write a short recent-performance insight for ${playerName ?? 'the player'} based strictly on the provided data.`,
-    'Mention meaningful rating movement, notable streaks or milestones, and comment on volatility when relevant.',
-    'If data is sparse, acknowledge the limited sample rather than guessing.',
+    `Write a short insight about ${playerName ?? 'the player'}, framing their rating history and recent results as the player's journey, using only the provided data.`,
+    'Reference how the rating has changed over time, call out lifetime highs or lows when present, highlight notable streaks or milestones, and mention volatility or sample depth when it matters.',
+    'Keep the tone factual but player-centric, acknowledge limited samples when they occur, and do not add headings or bullet lists.',
   ].join(' ');
 
   const user = `${directive}\n\nData:\n${JSON.stringify(summaryPayload, null, 2)}`;
