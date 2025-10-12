@@ -139,25 +139,56 @@ const handleJob = async (job: PlayerInsightAiJob) => {
     const response = await openai.responses.create(request);
 
     const extractNarrative = () => {
-      const direct = response.output_text?.trim();
+      const direct = typeof response.output_text === 'string' ? response.output_text.trim() : '';
       if (direct) return direct;
+
       const chunks: string[] = [];
+      const pushText = (value: unknown) => {
+        if (typeof value === 'string' && value.trim().length) {
+          chunks.push(value.trim());
+        }
+      };
+
+      const visitContent = (content: any) => {
+        if (!content) return;
+        const type = content.type ?? null;
+        if (type === 'text' || type === 'output_text') {
+          pushText(content.text?.value ?? content.text);
+        } else if (type === 'message') {
+          for (const part of content.content ?? []) {
+            visitContent(part);
+          }
+        } else if (typeof content === 'string') {
+          pushText(content);
+        }
+      };
+
       const outputs = (response as any)?.output ?? [];
       for (const message of outputs) {
-        const contents = message?.content ?? [];
-        for (const part of contents) {
-          if (part?.type === 'text') {
-            const value = part?.text?.value ?? part?.text ?? null;
-            if (typeof value === 'string' && value.trim().length) {
-              chunks.push(value.trim());
-            }
+        if (!message) continue;
+        if (Array.isArray(message.content)) {
+          for (const part of message.content) {
+            visitContent(part);
           }
+        } else {
+          visitContent(message);
         }
       }
-      if (chunks.length) {
-        return chunks.join('\n').trim();
+
+      if (!chunks.length) {
+        const messages = (response as any)?.output?.map((entry: any) => ({
+          type: entry?.type ?? null,
+          hasContent: Array.isArray(entry?.content) ? entry.content.length > 0 : !!entry?.content,
+        })) ?? null;
+        console.warn('ai_insights_empty_narrative_response', {
+          jobId: job.jobId,
+          model: MODEL,
+          outputSummary: messages,
+        });
+        return '';
       }
-      return '';
+
+      return chunks.join('\n').trim();
     };
 
     const narrative = extractNarrative();
