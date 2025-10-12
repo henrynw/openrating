@@ -21,7 +21,7 @@ import type {
 } from '../store/index.js';
 import { OrganizationLookupError, PlayerLookupError } from '../store/index.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
-import { toPlayerResponse, toPlayerInsightsResponse } from './helpers/responders.js';
+import { toPlayerResponse, toPlayerInsightsResponse, toPlayerSportTotals } from './helpers/responders.js';
 import type { ProfilePhotoService } from '../services/profile-photos.js';
 import {
   ProfilePhotoServiceDisabledError,
@@ -128,6 +128,20 @@ const PlayerListQuerySchema = z
     message: 'organization_id or organization_slug is required',
     path: ['organization_id'],
   });
+
+const PlayerSportTotalsQuerySchema = requireOrganizationIdentifier(
+  z
+    .object({
+      organization_id: z.string().optional(),
+      organization_slug: z.string().optional(),
+      sport: SportEnum.optional(),
+      discipline: DisciplineEnum.optional(),
+    })
+    .refine((data) => !data.discipline || data.sport, {
+      message: 'sport is required when discipline provided',
+      path: ['sport'],
+    })
+);
 
 const PlayerGetQuerySchema = z
   .object({
@@ -346,6 +360,47 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
         return res.status(err.status).send({ error: err.code, message: err.message });
       }
       console.error('players_list_error', err);
+      return res.status(500).send({ error: 'internal_error' });
+    }
+  });
+
+  app.get('/v1/players/totals/by-sport', requireAuth, async (req, res) => {
+    const parsed = PlayerSportTotalsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+    }
+
+    const { organization_id, organization_slug, sport, discipline } = parsed.data;
+
+    try {
+      const organization = await resolveOrganization({ organization_id, organization_slug });
+
+      await authorizeOrgAccess(req, organization.organizationId, {
+        permissions: ['players:read', 'matches:read', 'ratings:read'],
+        ...(sport ? { sport } : {}),
+        errorCode: 'players_read_denied',
+        errorMessage: 'Insufficient grants for players:read',
+      });
+
+      const result = await store.countPlayersBySport({
+        organizationId: organization.organizationId,
+        sport: sport ?? undefined,
+        discipline: discipline ?? undefined,
+      });
+
+      return res.send({
+        organization_id: organization.organizationId,
+        organization_slug: organization.slug ?? null,
+        sport_totals: toPlayerSportTotals(result.totals),
+      });
+    } catch (err) {
+      if (err instanceof OrganizationLookupError) {
+        return res.status(400).send({ error: 'invalid_organization', message: err.message });
+      }
+      if (err instanceof AuthorizationError) {
+        return res.status(err.status).send({ error: err.code, message: err.message });
+      }
+      console.error('player_totals_error', err);
       return res.status(500).send({ error: 'internal_error' });
     }
   });

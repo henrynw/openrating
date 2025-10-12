@@ -102,3 +102,18 @@ export interface PlayerListResult {
 }
 
 export type PlayerLadderKey = LadderKey;
+
+export interface PlayerSportTotal {
+  sport: LadderKey['sport'];
+  totalPlayers: number;
+}
+
+export interface PlayerSportTotalsQuery {
+  organizationId: string;
+  sport?: LadderKey['sport'];
+  discipline?: PlayerDiscipline;
+}
+
+export interface PlayerSportTotalsResult {
+  totals: PlayerSportTotal[];
+}

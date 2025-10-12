@@ -1,4 +1,12 @@
-import type { PlayerCreateInput, PlayerListQuery, PlayerListResult, PlayerRecord, PlayerUpdateInput } from './players.js';
+import type {
+  PlayerCreateInput,
+  PlayerListQuery,
+  PlayerListResult,
+  PlayerRecord,
+  PlayerUpdateInput,
+  PlayerSportTotalsQuery,
+  PlayerSportTotalsResult,
+} from './players.js';
 import type {
   OrganizationCreateInput,
   OrganizationListQuery,
@@ -88,6 +96,7 @@ export interface RatingStore {
   ): Promise<MatchSummary | null>;
   getPlayerRating(playerId: string, ladderKey: LadderKey): Promise<PlayerState | null>;
   listPlayers(query: PlayerListQuery): Promise<PlayerListResult>;
+  countPlayersBySport(query: PlayerSportTotalsQuery): Promise<PlayerSportTotalsResult>;
   listMatches(query: MatchListQuery): Promise<MatchListResult>;
   countMatchesBySport(query: MatchSportTotalsQuery): Promise<MatchSportTotalsResult>;
   listRatingEvents(query: RatingEventListQuery): Promise<RatingEventListResult>;

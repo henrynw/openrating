@@ -145,6 +145,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PlayerListResponse'
+  /v1/players/totals/by-sport:
+    get:
+      tags: [Players]
+      summary: Total players grouped by sport
+      operationId: countPlayersBySport
+      parameters:
+        - in: query
+          name: organization_id
+          required: false
+          schema: { type: string }
+          description: 'UUID of the organization (optional if organization_slug provided)'
+        - in: query
+          name: organization_slug
+          required: false
+          schema: { type: string }
+          description: 'Slug identifier for the organization'
+        - in: query
+          name: sport
+          required: false
+          schema:
+            type: string
+            enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+          description: Filter totals to a specific sport
+        - in: query
+          name: discipline
+          required: false
+          schema:
+            type: string
+            enum: [SINGLES, DOUBLES, MIXED]
+          description: Filter totals to players within a specific discipline (requires sport)
+      responses:
+        '200':
+          description: Totals grouped by sport for the requested filters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerSportTotalsResponse'
   /v1/players/{player_id}:
     get:
       tags: [Players]
@@ -1865,6 +1902,27 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MatchSportTotal'
+    PlayerSportTotal:
+      type: object
+      required: [sport, total_players]
+      properties:
+        sport:
+          type: string
+          enum: [BADMINTON, TENNIS, SQUASH, PADEL, PICKLEBALL]
+        total_players:
+          type: integer
+          minimum: 0
+    PlayerSportTotalsResponse:
+      type: object
+      required: [organization_id, sport_totals]
+      properties:
+        organization_id: { type: string }
+        organization_slug:
+          type: [string, 'null']
+        sport_totals:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlayerSportTotal'
     OrganizationCreate:
       type: object
       required: [name]

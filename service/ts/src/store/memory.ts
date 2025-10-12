@@ -23,6 +23,8 @@ import type {
   EnsurePairSynergiesResult,
   PlayerListQuery,
   PlayerListResult,
+  PlayerSportTotalsQuery,
+  PlayerSportTotalsResult,
   MatchListQuery,
   MatchListResult,
   MatchSummary,
@@ -1582,6 +1584,43 @@ export class MemoryStore implements RatingStore {
 
     players.sort((a, b) => a.playerId.localeCompare(b.playerId));
     return paginatePlayers(players, query.cursor, limit);
+  }
+
+  async countPlayersBySport(query: PlayerSportTotalsQuery): Promise<PlayerSportTotalsResult> {
+    this.assertOrganizationExists(query.organizationId);
+
+    const totals = new Map<Sport, Set<string>>();
+
+    for (const player of this.players.values()) {
+      if (player.organizationId !== query.organizationId) continue;
+
+      const sportsForPlayer = new Set<Sport>();
+
+      for (const ladderId of player.ratings.keys()) {
+        const [sport, discipline] = ladderId.split(':') as [Sport | undefined, Discipline | undefined];
+        if (!sport) continue;
+        if (query.sport && sport !== query.sport) continue;
+        if (query.discipline && discipline !== query.discipline) continue;
+        sportsForPlayer.add(sport);
+      }
+
+      if (!sportsForPlayer.size) continue;
+
+      for (const sport of sportsForPlayer) {
+        let bucket = totals.get(sport);
+        if (!bucket) {
+          bucket = new Set<string>();
+          totals.set(sport, bucket);
+        }
+        bucket.add(player.playerId);
+      }
+    }
+
+    const summary = Array.from(totals.entries())
+      .map(([sport, playerIds]) => ({ sport, totalPlayers: playerIds.size }))
+      .sort((a, b) => a.sport.localeCompare(b.sport));
+
+    return { totals: summary };
   }
 
   async listMatches(query: MatchListQuery): Promise<MatchListResult> {

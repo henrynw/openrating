@@ -44,6 +44,8 @@ import type {
   OrganizationUpdateInput,
   PlayerListQuery,
   PlayerListResult,
+  PlayerSportTotalsQuery,
+  PlayerSportTotalsResult,
   MatchListQuery,
   MatchListResult,
   MatchRatingStatus,
@@ -4860,6 +4862,43 @@ export class PostgresStore implements RatingStore {
     }));
 
     return { items, nextCursor };
+  }
+
+  async countPlayersBySport(query: PlayerSportTotalsQuery): Promise<PlayerSportTotalsResult> {
+    await this.assertOrganizationExists(query.organizationId);
+
+    const filters: any[] = [eq(players.organizationId, query.organizationId)];
+
+    if (query.sport) {
+      filters.push(eq(ratingLadders.sport, query.sport));
+    }
+
+    if (query.discipline) {
+      filters.push(eq(ratingLadders.discipline, query.discipline));
+    }
+
+    const condition = combineFilters(filters);
+
+    let totalsQuery = this.db
+      .select({
+        sport: ratingLadders.sport,
+        totalPlayers: sql<number>`CAST(count(DISTINCT ${playerRatings.playerId}) AS INTEGER)`,
+      })
+      .from(playerRatings)
+      .innerJoin(ratingLadders, eq(ratingLadders.ladderId, playerRatings.ladderId))
+      .innerJoin(players, eq(players.playerId, playerRatings.playerId))
+      .groupBy(ratingLadders.sport)
+      .orderBy(ratingLadders.sport);
+
+    if (condition) {
+      totalsQuery = totalsQuery.where(condition);
+    }
+
+    const rows = (await totalsQuery) as Array<{ sport: Sport; totalPlayers: number }>;
+
+    return {
+      totals: rows.map((row) => ({ sport: row.sport, totalPlayers: row.totalPlayers })),
+    };
   }
 
   async listMatches(query: MatchListQuery): Promise<MatchListResult> {
