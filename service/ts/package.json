@@ -16,7 +16,8 @@
     "nightly": "NODE_ENV=production tsx scripts/nightly.ts",
     "replay": "tsx scripts/replay.ts",
     "insights:worker": "NODE_ENV=production tsx scripts/insights-worker.ts",
-    "ai-insights:worker": "NODE_ENV=production tsx scripts/ai-insights-worker.ts"
+    "ai-insights:worker": "NODE_ENV=production tsx scripts/ai-insights-worker.ts",
+    "leaderboard:backfill": "tsx scripts/backfill-leaderboard.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

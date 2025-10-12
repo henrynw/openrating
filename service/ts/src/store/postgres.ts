@@ -3065,7 +3065,7 @@ export class PostgresStore implements RatingStore {
 
     const organizationFilter = params.organizationId ? eq(players.organizationId, params.organizationId) : null;
 
-    const baseFilters: any[] = [eq(playerRatings.ladderId, ladderId)];
+    const baseFilters: any[] = [eq(playerRatings.ladderId, ladderId), gt(playerRatings.matchesCount, 0)];
     if (params.organizationId) {
       await this.assertOrganizationExists(params.organizationId);
       baseFilters.push(organizationFilter);

@@ -1060,7 +1060,7 @@ export class MemoryStore implements RatingStore {
       }
 
       const rating = player.ratings.get(ladderId);
-      if (!rating) continue;
+      if (!rating || (rating.matchesCount ?? 0) <= 0) continue;
 
       const events = this.getRatingEventBucket(ladderId, player.playerId) ?? [];
       const latest = params.organizationId
