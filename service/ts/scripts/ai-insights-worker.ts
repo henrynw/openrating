@@ -126,7 +126,7 @@ const handleJob = async (job: PlayerInsightAiJob) => {
     const request: Parameters<typeof openai.responses.create>[0] = {
       model: MODEL,
       max_output_tokens: Number.isFinite(MAX_OUTPUT_TOKENS) && MAX_OUTPUT_TOKENS > 0 ? MAX_OUTPUT_TOKENS : 400,
-      text: { format: 'plain' as const },
+      text: { format: { type: 'plain' as const } },
       input: [
         { role: 'system', content: system },
         { role: 'user', content: user },
