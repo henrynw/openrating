@@ -75,9 +75,10 @@ const safeSleep = async (ms: number) => {
 };
 
 const resolveMaxOutputTokens = () => {
-  const fallback = 400;
+  const reasoningModel = isReasoningModel(MODEL);
+  const fallback = reasoningModel ? 400 : 220;
   const configured = Number.isFinite(MAX_OUTPUT_TOKENS) && MAX_OUTPUT_TOKENS > 0 ? MAX_OUTPUT_TOKENS : fallback;
-  if (!isReasoningModel(MODEL)) {
+  if (!reasoningModel) {
     return configured;
   }
 
