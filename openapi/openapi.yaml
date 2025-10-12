@@ -131,6 +131,13 @@ paths:
             enum: [rating_events]
           description: 'Optional includes to enrich the payload. Specify rating_events to embed per-player rating deltas.'
         - in: query
+          name: include
+          required: false
+          schema:
+            type: string
+            enum: [rating_events]
+          description: 'Optional includes to enrich the payload. Specify rating_events to embed per-player rating deltas.'
+        - in: query
           name: limit
           required: false
           schema:
