@@ -74,6 +74,8 @@ export interface CompetitionListResult {
   items: CompetitionRecord[];
 }
 
+export type CompetitionsByEventMap = Record<string, CompetitionRecord[]>;
+
 export interface CompetitionParticipantRecord {
   competitionId: string;
   playerId: string;

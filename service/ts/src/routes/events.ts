@@ -65,14 +65,46 @@ const EventUpdateSchema = z.object({
   metadata: MetadataSchema,
 });
 
+const EventStatusEnum = z.enum(['UPCOMING', 'IN_PROGRESS', 'COMPLETED']);
+
+const EventSortFieldEnum = z.enum(['start_date', 'created_at', 'name', 'slug']);
+
+const EventSortDirectionEnum = z.enum(['asc', 'desc']);
+
+const EventIncludeEnum = z.enum(['competitions']);
+
 const EventListQuerySchema = z
   .object({
     organization_id: z.string().optional(),
     organization_slug: z.string().optional(),
     types: z.array(EventTypeEnum).optional(),
+    statuses: z
+      .union([EventStatusEnum, z.array(EventStatusEnum)])
+      .optional()
+      .transform((value) => {
+        if (!value) return undefined;
+        return Array.isArray(value) ? value : [value];
+      }),
+    sport: z.string().optional(),
+    discipline: z.string().optional(),
+    season: z.string().optional(),
+    sanctioning_body: z.string().optional(),
+    start_date_from: z.string().datetime().optional(),
+    start_date_to: z.string().datetime().optional(),
+    end_date_from: z.string().datetime().optional(),
+    end_date_to: z.string().datetime().optional(),
     cursor: z.string().optional(),
     limit: z.coerce.number().int().min(1).max(200).optional(),
     q: z.string().optional(),
+    sort: EventSortFieldEnum.optional(),
+    sort_direction: EventSortDirectionEnum.optional(),
+    include: z
+      .union([EventIncludeEnum, z.array(EventIncludeEnum)])
+      .optional()
+      .transform((value) => {
+        if (!value) return undefined;
+        return Array.isArray(value) ? value : [value];
+      }),
   })
   .refine((data) => data.organization_id || data.organization_slug, {
     message: 'organization_id or organization_slug is required',
@@ -182,7 +214,28 @@ export const registerEventRoutes = (app: Express, deps: EventRouteDeps) => {
       return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
     }
 
-    const { organization_id, organization_slug, types, cursor, limit, q } = parsed.data;
+    const {
+      organization_id,
+      organization_slug,
+      types,
+      statuses,
+      sport,
+      discipline,
+      season,
+      sanctioning_body,
+      start_date_from,
+      start_date_to,
+      end_date_from,
+      end_date_to,
+      cursor,
+      limit,
+      q,
+      sort,
+      sort_direction,
+      include,
+    } = parsed.data;
+
+    const includeCompetitions = include === undefined || include.includes('competitions');
 
     if (!(
       hasScope(req, 'matches:write') ||
@@ -207,23 +260,33 @@ export const registerEventRoutes = (app: Express, deps: EventRouteDeps) => {
       const result = await store.listEvents({
         organizationId: organization.organizationId,
         types: types ?? undefined,
+        sport: sport ?? null,
+        discipline: discipline ?? null,
+        statuses: statuses ?? undefined,
+        season: season ?? null,
+        sanctioningBody: sanctioning_body ?? null,
+        startDateFrom: start_date_from ?? null,
+        startDateTo: start_date_to ?? null,
+        endDateFrom: end_date_from ?? null,
+        endDateTo: end_date_to ?? null,
         cursor: cursor ?? undefined,
         limit: limit ?? undefined,
         q: q ?? undefined,
+        sortField: sort ?? undefined,
+        sortDirection: sort_direction ?? undefined,
+        includes: includeCompetitions ? ['competitions'] : undefined,
       });
 
-      const competitionsByEvent = new Map<string, CompetitionRecord[]>();
-      await Promise.all(
-        result.items.map(async (event) => {
-          const competitions = await store.listCompetitions({ eventId: event.eventId });
-          competitionsByEvent.set(event.eventId, competitions.items);
-        })
-      );
+      let competitionsByEvent: Record<string, CompetitionRecord[]> = {};
+      if (includeCompetitions) {
+        const eventIds = result.items.map((event) => event.eventId);
+        competitionsByEvent = await store.listCompetitionsByEventIds(eventIds);
+      }
 
       return res.send({
         events: result.items.map((event) =>
           toEventResponse(event, organization, {
-            competitions: competitionsByEvent.get(event.eventId) ?? [],
+            competitions: includeCompetitions ? competitionsByEvent[event.eventId] ?? [] : [],
           })
         ),
         next_cursor: result.nextCursor ?? null,

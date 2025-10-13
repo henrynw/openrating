@@ -992,6 +992,65 @@ paths:
               type: string
               enum: [TOURNAMENT, LEAGUE, LADDER, BOX_LEAGUE, CHAMPIONSHIP, SERIES, EXHIBITION, CUSTOM]
         - in: query
+          name: statuses
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [UPCOMING, IN_PROGRESS, COMPLETED]
+          description: Limit results to events that are upcoming, currently running, or already completed.
+        - in: query
+          name: sport
+          required: false
+          schema: { type: string }
+          description: Only include events that have competitions for the given sport code.
+        - in: query
+          name: discipline
+          required: false
+          schema: { type: string }
+          description: Only include events that have competitions for the given discipline code.
+        - in: query
+          name: season
+          required: false
+          schema: { type: string }
+          description: Filter by the event season value stored on the event record.
+        - in: query
+          name: sanctioning_body
+          required: false
+          schema: { type: string }
+          description: Filter by the sanctioning body recorded on the event.
+        - in: query
+          name: start_date_from
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Include events starting at or after this timestamp.
+        - in: query
+          name: start_date_to
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Include events starting at or before this timestamp.
+        - in: query
+          name: end_date_from
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Include events ending at or after this timestamp.
+        - in: query
+          name: end_date_to
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Include events ending at or before this timestamp.
+        - in: query
           name: q
           required: false
           schema: { type: string }
@@ -1007,6 +1066,31 @@ paths:
             type: integer
             minimum: 1
             maximum: 200
+        - in: query
+          name: sort
+          required: false
+          schema:
+            type: string
+            enum: [start_date, created_at, name, slug]
+          description: Field to sort by. Defaults to slug when omitted for backwards compatibility.
+        - in: query
+          name: sort_direction
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+          description: Sort direction (asc or desc). Defaults depend on the selected sort field.
+        - in: query
+          name: include
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [competitions]
+          description: Optional includes to enrich the payload. competitions is returned by default.
       responses:
         '200':
           description: Paginated list of events

@@ -58,6 +58,7 @@ import type {
   CompetitionRecord,
   CompetitionListQuery,
   CompetitionListResult,
+  CompetitionsByEventMap,
   CompetitionParticipantUpsertInput,
   CompetitionParticipantRecord,
   CompetitionParticipantListResult,
@@ -121,6 +122,7 @@ export interface RatingStore {
   createCompetition(input: CompetitionCreateInput): Promise<CompetitionRecord>;
   updateCompetition(competitionId: string, input: CompetitionUpdateInput): Promise<CompetitionRecord>;
   listCompetitions(query: CompetitionListQuery): Promise<CompetitionListResult>;
+  listCompetitionsByEventIds(eventIds: string[]): Promise<CompetitionsByEventMap>;
   getCompetitionById(competitionId: string): Promise<CompetitionRecord | null>;
   getCompetitionBySlug(eventId: string, slug: string): Promise<CompetitionRecord | null>;
   upsertCompetitionParticipant(input: CompetitionParticipantUpsertInput): Promise<CompetitionParticipantRecord>;

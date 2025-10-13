@@ -104,6 +104,7 @@ import type {
   CompetitionRecord,
   CompetitionListQuery,
   CompetitionListResult,
+  CompetitionsByEventMap,
   CompetitionParticipantUpsertInput,
   CompetitionParticipantRecord,
   CompetitionParticipantListResult,
@@ -1402,52 +1403,299 @@ export class PostgresStore implements RatingStore {
     await this.ctx.assertOrganizationExists(query.organizationId);
     const limit = clampLimit(query.limit);
 
+    const sortField = query.sortField ?? 'slug';
+    const sortDirection = query.sortDirection
+      ?? (sortField === 'slug' || sortField === 'name' ? 'asc' : 'desc');
+    const useLegacySlugCursor = !query.sortField && !query.sortDirection && sortField === 'slug' && sortDirection === 'asc';
+
+    const decodeCursor = (raw: string): {
+      sortField: typeof sortField;
+      sortDirection: typeof sortDirection;
+      value: string | null;
+      eventId: string;
+    } | null => {
+      try {
+        const normalized = raw.replace(/-/g, '+').replace(/_/g, '/');
+        const padding = (4 - (normalized.length % 4)) % 4;
+        const payload = Buffer.from(normalized + '='.repeat(padding), 'base64').toString('utf8');
+        const parsed = JSON.parse(payload) as {
+          sortField?: typeof sortField;
+          sortDirection?: typeof sortDirection;
+          value?: string | null;
+          eventId?: string;
+        };
+        if (!parsed || !parsed.sortField || !parsed.sortDirection || !parsed.eventId) {
+          return null;
+        }
+        return {
+          sortField: parsed.sortField,
+          sortDirection: parsed.sortDirection,
+          value: parsed.value ?? null,
+          eventId: parsed.eventId,
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    const encodeCursor = (payload: {
+      sortField: typeof sortField;
+      sortDirection: typeof sortDirection;
+      value: string | null;
+      eventId: string;
+    }): string => {
+      const json = JSON.stringify(payload);
+      return Buffer.from(json, 'utf8')
+        .toString('base64')
+        .replace(/=+$/g, '')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_');
+    };
+
     const filters: SqlFilter[] = [eq(events.organizationId, query.organizationId)];
 
     if (query.types && query.types.length) {
       filters.push(inArray(events.type, query.types));
     }
 
+    if (query.season) {
+      filters.push(eq(events.season, query.season));
+    }
+
+    if (query.sanctioningBody) {
+      filters.push(eq(events.sanctioningBody, query.sanctioningBody));
+    }
+
+    if (query.startDateFrom) {
+      filters.push(gte(events.startDate, new Date(query.startDateFrom)));
+    }
+
+    if (query.startDateTo) {
+      filters.push(lte(events.startDate, new Date(query.startDateTo)));
+    }
+
+    if (query.endDateFrom) {
+      filters.push(gte(events.endDate, new Date(query.endDateFrom)));
+    }
+
+    if (query.endDateTo) {
+      filters.push(lte(events.endDate, new Date(query.endDateTo)));
+    }
+
     if (query.q) {
-      filters.push(sql`${events.name} ILIKE ${`%${query.q}%`}`);
+      const like = `%${query.q}%`;
+      filters.push(
+        or(sql`${events.name} ILIKE ${like}`, sql`${events.slug} ILIKE ${like}`)
+      );
+    }
+
+    if (query.sport || query.discipline) {
+      const competitionFilters: SqlFilter[] = [eq(competitions.eventId, events.eventId)];
+      if (query.sport) {
+        competitionFilters.push(eq(competitions.sport, query.sport));
+      }
+      if (query.discipline) {
+        competitionFilters.push(eq(competitions.discipline, query.discipline));
+      }
+      const competitionCondition = combineFilters(competitionFilters);
+      if (competitionCondition) {
+        filters.push(sql`EXISTS (SELECT 1 FROM ${competitions} WHERE ${competitionCondition})`);
+      }
+    }
+
+    if (query.statuses && query.statuses.length) {
+      const statusConditions = query.statuses
+        .map((status) => {
+          switch (status) {
+            case 'UPCOMING':
+              return sql`(( ${events.startDate} IS NOT NULL AND ${events.startDate} > now() ) OR ( ${events.startDate} IS NULL AND ${events.endDate} IS NOT NULL AND ${events.endDate} > now() ))`;
+            case 'IN_PROGRESS':
+              return sql`(( ${events.startDate} IS NOT NULL AND ${events.startDate} <= now() AND ( ${events.endDate} IS NULL OR ${events.endDate} >= now() )) OR ( ${events.startDate} IS NULL AND ${events.endDate} IS NOT NULL AND ${events.endDate} >= now() ))`;
+            case 'COMPLETED':
+              return sql`(( ${events.endDate} IS NOT NULL AND ${events.endDate} < now() ) OR ( ${events.endDate} IS NULL AND ${events.startDate} IS NOT NULL AND ${events.startDate} < now() ))`;
+            default:
+              return null;
+          }
+        })
+        .filter((clause): clause is NonNullable<typeof clause> => Boolean(clause));
+      if (statusConditions.length) {
+        const statusCondition = statusConditions
+          .slice(1)
+          .reduce((acc, clause) => or(acc, clause), statusConditions[0]);
+        filters.push(statusCondition);
+      }
     }
 
     if (query.cursor) {
-      filters.push(sql`${events.slug} > ${query.cursor}`);
+      const parsedCursor = decodeCursor(query.cursor);
+      const buildCursorCondition = (payload: {
+        sortField: typeof sortField;
+        sortDirection: typeof sortDirection;
+        value: string | null;
+        eventId: string;
+      }): SqlFilter => {
+        const tieBreakerColumn = events.eventId;
+        const tieBreakerValue = payload.eventId;
+        switch (payload.sortField) {
+          case 'start_date': {
+            if (!payload.value) {
+              return gt(tieBreakerColumn, tieBreakerValue);
+            }
+            const cursorDate = new Date(payload.value);
+            if (Number.isNaN(cursorDate.getTime())) return null;
+            if (payload.sortDirection === 'asc') {
+              return or(
+                gt(events.startDate, cursorDate),
+                and(eq(events.startDate, cursorDate), gt(tieBreakerColumn, tieBreakerValue))
+              );
+            }
+            return or(
+              lt(events.startDate, cursorDate),
+              and(eq(events.startDate, cursorDate), gt(tieBreakerColumn, tieBreakerValue))
+            );
+          }
+          case 'created_at': {
+            if (!payload.value) {
+              return gt(tieBreakerColumn, tieBreakerValue);
+            }
+            const cursorDate = new Date(payload.value);
+            if (Number.isNaN(cursorDate.getTime())) return null;
+            if (payload.sortDirection === 'asc') {
+              return or(
+                gt(events.createdAt, cursorDate),
+                and(eq(events.createdAt, cursorDate), gt(tieBreakerColumn, tieBreakerValue))
+              );
+            }
+            return or(
+              lt(events.createdAt, cursorDate),
+              and(eq(events.createdAt, cursorDate), gt(tieBreakerColumn, tieBreakerValue))
+            );
+          }
+          case 'name': {
+            if (!payload.value) {
+              return gt(tieBreakerColumn, tieBreakerValue);
+            }
+            if (payload.sortDirection === 'asc') {
+              return or(
+                gt(events.name, payload.value),
+                and(eq(events.name, payload.value), gt(tieBreakerColumn, tieBreakerValue))
+              );
+            }
+            return or(
+              lt(events.name, payload.value),
+              and(eq(events.name, payload.value), gt(tieBreakerColumn, tieBreakerValue))
+            );
+          }
+          case 'slug':
+          default: {
+            if (!payload.value) {
+              return gt(tieBreakerColumn, tieBreakerValue);
+            }
+            if (payload.sortDirection === 'asc') {
+              return or(
+                gt(events.slug, payload.value),
+                and(eq(events.slug, payload.value), gt(tieBreakerColumn, tieBreakerValue))
+              );
+            }
+            return or(
+              lt(events.slug, payload.value),
+              and(eq(events.slug, payload.value), gt(tieBreakerColumn, tieBreakerValue))
+            );
+          }
+        }
+      };
+
+      if (
+        parsedCursor &&
+        parsedCursor.sortField === sortField &&
+        parsedCursor.sortDirection === sortDirection
+      ) {
+        const cursorCondition = buildCursorCondition(parsedCursor);
+        if (cursorCondition) {
+          filters.push(cursorCondition);
+        }
+      } else if (useLegacySlugCursor) {
+        filters.push(sql`${events.slug} > ${query.cursor}`);
+      }
     }
 
     const condition = combineFilters(filters);
 
-    let selectQuery = this.db
-      .select({
-        eventId: events.eventId,
-        organizationId: events.organizationId,
-        providerId: events.providerId,
-        externalRef: events.externalRef,
-        type: events.type,
-        name: events.name,
-        slug: events.slug,
-        description: events.description,
-        startDate: events.startDate,
-        endDate: events.endDate,
-        sanctioningBody: events.sanctioningBody,
-        season: events.season,
-        metadata: events.metadata,
-        createdAt: events.createdAt,
-        updatedAt: events.updatedAt,
-      })
-      .from(events)
-      .orderBy(events.slug)
-      .limit(limit + 1);
+    const selectColumns = {
+      eventId: events.eventId,
+      organizationId: events.organizationId,
+      providerId: events.providerId,
+      externalRef: events.externalRef,
+      type: events.type,
+      name: events.name,
+      slug: events.slug,
+      description: events.description,
+      startDate: events.startDate,
+      endDate: events.endDate,
+      sanctioningBody: events.sanctioningBody,
+      season: events.season,
+      metadata: events.metadata,
+      createdAt: events.createdAt,
+      updatedAt: events.updatedAt,
+    } as const;
+
+    let selectQuery = this.db.select(selectColumns).from(events).limit(limit + 1);
 
     if (condition) {
       selectQuery = selectQuery.where(condition);
     }
 
+    const directionSql = sortDirection === 'desc' ? sql`DESC` : sql`ASC`;
+    const orderExpressions = (() => {
+      switch (sortField) {
+        case 'start_date':
+          return [sql`${events.startDate} ${directionSql} NULLS LAST`, sql`${events.eventId} ASC`];
+        case 'created_at':
+          return [sql`${events.createdAt} ${directionSql} NULLS LAST`, sql`${events.eventId} ASC`];
+        case 'name':
+          return [sql`${events.name} ${directionSql}`, sql`${events.eventId} ASC`];
+        case 'slug':
+        default:
+          return [sql`${events.slug} ${directionSql}`, sql`${events.eventId} ASC`];
+      }
+    })();
+
+    selectQuery = selectQuery.orderBy(...orderExpressions);
+
     const rows = (await selectQuery) as EventRow[];
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);
-    const nextCursor = hasMore && page.length ? page[page.length - 1].slug : undefined;
+    const lastRow = page.length ? page[page.length - 1] : null;
+
+    let nextCursor: string | undefined;
+    if (hasMore && lastRow) {
+      if (useLegacySlugCursor) {
+        nextCursor = lastRow.slug;
+      } else {
+        let cursorValue: string | null = null;
+        switch (sortField) {
+          case 'start_date':
+            cursorValue = lastRow.startDate ? lastRow.startDate.toISOString() : null;
+            break;
+          case 'created_at':
+            cursorValue = lastRow.createdAt ? lastRow.createdAt.toISOString() : null;
+            break;
+          case 'name':
+            cursorValue = lastRow.name;
+            break;
+          case 'slug':
+          default:
+            cursorValue = lastRow.slug;
+            break;
+        }
+        nextCursor = encodeCursor({
+          sortField,
+          sortDirection,
+          value: cursorValue,
+          eventId: lastRow.eventId,
+        });
+      }
+    }
 
     return {
       items: page.map((row) => this.toEventRecord(row)),
@@ -1655,6 +1903,52 @@ export class PostgresStore implements RatingStore {
     return {
       items: (rows as CompetitionRow[]).map((row) => this.toCompetitionRecord(row)),
     } satisfies CompetitionListResult;
+  }
+
+  async listCompetitionsByEventIds(eventIds: string[]): Promise<CompetitionsByEventMap> {
+    if (!eventIds.length) {
+      return {};
+    }
+
+    const rows = await this.db
+      .select({
+        competitionId: competitions.competitionId,
+        eventId: competitions.eventId,
+        organizationId: competitions.organizationId,
+        providerId: competitions.providerId,
+        externalRef: competitions.externalRef,
+        name: competitions.name,
+        slug: competitions.slug,
+        sport: competitions.sport,
+        discipline: competitions.discipline,
+        format: competitions.format,
+        tier: competitions.tier,
+        status: competitions.status,
+        drawSize: competitions.drawSize,
+        startDate: competitions.startDate,
+        endDate: competitions.endDate,
+        classification: competitions.classification,
+        purse: competitions.purse,
+        purseCurrency: competitions.purseCurrency,
+        mediaLinks: competitions.mediaLinks,
+        metadata: competitions.metadata,
+        createdAt: competitions.createdAt,
+        updatedAt: competitions.updatedAt,
+      })
+      .from(competitions)
+      .where(inArray(competitions.eventId, eventIds))
+      .orderBy(competitions.eventId, competitions.slug);
+
+    const result: CompetitionsByEventMap = {};
+    for (const row of rows as CompetitionRow[]) {
+      const record = this.toCompetitionRecord(row);
+      if (!result[record.eventId]) {
+        result[record.eventId] = [];
+      }
+      result[record.eventId].push(record);
+    }
+
+    return result;
   }
 
   async getCompetitionById(competitionId: string): Promise<CompetitionRecord | null> {

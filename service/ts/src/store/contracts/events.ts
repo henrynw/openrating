@@ -109,12 +109,32 @@ export interface EventUpdateInput {
   metadata?: Record<string, unknown> | null;
 }
 
+export type EventScheduleStatus = 'UPCOMING' | 'IN_PROGRESS' | 'COMPLETED';
+
+export type EventListSortField = 'start_date' | 'created_at' | 'name' | 'slug';
+
+export type EventListSortDirection = 'asc' | 'desc';
+
+export type EventListInclude = 'competitions';
+
 export interface EventListQuery {
   organizationId: string;
   types?: EventType[];
+  sport?: string | null;
+  discipline?: string | null;
+  statuses?: EventScheduleStatus[];
+  season?: string | null;
+  sanctioningBody?: string | null;
+  startDateFrom?: string | null;
+  startDateTo?: string | null;
+  endDateFrom?: string | null;
+  endDateTo?: string | null;
   cursor?: string;
   limit?: number;
   q?: string;
+  sortField?: EventListSortField;
+  sortDirection?: EventListSortDirection;
+  includes?: EventListInclude[];
 }
 
 export interface EventListResult {

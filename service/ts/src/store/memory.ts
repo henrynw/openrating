@@ -51,6 +51,7 @@ import type {
   EventRecord,
   EventClassification,
   EventMediaLinks,
+  EventScheduleStatus,
   RatingEventListQuery,
   RatingEventListResult,
   RatingEventRecord,
@@ -71,6 +72,7 @@ import type {
   CompetitionRecord,
   CompetitionListQuery,
   CompetitionListResult,
+  CompetitionsByEventMap,
   CompetitionParticipantUpsertInput,
   CompetitionParticipantRecord,
   CompetitionParticipantListResult,
@@ -1975,6 +1977,81 @@ export class MemoryStore implements RatingStore {
   async listEvents(query: EventListQuery): Promise<EventListResult> {
     this.assertOrganizationExists(query.organizationId);
     const limit = clampLimit(query.limit);
+
+    const sortField = query.sortField ?? 'slug';
+    const sortDirection = query.sortDirection
+      ?? (sortField === 'slug' || sortField === 'name' ? 'asc' : 'desc');
+    const useLegacySlugCursor = !query.sortField && !query.sortDirection && sortField === 'slug' && sortDirection === 'asc';
+
+    const decodeCursor = (raw: string): {
+      sortField: typeof sortField;
+      sortDirection: typeof sortDirection;
+      value: string | null;
+      eventId: string;
+    } | null => {
+      try {
+        const normalized = raw.replace(/-/g, '+').replace(/_/g, '/');
+        const padding = (4 - (normalized.length % 4)) % 4;
+        const payload = Buffer.from(normalized + '='.repeat(padding), 'base64').toString('utf8');
+        const parsed = JSON.parse(payload) as {
+          sortField?: typeof sortField;
+          sortDirection?: typeof sortDirection;
+          value?: string | null;
+          eventId?: string;
+        };
+        if (!parsed || !parsed.sortField || !parsed.sortDirection || !parsed.eventId) {
+          return null;
+        }
+        return {
+          sortField: parsed.sortField,
+          sortDirection: parsed.sortDirection,
+          value: parsed.value ?? null,
+          eventId: parsed.eventId,
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    const encodeCursor = (payload: {
+      sortField: typeof sortField;
+      sortDirection: typeof sortDirection;
+      value: string | null;
+      eventId: string;
+    }): string => {
+      const json = JSON.stringify(payload);
+      return Buffer.from(json, 'utf8')
+        .toString('base64')
+        .replace(/=+$/g, '')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_');
+    };
+
+    const now = new Date();
+
+    const matchesStatus = (event: MemoryEventRecord, status: EventScheduleStatus): boolean => {
+      const start = event.startDate ?? null;
+      const end = event.endDate ?? null;
+      switch (status) {
+        case 'UPCOMING':
+          if (start && start > now) return true;
+          if (!start && end && end > now) return true;
+          return false;
+        case 'IN_PROGRESS':
+          if (start && start <= now) {
+            if (!end || end >= now) return true;
+          }
+          if (!start && end && end >= now) return true;
+          return false;
+        case 'COMPLETED':
+          if (end && end < now) return true;
+          if (!end && start && start < now) return true;
+          return false;
+        default:
+          return false;
+      }
+    };
+
     let items = Array.from(this.events.values()).filter((event) => event.organizationId === query.organizationId);
 
     if (query.types && query.types.length) {
@@ -1982,25 +2059,250 @@ export class MemoryStore implements RatingStore {
       items = items.filter((event) => types.has(event.type as any));
     }
 
-    if (query.q) {
-      const lower = query.q.toLowerCase();
-      items = items.filter((event) => event.name.toLowerCase().includes(lower) || event.slug.includes(lower));
+    if (query.season) {
+      items = items.filter((event) => event.season === query.season);
     }
 
-    items.sort((a, b) => a.slug.localeCompare(b.slug));
+    if (query.sanctioningBody) {
+      items = items.filter((event) => event.sanctioningBody === query.sanctioningBody);
+    }
+
+    if (query.startDateFrom) {
+      const from = new Date(query.startDateFrom);
+      items = items.filter((event) => event.startDate && event.startDate >= from);
+    }
+
+    if (query.startDateTo) {
+      const to = new Date(query.startDateTo);
+      items = items.filter((event) => event.startDate && event.startDate <= to);
+    }
+
+    if (query.endDateFrom) {
+      const from = new Date(query.endDateFrom);
+      items = items.filter((event) => event.endDate && event.endDate >= from);
+    }
+
+    if (query.endDateTo) {
+      const to = new Date(query.endDateTo);
+      items = items.filter((event) => event.endDate && event.endDate <= to);
+    }
+
+    if (query.q) {
+      const lower = query.q.toLowerCase();
+      items = items.filter(
+        (event) => event.name.toLowerCase().includes(lower) || event.slug.toLowerCase().includes(lower)
+      );
+    }
+
+    if (query.sport || query.discipline) {
+      items = items.filter((event) => {
+        const competitions = Array.from(this.competitions.values()).filter(
+          (competition) => competition.eventId === event.eventId
+        );
+        if (competitions.length === 0) return false;
+        return competitions.some((competition) => {
+          if (query.sport && competition.sport !== query.sport) return false;
+          if (query.discipline && competition.discipline !== query.discipline) return false;
+          return true;
+        });
+      });
+    }
+
+    if (query.statuses && query.statuses.length) {
+      items = items.filter((event) =>
+        query.statuses!.some((status) => matchesStatus(event, status))
+      );
+    }
+
+    const getSortValue = (event: MemoryEventRecord): number | string | null => {
+      switch (sortField) {
+        case 'start_date':
+          return event.startDate ? event.startDate.getTime() : null;
+        case 'created_at':
+          return event.createdAt ? event.createdAt.getTime() : null;
+        case 'name':
+          return event.name;
+        case 'slug':
+        default:
+          return event.slug;
+      }
+    };
+
+    items.sort((a, b) => {
+      const valueA = getSortValue(a);
+      const valueB = getSortValue(b);
+
+      if (valueA === valueB) {
+        return a.eventId.localeCompare(b.eventId);
+      }
+
+      if (valueA === null) {
+        return 1;
+      }
+      if (valueB === null) {
+        return -1;
+      }
+
+      if (typeof valueA === 'number' && typeof valueB === 'number') {
+        return sortDirection === 'asc' ? valueA - valueB : valueB - valueA;
+      }
+
+      const comparison = String(valueA).localeCompare(String(valueB));
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+
+    const isAfterCursor = (event: MemoryEventRecord, payload: {
+      sortField: typeof sortField;
+      sortDirection: typeof sortDirection;
+      value: string | null;
+      eventId: string;
+    }): boolean => {
+      const eventSortValue = getSortValue(event);
+      const cursorValue = payload.value;
+
+      const compareEventId = () => event.eventId.localeCompare(payload.eventId) > 0;
+
+      switch (payload.sortField) {
+        case 'start_date': {
+          const eventValue = typeof eventSortValue === 'number' ? eventSortValue : null;
+          const cursorMillis = cursorValue ? new Date(cursorValue).getTime() : null;
+          if (cursorMillis === null || Number.isNaN(cursorMillis)) {
+            return compareEventId();
+          }
+          if (payload.sortDirection === 'asc') {
+            if (eventValue === null) {
+              return cursorMillis !== null ? true : compareEventId();
+            }
+            if (cursorMillis === null) {
+              return false;
+            }
+            if (eventValue > cursorMillis) return true;
+            if (eventValue === cursorMillis) return compareEventId();
+            return false;
+          }
+          // desc
+          if (eventValue === null) {
+            return cursorMillis !== null ? true : compareEventId();
+          }
+          if (cursorMillis === null) {
+            return false;
+          }
+          if (eventValue < cursorMillis) return true;
+          if (eventValue === cursorMillis) return compareEventId();
+          return false;
+        }
+        case 'created_at': {
+          const eventValue = typeof eventSortValue === 'number' ? eventSortValue : null;
+          const cursorMillis = cursorValue ? new Date(cursorValue).getTime() : null;
+          if (cursorMillis === null || Number.isNaN(cursorMillis)) {
+            return compareEventId();
+          }
+          if (payload.sortDirection === 'asc') {
+            if (eventValue === null) {
+              return cursorMillis !== null ? true : compareEventId();
+            }
+            if (cursorMillis === null) {
+              return false;
+            }
+            if (eventValue > cursorMillis) return true;
+            if (eventValue === cursorMillis) return compareEventId();
+            return false;
+          }
+          if (eventValue === null) {
+            return cursorMillis !== null ? true : compareEventId();
+          }
+          if (cursorMillis === null) {
+            return false;
+          }
+          if (eventValue < cursorMillis) return true;
+          if (eventValue === cursorMillis) return compareEventId();
+          return false;
+        }
+        case 'name': {
+          if (!cursorValue) {
+            return compareEventId();
+          }
+          const comparison = String(eventSortValue).localeCompare(cursorValue);
+          if (payload.sortDirection === 'asc') {
+            if (comparison > 0) return true;
+            if (comparison === 0) return compareEventId();
+            return false;
+          }
+          if (comparison < 0) return true;
+          if (comparison === 0) return compareEventId();
+          return false;
+        }
+        case 'slug':
+        default: {
+          if (!cursorValue) {
+            return compareEventId();
+          }
+          const comparison = String(eventSortValue).localeCompare(cursorValue);
+          if (payload.sortDirection === 'asc') {
+            if (comparison > 0) return true;
+            if (comparison === 0) return compareEventId();
+            return false;
+          }
+          if (comparison < 0) return true;
+          if (comparison === 0) return compareEventId();
+          return false;
+        }
+      }
+    };
 
     let startIndex = 0;
     if (query.cursor) {
-      startIndex = items.findIndex((event) => event.slug > query.cursor!);
-      if (startIndex === -1) {
-        return { items: [], nextCursor: undefined };
+      const parsedCursor = decodeCursor(query.cursor);
+      if (
+        parsedCursor &&
+        parsedCursor.sortField === sortField &&
+        parsedCursor.sortDirection === sortDirection
+      ) {
+        startIndex = items.findIndex((event) => isAfterCursor(event, parsedCursor));
+        if (startIndex === -1) {
+          return { items: [], nextCursor: undefined };
+        }
+      } else if (useLegacySlugCursor) {
+        startIndex = items.findIndex((event) => event.slug > query.cursor!);
+        if (startIndex === -1) {
+          return { items: [], nextCursor: undefined };
+        }
       }
     }
 
     const slice = items.slice(startIndex, startIndex + limit);
-    const nextCursor = items.length > startIndex + slice.length && slice.length
-      ? slice[slice.length - 1].slug
-      : undefined;
+    const hasMore = items.length > startIndex + slice.length;
+    const last = slice.length ? slice[slice.length - 1] : null;
+
+    let nextCursor: string | undefined;
+    if (hasMore && last) {
+      if (useLegacySlugCursor) {
+        nextCursor = last.slug;
+      } else {
+        let cursorValue: string | null = null;
+        switch (sortField) {
+          case 'start_date':
+            cursorValue = last.startDate ? last.startDate.toISOString() : null;
+            break;
+          case 'created_at':
+            cursorValue = last.createdAt ? last.createdAt.toISOString() : null;
+            break;
+          case 'name':
+            cursorValue = last.name;
+            break;
+          case 'slug':
+          default:
+            cursorValue = last.slug;
+            break;
+        }
+        nextCursor = encodeCursor({
+          sortField,
+          sortDirection,
+          value: cursorValue,
+          eventId: last.eventId,
+        });
+      }
+    }
 
     return {
       items: slice.map((event) => this.toEventRecord(event)),
@@ -2146,6 +2448,25 @@ export class MemoryStore implements RatingStore {
       .filter((competition) => competition.eventId === query.eventId)
       .map((competition) => this.toCompetitionRecord(competition));
     return { items };
+  }
+
+  async listCompetitionsByEventIds(eventIds: string[]): Promise<CompetitionsByEventMap> {
+    if (!eventIds.length) return {};
+    const result: CompetitionsByEventMap = {};
+    const filter = new Set(eventIds);
+    for (const competition of this.competitions.values()) {
+      if (!filter.has(competition.eventId)) continue;
+      if (!result[competition.eventId]) {
+        result[competition.eventId] = [];
+      }
+      result[competition.eventId].push(this.toCompetitionRecord(competition));
+    }
+    for (const eventId of eventIds) {
+      if (!result[eventId]) {
+        result[eventId] = [];
+      }
+    }
+    return result;
   }
 
   async getCompetitionById(competitionId: string): Promise<CompetitionRecord | null> {
