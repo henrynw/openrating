@@ -79,19 +79,20 @@ export class ProfilePhotoService {
       throw new ProfilePhotoServiceDisabledError();
     }
 
-    const body = {
-      requireSignedURLs: Boolean(params.requireSignedUrl ?? false),
-      metadata: {
+    const form = new FormData();
+    form.append('requireSignedURLs', String(Boolean(params.requireSignedUrl ?? false)));
+    form.append(
+      'metadata',
+      JSON.stringify({
         organizationId: params.organizationId,
         playerId: params.playerId,
         ...(params.contentType ? { contentType: params.contentType } : {}),
-      },
-    } satisfies Record<string, unknown>;
+      })
+    );
 
     const response = await this.request('/images/v2/direct_upload', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: form,
     });
 
     const { result } = await response.json();

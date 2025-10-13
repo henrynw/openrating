@@ -29,6 +29,17 @@ import {
   competitionParticipants,
   ratingReplayQueue,
 } from '../db/schema.js';
+import {
+  buildMatchCursor,
+  parseMatchCursor,
+  buildRatingEventCursor,
+  parseNumericRatingEventCursor,
+} from './util/cursors.js';
+import { clampLimit } from './util/pagination.js';
+import { encodeLeaderboardCursor, decodeLeaderboardCursor } from './util/leaderboard-cursor.js';
+import { combineFilters, type SqlFilter } from './postgres/sql-helpers.js';
+import { createPostgresContext, type PostgresStoreContext } from './postgres/context.js';
+import { createOrganizationsModule, type OrganizationsModule } from './postgres/modules/organizations.js';
 import type {
   EnsurePlayersResult,
   LadderKey,
@@ -123,6 +134,7 @@ import {
   buildPairKey,
   sortPairPlayers,
 } from './helpers.js';
+import { slugify } from './util/slug.js';
 import { reconcileBirthDetails } from './birth.js';
 import {
   resolveAgeFilter,
@@ -138,70 +150,6 @@ import {
 } from '../insights/builder.js';
 
 const now = () => new Date();
-const DEFAULT_PAGE_SIZE = 50;
-const MAX_PAGE_SIZE = 200;
-
-const clampLimit = (limit?: number) => {
-  if (!limit || limit < 1) return DEFAULT_PAGE_SIZE;
-  return Math.min(limit, MAX_PAGE_SIZE);
-};
-
-const combineFilters = (filters: any[]) => {
-  if (!filters.length) return undefined;
-  return filters.reduce((acc: any, filter: any) => (acc ? and(acc, filter) : filter), undefined as any);
-};
-
-const buildMatchCursor = (startTime: Date, matchId: string) => `${startTime.toISOString()}|${matchId}`;
-
-const parseMatchCursor = (cursor: string) => {
-  const [ts, id] = cursor.split('|');
-  if (!ts || !id) return null;
-  const date = new Date(ts);
-  if (Number.isNaN(date.getTime())) return null;
-  return { startTime: date, matchId: id };
-};
-
-const buildRatingEventCursor = (createdAt: Date, id: number) => `${createdAt.toISOString()}|${id}`;
-
-const parseRatingEventCursor = (cursor: string) => {
-  const [ts, idRaw] = cursor.split('|');
-  if (!ts || !idRaw) return null;
-  const createdAt = new Date(ts);
-  if (Number.isNaN(createdAt.getTime())) return null;
-  const id = Number(idRaw);
-  if (!Number.isFinite(id)) return null;
-  return { createdAt, id };
-};
-
-interface LeaderboardCursorPayload {
-  mu: number;
-  playerId: string;
-  rank: number;
-}
-
-const encodeLeaderboardCursor = (payload: LeaderboardCursorPayload) =>
-  Buffer.from(JSON.stringify(payload), 'utf8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-
-const decodeLeaderboardCursor = (cursor: string): LeaderboardCursorPayload | null => {
-  try {
-    const normalized = cursor.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
-    const json = Buffer.from(padded, 'base64').toString('utf8');
-    const parsed = JSON.parse(json) as Partial<LeaderboardCursorPayload>;
-    if (!parsed || typeof parsed !== 'object') return null;
-    if (typeof parsed.mu !== 'number' || Number.isNaN(parsed.mu)) return null;
-    if (typeof parsed.playerId !== 'string' || !parsed.playerId.length) return null;
-    if (typeof parsed.rank !== 'number' || Number.isNaN(parsed.rank)) return null;
-    const safeRank = Math.max(0, Math.floor(parsed.rank));
-    return { mu: parsed.mu, playerId: parsed.playerId, rank: safeRank };
-  } catch {
-    return null;
-  }
-};
 
 const clampValue = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
@@ -374,60 +322,13 @@ type CompetitionParticipantRow = {
   updatedAt: Date;
 };
 
-const slugify = (value: string) =>
-  value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '') || randomUUID();
-
 export class PostgresStore implements RatingStore {
-  constructor(private readonly db = getDb()) {}
+  private readonly ctx: PostgresStoreContext;
+  private readonly organizations: OrganizationsModule;
 
-  private async getOrganizationRowById(id: string) {
-    const rows = await this.db
-      .select({
-        organizationId: organizations.organizationId,
-        name: organizations.name,
-        slug: organizations.slug,
-        description: organizations.description,
-        createdAt: organizations.createdAt,
-      })
-      .from(organizations)
-      .where(eq(organizations.organizationId, id))
-      .limit(1);
-    return rows.at(0) ?? null;
-  }
-
-  private async getOrganizationRowBySlug(slug: string) {
-    const rows = await this.db
-      .select({
-        organizationId: organizations.organizationId,
-        name: organizations.name,
-        slug: organizations.slug,
-        description: organizations.description,
-        createdAt: organizations.createdAt,
-      })
-      .from(organizations)
-      .where(eq(organizations.slug, slug))
-      .limit(1);
-    return rows.at(0) ?? null;
-  }
-
-  private toOrganizationRecord(row: {
-    organizationId: string;
-    name: string;
-    slug: string;
-    description: string | null;
-    createdAt: Date | null;
-  }): OrganizationRecord {
-    return {
-      organizationId: row.organizationId,
-      name: row.name,
-      slug: row.slug,
-      description: row.description,
-      createdAt: row.createdAt?.toISOString(),
-    };
+  constructor(private readonly db = getDb()) {
+    this.ctx = createPostgresContext(this.db);
+    this.organizations = createOrganizationsModule(this.ctx);
   }
 
   private toPlayerRecord(row: {
@@ -562,9 +463,14 @@ export class PostgresStore implements RatingStore {
     query: PlayerInsightsQuery,
     client = this.db
   ): Promise<PlayerInsightSourceEvent[]> {
-    const filters: any[] = [eq(playerRatingHistory.playerId, query.playerId)];
+    const filters: SqlFilter[] = [eq(playerRatingHistory.playerId, query.playerId)];
     if (query.sport) filters.push(eq(ratingLadders.sport, query.sport));
     if (query.discipline) filters.push(eq(ratingLadders.discipline, query.discipline));
+
+    const condition = combineFilters(filters);
+    if (!condition) {
+      throw new Error('Invalid insight event filter state');
+    }
 
     const rows = await client
       .select({
@@ -582,7 +488,7 @@ export class PostgresStore implements RatingStore {
       })
       .from(playerRatingHistory)
       .innerJoin(ratingLadders, eq(playerRatingHistory.ladderId, ratingLadders.ladderId))
-      .where(filters.length > 1 ? and(...filters) : filters[0])
+      .where(condition)
       .orderBy(playerRatingHistory.createdAt);
 
     return (rows as PlayerInsightEventRow[]).map((row) => this.toPlayerInsightEvent(row));
@@ -592,9 +498,14 @@ export class PostgresStore implements RatingStore {
     query: PlayerInsightsQuery,
     client = this.db
   ): Promise<PlayerInsightCurrentRating[]> {
-    const filters: any[] = [eq(playerRatings.playerId, query.playerId)];
+    const filters: SqlFilter[] = [eq(playerRatings.playerId, query.playerId)];
     if (query.sport) filters.push(eq(ratingLadders.sport, query.sport));
     if (query.discipline) filters.push(eq(ratingLadders.discipline, query.discipline));
+
+    const condition = combineFilters(filters);
+    if (!condition) {
+      throw new Error('Invalid insight rating filter state');
+    }
 
     const rows = await client
       .select({
@@ -607,7 +518,7 @@ export class PostgresStore implements RatingStore {
       })
       .from(playerRatings)
       .innerJoin(ratingLadders, eq(playerRatings.ladderId, ratingLadders.ladderId))
-      .where(filters.length > 1 ? and(...filters) : filters[0])
+      .where(condition)
       .orderBy(playerRatings.updatedAt);
 
     return (rows as PlayerInsightRatingRow[]).map((row) => this.toPlayerInsightRating(row));
@@ -1043,12 +954,6 @@ export class PostgresStore implements RatingStore {
     return results;
   }
 
-  private async assertOrganizationExists(id: string) {
-    const org = await this.getOrganizationRowById(id);
-    if (!org) throw new OrganizationLookupError(`Organization not found: ${id}`);
-    return org;
-  }
-
   private async applyInactivity(tx: any, asOf: Date) {
     const rows = await tx
       .select({
@@ -1322,7 +1227,7 @@ export class PostgresStore implements RatingStore {
 
   private async ensureRegion(regionId: string | null | undefined, organizationId: string, tx = this.db) {
     if (!regionId || isDefaultRegion(regionId)) return null;
-    await this.assertOrganizationExists(organizationId);
+    await this.ctx.assertOrganizationExists(organizationId);
     await tx
       .insert(regions)
       .values({
@@ -1346,7 +1251,7 @@ export class PostgresStore implements RatingStore {
     tx = this.db
   ) {
     if (!venueId) return null;
-    await this.assertOrganizationExists(organizationId);
+    await this.ctx.assertOrganizationExists(organizationId);
     await tx
       .insert(venues)
       .values({
@@ -1363,141 +1268,27 @@ export class PostgresStore implements RatingStore {
   }
 
   async createOrganization(input: OrganizationCreateInput): Promise<OrganizationRecord> {
-    const organizationId = randomUUID();
-    const slug = (input.slug ?? slugify(input.name)).toLowerCase();
-
-    try {
-      const [row] = await this.db
-        .insert(organizations)
-        .values({
-          organizationId,
-          name: input.name,
-          slug,
-          description: input.description ?? null,
-          createdAt: now(),
-          updatedAt: now(),
-        })
-        .returning({
-          organizationId: organizations.organizationId,
-          name: organizations.name,
-          slug: organizations.slug,
-          description: organizations.description,
-          createdAt: organizations.createdAt,
-        });
-      return this.toOrganizationRecord(row);
-    } catch (err: any) {
-      if (err && typeof err === 'object' && 'code' in err && err.code === '23505') {
-        throw new OrganizationLookupError(`Slug already in use: ${slug}`);
-      }
-      throw err;
-    }
+    return this.organizations.createOrganization(input);
   }
 
   async updateOrganization(organizationId: string, input: OrganizationUpdateInput): Promise<OrganizationRecord> {
-    const updates: Record<string, any> = {};
-
-    if (input.name !== undefined) {
-      updates.name = input.name;
-    }
-    if (input.description !== undefined) {
-      updates.description = input.description ?? null;
-    }
-    if (input.slug !== undefined) {
-      updates.slug = input.slug.toLowerCase();
-    }
-
-    if (!Object.keys(updates).length) {
-      const existing = await this.getOrganizationRowById(organizationId);
-      if (!existing) {
-        throw new OrganizationLookupError(`Organization not found: ${organizationId}`);
-      }
-      return this.toOrganizationRecord(existing);
-    }
-
-    updates.updatedAt = now();
-
-    try {
-      const [row] = await this.db
-        .update(organizations)
-        .set(updates)
-        .where(eq(organizations.organizationId, organizationId))
-        .returning({
-          organizationId: organizations.organizationId,
-          name: organizations.name,
-          slug: organizations.slug,
-          description: organizations.description,
-          createdAt: organizations.createdAt,
-        });
-
-      if (!row) {
-        throw new OrganizationLookupError(`Organization not found: ${organizationId}`);
-      }
-
-      return this.toOrganizationRecord(row);
-    } catch (err: any) {
-      if (err && typeof err === 'object' && 'code' in err && err.code === '23505') {
-        const slug = input.slug?.toLowerCase();
-        throw new OrganizationLookupError(`Slug already in use: ${slug}`);
-      }
-      throw err;
-    }
+    return this.organizations.updateOrganization(organizationId, input);
   }
 
   async listOrganizations(query: OrganizationListQuery): Promise<OrganizationListResult> {
-    const limit = clampLimit(query.limit);
-    const filters: any[] = [];
-
-    if (query.cursor) {
-      filters.push(sql`${organizations.slug} > ${query.cursor}`);
-    }
-
-    if (query.q) {
-      filters.push(sql`${organizations.name} ILIKE ${`%${query.q}%`}`);
-    }
-
-    const condition = combineFilters(filters);
-
-    const rows = (await this.db
-      .select({
-        organizationId: organizations.organizationId,
-        name: organizations.name,
-        slug: organizations.slug,
-        description: organizations.description,
-        createdAt: organizations.createdAt,
-      })
-      .from(organizations)
-      .where(condition)
-      .orderBy(organizations.slug)
-      .limit(limit + 1)) as Array<{
-      organizationId: string;
-      name: string;
-      slug: string;
-      description: string | null;
-      createdAt: Date | null;
-    }>;
-
-    const hasMore = rows.length > limit;
-    const page = rows.slice(0, limit);
-    const nextCursor = hasMore && page.length ? page[page.length - 1].slug : undefined;
-
-    return {
-      items: page.map((row) => this.toOrganizationRecord(row)),
-      nextCursor,
-    };
+    return this.organizations.listOrganizations(query);
   }
 
   async getOrganizationBySlug(slug: string): Promise<OrganizationRecord | null> {
-    const row = await this.getOrganizationRowBySlug(slug);
-    return row ? this.toOrganizationRecord(row) : null;
+    return this.organizations.getOrganizationBySlug(slug);
   }
 
   async getOrganizationById(id: string): Promise<OrganizationRecord | null> {
-    const row = await this.getOrganizationRowById(id);
-    return row ? this.toOrganizationRecord(row) : null;
+    return this.organizations.getOrganizationById(id);
   }
 
   async createEvent(input: EventCreateInput): Promise<EventRecord> {
-    await this.assertOrganizationExists(input.organizationId);
+    await this.ctx.assertOrganizationExists(input.organizationId);
     await this.ensureProvider(input.providerId);
 
     if (input.externalRef) {
@@ -1608,10 +1399,10 @@ export class PostgresStore implements RatingStore {
   }
 
   async listEvents(query: EventListQuery): Promise<EventListResult> {
-    await this.assertOrganizationExists(query.organizationId);
+    await this.ctx.assertOrganizationExists(query.organizationId);
     const limit = clampLimit(query.limit);
 
-    const filters: any[] = [eq(events.organizationId, query.organizationId)];
+    const filters: SqlFilter[] = [eq(events.organizationId, query.organizationId)];
 
     if (query.types && query.types.length) {
       filters.push(inArray(events.type, query.types));
@@ -1675,7 +1466,7 @@ export class PostgresStore implements RatingStore {
   }
 
   async createCompetition(input: CompetitionCreateInput): Promise<CompetitionRecord> {
-    await this.assertOrganizationExists(input.organizationId);
+    await this.ctx.assertOrganizationExists(input.organizationId);
     const event = await this.getEventRowById(input.eventId);
     if (!event) {
       throw new EventLookupError(`Event not found: ${input.eventId}`);
@@ -1968,7 +1759,7 @@ export class PostgresStore implements RatingStore {
 
   async createPlayer(input: PlayerCreateInput): Promise<PlayerRecord> {
     const playerId = randomUUID();
-    await this.assertOrganizationExists(input.organizationId);
+    await this.ctx.assertOrganizationExists(input.organizationId);
     const regionId = await this.ensureRegion(input.regionId ?? null, input.organizationId);
 
     const birthPatch: { birthYear?: number | null; birthDate?: string | null } = {};
@@ -2207,7 +1998,7 @@ export class PostgresStore implements RatingStore {
     const ladderId = await this.ensureLadder(ladderKey);
     if (ids.length === 0) return { ladderId, players: new Map() };
 
-    await this.assertOrganizationExists(options.organizationId);
+    await this.ctx.assertOrganizationExists(options.organizationId);
 
     const playerRows = (await this.db
       .select({
@@ -2393,7 +2184,7 @@ export class PostgresStore implements RatingStore {
     const ratingSkipReason: MatchRatingSkipReason | null = params.ratingSkipReason ?? null;
 
     await this.ensureProvider(params.submissionMeta.providerId);
-    await this.assertOrganizationExists(params.submissionMeta.organizationId);
+    await this.ctx.assertOrganizationExists(params.submissionMeta.organizationId);
     await this.ensureSport(params.match.sport);
 
     const playerIds = new Set<string>();
@@ -2864,13 +2655,13 @@ export class PostgresStore implements RatingStore {
     const ladderId = buildLadderId(query.ladderKey);
     const limit = clampLimit(query.limit);
 
-    const filters: any[] = [
+    const filters: SqlFilter[] = [
       eq(playerRatingHistory.playerId, query.playerId),
       eq(playerRatingHistory.ladderId, ladderId),
     ];
 
     if (query.organizationId) {
-      await this.assertOrganizationExists(query.organizationId);
+      await this.ctx.assertOrganizationExists(query.organizationId);
       filters.push(eq(matches.organizationId, query.organizationId));
     }
 
@@ -2893,7 +2684,7 @@ export class PostgresStore implements RatingStore {
     }
 
     if (query.cursor) {
-      const parsed = parseRatingEventCursor(query.cursor);
+      const parsed = parseNumericRatingEventCursor(query.cursor);
       if (parsed) {
         filters.push(
           or(
@@ -2941,7 +2732,7 @@ export class PostgresStore implements RatingStore {
     const items: RatingEventRecord[] = page.map((row) => this.toRatingEventRecord(row));
     const last = page.at(-1);
     const nextCursor = hasMore && last
-      ? buildRatingEventCursor(last.createdAt, last.id)
+      ? buildRatingEventCursor({ createdAt: last.createdAt, id: last.id })
       : undefined;
 
     return { items, nextCursor };
@@ -2956,14 +2747,14 @@ export class PostgresStore implements RatingStore {
       return null;
     }
 
-    const filters: any[] = [
+    const filters: SqlFilter[] = [
       eq(playerRatingHistory.id, numericId),
       eq(playerRatingHistory.playerId, identifiers.playerId),
       eq(playerRatingHistory.ladderId, ladderId),
     ];
 
     if (identifiers.organizationId) {
-      await this.assertOrganizationExists(identifiers.organizationId);
+      await this.ctx.assertOrganizationExists(identifiers.organizationId);
       filters.push(eq(matches.organizationId, identifiers.organizationId));
     }
 
@@ -3004,10 +2795,10 @@ export class PostgresStore implements RatingStore {
   ): Promise<RatingSnapshot | null> {
     const ladderId = buildLadderId(params.ladderKey);
     if (params.organizationId) {
-      await this.assertOrganizationExists(params.organizationId);
+      await this.ctx.assertOrganizationExists(params.organizationId);
     }
 
-    const filters: any[] = [
+    const filters: SqlFilter[] = [
       eq(playerRatingHistory.playerId, params.playerId),
       eq(playerRatingHistory.ladderId, ladderId),
     ];
@@ -3116,7 +2907,7 @@ export class PostgresStore implements RatingStore {
 
     const baseFilters: any[] = [eq(playerRatings.ladderId, ladderId), gt(playerRatings.matchesCount, 0)];
     if (params.organizationId) {
-      await this.assertOrganizationExists(params.organizationId);
+      await this.ctx.assertOrganizationExists(params.organizationId);
       baseFilters.push(organizationFilter);
     }
 
@@ -3369,7 +3160,7 @@ export class PostgresStore implements RatingStore {
       gte(playerRatingHistory.createdAt, since),
     ];
     if (params.organizationId) {
-      await this.assertOrganizationExists(params.organizationId);
+      await this.ctx.assertOrganizationExists(params.organizationId);
       historyFilters.push(eq(matches.organizationId, params.organizationId));
     }
 
@@ -4887,8 +4678,8 @@ export class PostgresStore implements RatingStore {
 
   async listPlayers(query: PlayerListQuery): Promise<PlayerListResult> {
     const limit = clampLimit(query.limit);
-    await this.assertOrganizationExists(query.organizationId);
-    const filters: any[] = [eq(players.organizationId, query.organizationId)];
+    await this.ctx.assertOrganizationExists(query.organizationId);
+    const filters: SqlFilter[] = [eq(players.organizationId, query.organizationId)];
 
     if (query.cursor) {
       filters.push(sql`${players.playerId} > ${query.cursor}`);
@@ -4976,9 +4767,9 @@ export class PostgresStore implements RatingStore {
   }
 
   async countPlayersBySport(query: PlayerSportTotalsQuery): Promise<PlayerSportTotalsResult> {
-    await this.assertOrganizationExists(query.organizationId);
+    await this.ctx.assertOrganizationExists(query.organizationId);
 
-    const filters: any[] = [eq(players.organizationId, query.organizationId)];
+    const filters: SqlFilter[] = [eq(players.organizationId, query.organizationId)];
 
     if (query.sport) {
       filters.push(eq(ratingLadders.sport, query.sport));
@@ -5014,8 +4805,8 @@ export class PostgresStore implements RatingStore {
 
   async listMatches(query: MatchListQuery): Promise<MatchListResult> {
     const limit = clampLimit(query.limit);
-    await this.assertOrganizationExists(query.organizationId);
-    const filters: any[] = [eq(matches.organizationId, query.organizationId)];
+    await this.ctx.assertOrganizationExists(query.organizationId);
+    const filters: SqlFilter[] = [eq(matches.organizationId, query.organizationId)];
 
     if (query.sport) {
       filters.push(eq(matches.sport, query.sport));
@@ -5123,7 +4914,10 @@ export class PostgresStore implements RatingStore {
 
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);
-    const nextCursor = hasMore && page.length ? buildMatchCursor(page[page.length - 1].startTime, page[page.length - 1].matchId) : undefined;
+    const last = page.at(-1);
+    const nextCursor = hasMore && last
+      ? buildMatchCursor({ startTime: last.startTime, matchId: last.matchId })
+      : undefined;
 
     if (!page.length) {
       return { items: [], nextCursor: undefined };
@@ -5235,9 +5029,9 @@ export class PostgresStore implements RatingStore {
   }
 
   async countMatchesBySport(query: MatchSportTotalsQuery): Promise<MatchSportTotalsResult> {
-    await this.assertOrganizationExists(query.organizationId);
+    await this.ctx.assertOrganizationExists(query.organizationId);
 
-    const filters: any[] = [eq(matches.organizationId, query.organizationId)];
+    const filters: SqlFilter[] = [eq(matches.organizationId, query.organizationId)];
 
     if (query.sport) {
       filters.push(eq(matches.sport, query.sport));

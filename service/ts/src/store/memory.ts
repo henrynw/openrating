@@ -101,6 +101,15 @@ import {
   type PlayerInsightSourceEvent,
   type PlayerInsightCurrentRating,
 } from '../insights/builder.js';
+import {
+  buildMatchCursor,
+  parseMatchCursor,
+  buildRatingEventCursor,
+  parseRatingEventCursor,
+} from './util/cursors.js';
+import { clampLimit } from './util/pagination.js';
+import { encodeLeaderboardCursor, decodeLeaderboardCursor } from './util/leaderboard-cursor.js';
+import { slugify } from './util/slug.js';
 
 interface MemoryRatingRecord extends PlayerState {
   updatedAt: Date;
@@ -230,72 +239,7 @@ interface MemoryMatchRecord {
   ratingSkipReason: MatchRatingSkipReason | null;
 }
 
-const DEFAULT_PAGE_SIZE = 50;
-const MAX_PAGE_SIZE = 200;
-
-const clampLimit = (limit?: number) => {
-  if (!limit || limit < 1) return DEFAULT_PAGE_SIZE;
-  return Math.min(limit, MAX_PAGE_SIZE);
-};
-
-const slugify = (value: string) =>
-  value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '') || randomUUID();
-
 const eventSlugKey = (organizationId: string, slug: string) => `${organizationId}::${slug}`;
-
-const buildMatchCursor = (startTime: Date, matchId: string) => `${startTime.toISOString()}|${matchId}`;
-
-const parseMatchCursor = (cursor: string) => {
-  const [ts, id] = cursor.split('|');
-  if (!ts || !id) return null;
-  const date = new Date(ts);
-  if (Number.isNaN(date.getTime())) return null;
-  return { startTime: date, matchId: id };
-};
-
-const buildRatingEventCursor = (appliedAt: Date, id: string) => `${appliedAt.toISOString()}|${id}`;
-
-const parseRatingEventCursor = (cursor: string) => {
-  const [ts, id] = cursor.split('|');
-  if (!ts || !id) return null;
-  const date = new Date(ts);
-  if (Number.isNaN(date.getTime())) return null;
-  return { appliedAt: date, id };
-};
-
-interface LeaderboardCursorPayload {
-  mu: number;
-  playerId: string;
-  rank: number;
-}
-
-const encodeLeaderboardCursor = (payload: LeaderboardCursorPayload) =>
-  Buffer.from(JSON.stringify(payload), 'utf8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-
-const decodeLeaderboardCursor = (cursor: string): LeaderboardCursorPayload | null => {
-  try {
-    const normalized = cursor.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
-    const json = Buffer.from(padded, 'base64').toString('utf8');
-    const parsed = JSON.parse(json) as Partial<LeaderboardCursorPayload>;
-    if (!parsed || typeof parsed !== 'object') return null;
-    if (typeof parsed.mu !== 'number' || Number.isNaN(parsed.mu)) return null;
-    if (typeof parsed.playerId !== 'string' || !parsed.playerId.length) return null;
-    if (typeof parsed.rank !== 'number' || Number.isNaN(parsed.rank)) return null;
-    const safeRank = Math.max(0, Math.floor(parsed.rank));
-    return { mu: parsed.mu, playerId: parsed.playerId, rank: safeRank };
-  } catch {
-    return null;
-  }
-};
 
 const clampValue = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
@@ -984,8 +928,8 @@ export class MemoryStore implements RatingStore {
       const parsed = parseRatingEventCursor(query.cursor);
       if (parsed) {
         events = events.filter((event) => {
-          if (event.appliedAt < parsed.appliedAt) return true;
-          if (event.appliedAt > parsed.appliedAt) return false;
+          if (event.appliedAt < parsed.createdAt) return true;
+          if (event.appliedAt > parsed.createdAt) return false;
           return event.ratingEventId < parsed.id;
         });
       }
@@ -993,7 +937,7 @@ export class MemoryStore implements RatingStore {
 
     const slice = events.slice(0, limit);
     const nextCursor = events.length > limit && slice.length
-      ? buildRatingEventCursor(slice[slice.length - 1].appliedAt, slice[slice.length - 1].ratingEventId)
+      ? buildRatingEventCursor({ createdAt: slice[slice.length - 1].appliedAt, id: slice[slice.length - 1].ratingEventId })
       : undefined;
 
     return {
@@ -1741,7 +1685,10 @@ export class MemoryStore implements RatingStore {
 
     const slice = matches.slice(0, limit);
     const nextCursor = matches.length > limit && slice.length
-      ? buildMatchCursor(slice[slice.length - 1].startTime, slice[slice.length - 1].matchId)
+      ? buildMatchCursor({
+          startTime: slice[slice.length - 1].startTime,
+          matchId: slice[slice.length - 1].matchId,
+        })
       : undefined;
 
     const items: MatchSummary[] = slice.map((entry) => {
