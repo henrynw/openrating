@@ -119,7 +119,9 @@ export class ProfilePhotoService {
       throw new CloudflareImagesError('Profile photo lookup failed');
     }
 
-    if (result.status !== 'active') {
+    const status = typeof result.status === 'string' ? result.status.toLowerCase() : undefined;
+    const readyStates = new Set(['active', 'ready', 'success', 'finished']);
+    if (status && !readyStates.has(status)) {
       throw new ProfilePhotoNotReadyError();
     }
 
