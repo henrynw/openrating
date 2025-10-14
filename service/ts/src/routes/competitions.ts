@@ -55,6 +55,30 @@ const CompetitionGradeSchema = z
   })
   .strict();
 
+const CompetitionSegmentEnum = z.enum([
+  'STANDARD',
+  'PARA',
+  'JUNIOR',
+  'MASTERS',
+  'COLLEGIATE',
+  'EXHIBITION',
+  'OTHER',
+]);
+
+const CompetitionParticipationEnum = z.enum(['STANDARD', 'PARA', 'MIXED', 'UNKNOWN']);
+
+const CompetitionAgeBracketEnum = z.enum(['UNKNOWN', 'OPEN', 'JUNIOR', 'MASTERS']);
+
+const CompetitionSkillLevelEnum = z.enum(['UNKNOWN', 'PROFESSIONAL', 'AMATEUR', 'COLLEGIATE', 'RECREATIONAL']);
+
+const CompetitionProfileSchema = z
+  .object({
+    participation: CompetitionParticipationEnum.nullable().optional(),
+    age_bracket: CompetitionAgeBracketEnum.nullable().optional(),
+    skill_level: CompetitionSkillLevelEnum.nullable().optional(),
+  })
+  .strict();
+
 const CompetitionClassificationSchema = z.object({
   level: z.enum(['WORLD_TOUR', 'CONTINENTAL', 'NATIONAL', 'REGIONAL', 'CLUB', 'SCHOOL', 'COMMUNITY', 'OTHER'])
     .nullable()
@@ -66,6 +90,10 @@ const CompetitionClassificationSchema = z.object({
     .optional(),
   tour: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
+  segment: CompetitionSegmentEnum.nullable().optional(),
+  profile: CompetitionProfileSchema.nullable().optional(),
+  class_code: z.string().min(1).nullable().optional(),
+  class_codes: z.array(z.string().min(1)).min(1).nullable().optional(),
 });
 
 const CompetitionMediaLinksSchema = z.object({
@@ -393,6 +421,7 @@ export const registerCompetitionRoutes = (app: Express, deps: CompetitionRouteDe
   });
 };
 type CompetitionClassificationInput = z.infer<typeof CompetitionClassificationSchema>;
+type CompetitionProfileInput = z.infer<typeof CompetitionProfileSchema>;
 type CompetitionMediaLinksInput = z.infer<typeof CompetitionMediaLinksSchema>;
 type CompetitionFormatInput = z.infer<typeof CompetitionFormatSchema>;
 type CompetitionGradeInput = z.infer<typeof CompetitionGradeSchema>;
@@ -428,6 +457,25 @@ const mapCompetitionClassificationInput = (
     ageGroup: input.age_group ?? null,
     tour: input.tour ?? null,
     category: input.category ?? null,
+    segment: input.segment ?? null,
+    profile: mapCompetitionProfileInput(input.profile),
+    classCode: input.class_code ?? null,
+    classCodes:
+      input.class_codes === null || input.class_codes === undefined
+        ? input.class_codes ?? null
+        : [...input.class_codes],
+  };
+};
+
+const mapCompetitionProfileInput = (
+  input: CompetitionProfileInput | null | undefined
+): EventClassification['profile'] | null | undefined => {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  return {
+    participation: input.participation ?? null,
+    ageBracket: input.age_bracket ?? null,
+    skillLevel: input.skill_level ?? null,
   };
 };
 

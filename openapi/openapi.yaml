@@ -2559,9 +2559,25 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CompetitionParticipant'
+    CompetitionProfile:
+      type: [object, 'null']
+      description: Orthogonal axes describing who competes in this draw.
+      properties:
+        participation:
+          type: [string, 'null']
+          enum: [STANDARD, PARA, MIXED, UNKNOWN]
+          description: Participation mix — para-only, standard, or blended.
+        age_bracket:
+          type: [string, 'null']
+          enum: [UNKNOWN, OPEN, JUNIOR, MASTERS]
+          description: Age axis inferred from feed metadata when available.
+        skill_level:
+          type: [string, 'null']
+          enum: [UNKNOWN, PROFESSIONAL, AMATEUR, COLLEGIATE, RECREATIONAL]
+          description: Competitive level of the draw when supplied by the feed.
     EventClassification:
       type: object
-      description: Structured hierarchy data describing the competitive level of an event.
+      description: Structured taxonomy for a competition capturing tour hierarchy and participation signals.
       properties:
         level:
           $ref: '#/components/schemas/EventLevel'
@@ -2578,6 +2594,21 @@ components:
         category:
           type: [string, 'null']
           description: Discipline-specific category, draw, or bracket label.
+        segment:
+          type: [string, 'null']
+          enum: [STANDARD, PARA, JUNIOR, MASTERS, COLLEGIATE, EXHIBITION, OTHER]
+          description: Headline marketing segment for the competition as exposed to fans.
+        profile:
+          $ref: '#/components/schemas/CompetitionProfile'
+        class_code:
+          type: [string, 'null']
+          description: Canonical class or division code when a single code applies (e.g. SL3).
+        class_codes:
+          type: [array, 'null']
+          description: Additional class or division codes observed for the draw, preserving source order.
+          items:
+            type: string
+          minItems: 1
     CompetitionFormat:
       type: [object, 'null']
       description: Structured format descriptor aligning draw codes with the taxonomy that defines them.

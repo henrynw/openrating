@@ -48,12 +48,42 @@ export type EventAgeGroup =
   | 'OPEN'
   | 'OTHER';
 
+export type CompetitionSegment =
+  | 'STANDARD'
+  | 'PARA'
+  | 'JUNIOR'
+  | 'MASTERS'
+  | 'COLLEGIATE'
+  | 'EXHIBITION'
+  | 'OTHER';
+
+export type CompetitionParticipation = 'STANDARD' | 'PARA' | 'MIXED' | 'UNKNOWN';
+
+export type CompetitionAgeBracket = 'UNKNOWN' | 'OPEN' | 'JUNIOR' | 'MASTERS';
+
+export type CompetitionSkillLevel =
+  | 'UNKNOWN'
+  | 'PROFESSIONAL'
+  | 'AMATEUR'
+  | 'COLLEGIATE'
+  | 'RECREATIONAL';
+
+export interface EventClassificationProfile {
+  participation?: CompetitionParticipation | null;
+  ageBracket?: CompetitionAgeBracket | null;
+  skillLevel?: CompetitionSkillLevel | null;
+}
+
 export interface EventClassification {
   level?: EventLevel | null;
   grade?: EventGrade | null;
   ageGroup?: EventAgeGroup | null;
   tour?: string | null;
   category?: string | null;
+  segment?: CompetitionSegment | null;
+  profile?: EventClassificationProfile | null;
+  classCode?: string | null;
+  classCodes?: string[] | null;
 }
 
 export interface EventMediaLinks {

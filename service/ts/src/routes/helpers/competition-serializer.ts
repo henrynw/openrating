@@ -29,6 +29,15 @@ const serializeClassificationGrade = (grade: EventClassification['grade']) => {
   };
 };
 
+const serializeClassificationProfile = (profile: EventClassification['profile']) => {
+  if (!profile) return null;
+  return {
+    participation: profile.participation ?? null,
+    age_bracket: profile.ageBracket ?? null,
+    skill_level: profile.skillLevel ?? null,
+  };
+};
+
 const serializeClassification = (classification?: EventClassification | null) => {
   if (!classification) return undefined;
   return {
@@ -37,6 +46,10 @@ const serializeClassification = (classification?: EventClassification | null) =>
     age_group: classification.ageGroup ?? null,
     tour: classification.tour ?? null,
     category: classification.category ?? null,
+    segment: classification.segment ?? null,
+    profile: serializeClassificationProfile(classification.profile) ?? null,
+    class_code: classification.classCode ?? null,
+    class_codes: classification.classCodes ?? null,
   };
 };
 
