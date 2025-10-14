@@ -115,6 +115,7 @@ The CLI reads credentials from environment variables so provider secrets stay ou
 ### Background insights job queue
 - `/v1/players/{player_id}/insights` serves precomputed snapshots backed by the `player_insights` table and honours `If-None-Match` headers.
 - Run `npm run insights:worker` (locally or in production) to process `player_insight_jobs`, rebuild snapshots, and write them back atomically.
+- Tweak throughput with env vars: `INSIGHTS_WORKER_POLL_MS` (idle poll delay, default `1000`), `INSIGHTS_WORKER_BATCH_SIZE` (jobs claimed per poll, default `25`), `INSIGHTS_WORKER_LOOP_COOLDOWN_MS` (sleep after each batch, default `25`), and `INSIGHTS_WORKER_LOG_EVERY` (print a progress line every N jobs, default `250`).
 - Enqueue refreshes by calling `store.enqueuePlayerInsightsRefresh({ organizationId, playerId, sport, discipline })` wherever you ingest matches or rating changes. Jobs are deduped by scope, and multiple workers can run concurrently.
 - For backfills, enqueue jobs for every player (or wipe the table) and let the worker regenerate snapshots; it’s safe to replay history.
 - To pause processing, stop the worker. Pending jobs remain in the queue until the worker resumes.

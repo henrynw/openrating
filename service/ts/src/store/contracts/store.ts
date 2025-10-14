@@ -143,7 +143,7 @@ export interface RatingStore {
   enqueuePlayerInsightsRefresh(
     input: PlayerInsightsEnqueueInput
   ): Promise<{ jobId: string; enqueued: boolean }>;
-  claimPlayerInsightsJob(options: PlayerInsightsJobClaimOptions): Promise<PlayerInsightsJob | null>;
+  claimPlayerInsightsJob(options: PlayerInsightsJobClaimOptions): Promise<PlayerInsightsJob[]>;
   completePlayerInsightsJob(result: PlayerInsightsJobCompletion): Promise<void>;
   getPlayerInsightAiState(input: PlayerInsightAiEnsureInput): Promise<PlayerInsightAiData | null>;
   ensurePlayerInsightAiState(input: PlayerInsightAiEnsureInput): Promise<PlayerInsightAiEnsureResult>;

@@ -1,5 +1,6 @@
 import type { MatchInput, PairState, PairUpdate, PlayerState, UpdateResult } from '../../engine/types.js';
 import type { MatchRatingSkipReason, MatchRatingStatus } from './matches.js';
+import type { CompetitionSegment } from './events.js';
 import type {
   MatchParticipant,
   MatchSegment,
@@ -14,6 +15,8 @@ export interface LadderKey {
   discipline: MatchInput['discipline'];
   tier?: string;
   regionId?: string;
+  segment?: CompetitionSegment | null;
+  classCodes?: string[] | null;
 }
 
 export interface EnsurePlayersResult {

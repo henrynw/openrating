@@ -16,9 +16,31 @@ import { buildLadderKey } from './helpers/ladder.js';
 const SportParamSchema = z.enum(['BADMINTON', 'TENNIS', 'SQUASH', 'PADEL', 'PICKLEBALL']);
 const DisciplineParamSchema = z.enum(['SINGLES', 'DOUBLES', 'MIXED']);
 
+const CompetitionSegmentSchema = z.enum([
+  'STANDARD',
+  'PARA',
+  'JUNIOR',
+  'MASTERS',
+  'COLLEGIATE',
+  'EXHIBITION',
+  'OTHER',
+]);
+
+const ClassCodesParamSchema = z.preprocess((value) => {
+  if (value == null) return undefined;
+  const list = Array.isArray(value) ? value : [value];
+  const tokens = list
+    .flatMap((entry) => String(entry).split(','))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return tokens.length ? tokens : undefined;
+}, z.array(z.string().min(1)).optional());
+
 const BaseFilterSchema = z.object({
   scope: z.string().trim().min(1).optional(),
   organization_id: z.string().trim().optional(),
+  segment: CompetitionSegmentSchema.optional(),
+  class_codes: ClassCodesParamSchema,
 });
 
 const LeaderboardQuerySchema = BaseFilterSchema.extend({
@@ -111,6 +133,16 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         await ensureScopedAccess(req, organization, params.data.sport);
       }
 
+      const ladderKey = withScopeOnKey(
+        buildLadderKey({
+          sport: params.data.sport,
+          discipline: params.data.discipline,
+          segment: query.data.segment ?? null,
+          classCodes: query.data.class_codes ?? null,
+        }),
+        query.data.scope
+      );
+
       const leaderboard = await store.listLeaderboard({
         sport: params.data.sport,
         discipline: params.data.discipline,
@@ -125,6 +157,8 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         ageCutoff: query.data.age_cutoff,
         limit: query.data.limit ?? undefined,
         cursor: query.data.cursor ?? undefined,
+        segment: ladderKey.segment ?? null,
+        classCodes: ladderKey.classCodes ?? null,
       });
 
       const totalPages = leaderboard.totalCount
@@ -135,6 +169,8 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         sport: params.data.sport,
         discipline: params.data.discipline,
         scope: query.data.scope ?? null,
+        segment: ladderKey.segment ?? null,
+        class_codes: ladderKey.classCodes ?? null,
         organization_id: organization ? organization.organizationId : null,
         total_players: leaderboard.totalCount,
         page_size: leaderboard.pageSize,
@@ -151,6 +187,7 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
           country_code: player.countryCode ?? null,
           region_id: player.regionId ?? null,
           mu: player.mu,
+          mu_raw: player.muRaw ?? null,
           sigma: player.sigma,
           matches: player.matches,
           delta: player.delta ?? null,
@@ -191,6 +228,16 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         await ensureScopedAccess(req, organization, params.data.sport);
       }
 
+      const ladderKey = withScopeOnKey(
+        buildLadderKey({
+          sport: params.data.sport,
+          discipline: params.data.discipline,
+          segment: query.data.segment ?? null,
+          classCodes: query.data.class_codes ?? null,
+        }),
+        query.data.scope
+      );
+
       const movers = await store.listLeaderboardMovers({
         sport: params.data.sport,
         discipline: params.data.discipline,
@@ -198,12 +245,16 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         organizationId: organization?.organizationId ?? null,
         since: query.data.since,
         limit: query.data.limit ?? undefined,
+        segment: ladderKey.segment ?? null,
+        classCodes: ladderKey.classCodes ?? null,
       });
 
       return res.send({
         sport: params.data.sport,
         discipline: params.data.discipline,
         scope: query.data.scope ?? null,
+        segment: ladderKey.segment ?? null,
+        class_codes: ladderKey.classCodes ?? null,
         organization_id: organization ? organization.organizationId : null,
         since: query.data.since,
         players: movers.items.map((player) => ({
@@ -215,6 +266,7 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
           country_code: player.countryCode ?? null,
           region_id: player.regionId ?? null,
           mu: player.mu,
+          mu_raw: player.muRaw ?? null,
           sigma: player.sigma,
           matches: player.matches,
           change: player.change,
@@ -252,7 +304,12 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
       }
 
       const ladderKey = withScopeOnKey(
-        buildLadderKey({ sport: params.data.sport, discipline: params.data.discipline }),
+        buildLadderKey({
+          sport: params.data.sport,
+          discipline: params.data.discipline,
+          segment: query.data.segment ?? null,
+          classCodes: query.data.class_codes ?? null,
+        }),
         query.data.scope
       );
 
@@ -261,13 +318,18 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         return res.status(404).send({ error: 'player_not_found' });
       }
 
+      const bias = rating.sexBias ?? 0;
       return res.send({
         player_id: rating.playerId,
         sport: params.data.sport,
         discipline: params.data.discipline,
         scope: query.data.scope ?? null,
+        segment: ladderKey.segment ?? null,
+        class_codes: ladderKey.classCodes ?? null,
         organization_id: organization ? organization.organizationId : null,
-        mu: rating.mu,
+        mu: rating.mu + bias,
+        mu_raw: rating.mu,
+        sex_bias: bias,
         sigma: rating.sigma,
         matches: rating.matchesCount,
       });
@@ -302,7 +364,12 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         }
 
         const ladderKey = withScopeOnKey(
-          buildLadderKey({ sport: params.data.sport, discipline: params.data.discipline }),
+          buildLadderKey({
+            sport: params.data.sport,
+            discipline: params.data.discipline,
+            segment: query.data.segment ?? null,
+            classCodes: query.data.class_codes ?? null,
+          }),
           query.data.scope
         );
 
@@ -322,9 +389,12 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
           sport: params.data.sport,
           discipline: params.data.discipline,
           scope: snapshot.scope ?? null,
+          segment: ladderKey.segment ?? null,
+          class_codes: ladderKey.classCodes ?? null,
           organization_id: snapshot.organizationId ?? null,
           as_of: snapshot.asOf,
           mu: snapshot.mu,
+          mu_raw: snapshot.muRaw ?? snapshot.mu,
           sigma: snapshot.sigma,
           rating_event: snapshot.ratingEvent ? toRatingEventResponse(snapshot.ratingEvent) : null,
         });
@@ -376,7 +446,12 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         }
 
         const ladderKey = withScopeOnKey(
-          buildLadderKey({ sport: params.data.sport, discipline: params.data.discipline }),
+          buildLadderKey({
+            sport: params.data.sport,
+            discipline: params.data.discipline,
+            segment: query.data.segment ?? null,
+            classCodes: query.data.class_codes ?? null,
+          }),
           query.data.scope
         );
 
@@ -443,7 +518,12 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         }
 
         const ladderKey = withScopeOnKey(
-          buildLadderKey({ sport: params.data.sport, discipline: params.data.discipline }),
+          buildLadderKey({
+            sport: params.data.sport,
+            discipline: params.data.discipline,
+            segment: query.data.segment ?? null,
+            classCodes: query.data.class_codes ?? null,
+          }),
           query.data.scope
         );
 

@@ -12,6 +12,8 @@ OpenRating exposes a structured taxonomy on every competition payload so downstr
   - `age_bracket`: `OPEN`, `JUNIOR`, `MASTERS`, `UNKNOWN`.
   - `skill_level`: `PROFESSIONAL`, `AMATEUR`, `COLLEGIATE`, `RECREATIONAL`, `UNKNOWN`.
 - `classification.class_code` holds the primary division code when a single value applies; `classification.class_codes` preserves additional division codes (e.g. multiple para classes or weight bands).
+- Leaderboard queries accept `segment` and `class_codes` filters so consumers can target para ladders (e.g. `segment=PARA&class_codes=WH1,WH2`).
+- Leaderboard responses expose both `mu` (sex-offset adjusted), `mu_raw` (stored rating), and the per-sex bias so clients can display or audit either view.
 
 ### Canonical division codes (Badminton)
 

@@ -38,6 +38,12 @@ services:
         generateValue: true
       - key: INSIGHTS_WORKER_POLL_MS
         value: "1000"
+      - key: INSIGHTS_WORKER_BATCH_SIZE
+        value: "25"
+      - key: INSIGHTS_WORKER_LOOP_COOLDOWN_MS
+        value: "25"
+      - key: INSIGHTS_WORKER_LOG_EVERY
+        value: "250"
 
   - type: worker
     name: openrating-ai-insights-worker

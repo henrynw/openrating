@@ -418,6 +418,54 @@ paths:
           schema: { type: string }
           description: Optional organization filter when viewing scoped events
         - in: query
+          name: segment
+          required: false
+          schema:
+            type: string
+            enum: [STANDARD, PARA, JUNIOR, MASTERS, COLLEGIATE, EXHIBITION, OTHER]
+          description: Optional competition segment to select the ladder for the rating lookup.
+        - in: query
+          name: class_codes
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: string }
+          description: Additional class codes used when segmenting para ladders. Accepts comma-separated values.
+        - in: query
+          name: segment
+          required: false
+          schema:
+            type: string
+            enum: [STANDARD, PARA, JUNIOR, MASTERS, COLLEGIATE, EXHIBITION, OTHER]
+          description: Optional competition segment to select the ladder for the rating event lookup.
+        - in: query
+          name: class_codes
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: string }
+          description: Additional class codes used when segmenting para ladders. Accepts comma-separated values.
+        - in: query
+          name: segment
+          required: false
+          schema:
+            type: string
+            enum: [STANDARD, PARA, JUNIOR, MASTERS, COLLEGIATE, EXHIBITION, OTHER]
+          description: Optional competition segment to select the ladder for event history.
+        - in: query
+          name: class_codes
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: string }
+          description: Additional class codes used when segmenting para ladders. Accepts comma-separated values.
+        - in: query
           name: since
           required: false
           schema: { type: string, format: date-time }
@@ -830,6 +878,22 @@ paths:
           schema: { type: string }
           description: Optional organization filter when viewing scoped ladders
         - in: query
+          name: segment
+          required: false
+          schema:
+            type: string
+            enum: [STANDARD, PARA, JUNIOR, MASTERS, COLLEGIATE, EXHIBITION, OTHER]
+          description: Optional competition segment to select a specialized ladder (e.g. PARA).
+        - in: query
+          name: class_codes
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: string }
+          description: Additional class codes (e.g. WH1, WH2) used with para ladders. Accepts comma-separated values.
+        - in: query
           name: sex
           required: false
           schema:
@@ -925,6 +989,22 @@ paths:
           required: false
           schema: { type: string }
           description: Optional organization filter when viewing scoped ladders
+        - in: query
+          name: segment
+          required: false
+          schema:
+            type: string
+            enum: [STANDARD, PARA, JUNIOR, MASTERS, COLLEGIATE, EXHIBITION, OTHER]
+          description: Optional competition segment to select a specialized ladder (e.g. PARA).
+        - in: query
+          name: class_codes
+          required: false
+          style: form
+          explode: false
+          schema:
+            type: array
+            items: { type: string }
+          description: Additional class codes (e.g. WH1, WH2) used with para ladders. Accepts comma-separated values.
         - in: query
           name: since
           required: true
@@ -1670,7 +1750,9 @@ components:
       required: [period_start, mu, sigma]
       properties:
         period_start: { type: string, format: date-time }
-        mu: { type: number }
+        mu:
+          type: number
+          description: Adjusted display rating (μ_display).
         sigma: { type: number }
         mu_delta:
           type: [number, 'null']
@@ -2759,10 +2841,22 @@ components:
           enum: [SINGLES, DOUBLES, MIXED]
         scope:
           type: [string, 'null']
+        segment:
+          type: [string, 'null']
+          description: Segment identifier for the ladder when applicable.
+        class_codes:
+          type: [array, 'null']
+          description: Canonical class codes used to define the ladder partition.
+          items: { type: string }
         organization_id:
           type: [string, 'null']
         as_of: { type: string, format: date-time }
-        mu: { type: number }
+        mu:
+          type: number
+          description: Adjusted display rating (μ_display).
+        mu_raw:
+          type: [number, 'null']
+          description: Stored rating before sex offset adjustment.
         sigma: { type: number }
         rating_event:
           anyOf:
@@ -2785,7 +2879,12 @@ components:
           type: [string, 'null']
         region_id:
           type: [string, 'null']
-        mu: { type: number }
+        mu:
+          type: number
+          description: Adjusted display rating (μ_display).
+        mu_raw:
+          type: [number, 'null']
+          description: Raw rating prior to sex offset adjustment.
         sigma: { type: number }
         matches: { type: integer }
         delta:
@@ -2806,6 +2905,11 @@ components:
           enum: [SINGLES, DOUBLES, MIXED]
         scope:
           type: [string, 'null']
+        segment:
+          type: [string, 'null']
+        class_codes:
+          type: [array, 'null']
+          items: { type: string }
         organization_id:
           type: [string, 'null']
         total_players:
@@ -2840,7 +2944,12 @@ components:
           type: [string, 'null']
         region_id:
           type: [string, 'null']
-        mu: { type: number }
+        mu:
+          type: number
+          description: Adjusted display rating (μ_display).
+        mu_raw:
+          type: [number, 'null']
+          description: Raw rating prior to sex offset adjustment.
         sigma: { type: number }
         matches: { type: integer }
         change: { type: number }
@@ -2859,6 +2968,11 @@ components:
           enum: [SINGLES, DOUBLES, MIXED]
         scope:
           type: [string, 'null']
+        segment:
+          type: [string, 'null']
+        class_codes:
+          type: [array, 'null']
+          items: { type: string }
         organization_id:
           type: [string, 'null']
         since: { type: string, format: date-time }
@@ -2882,5 +2996,11 @@ components:
         organization_id:
           type: [string, 'null']
         mu: { type: number }
+        mu_raw:
+          type: [number, 'null']
+          description: Stored rating prior to sex offset adjustment.
+        sex_bias:
+          type: [number, 'null']
+          description: Current offset applied when presenting `mu`.
         sigma: { type: number }
         matches: { type: integer }

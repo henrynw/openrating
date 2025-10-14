@@ -2,12 +2,16 @@ export type Sport = 'BADMINTON' | 'TENNIS' | 'SQUASH' | 'PADEL' | 'PICKLEBALL';
 export type Discipline = 'SINGLES' | 'DOUBLES' | 'MIXED';
 export type WinnerSide = 'A' | 'B';
 
+export type PlayerSex = 'M' | 'F' | 'X';
+
 export interface PlayerState {
   playerId: string;
   mu: number;
   sigma: number;
   matchesCount: number;
   regionId?: string;
+  sex?: PlayerSex;
+  sexBias?: number;
 }
 
 export interface GameScore { game_no: number; a: number; b: number; }
@@ -46,6 +50,12 @@ export interface MatchUpdateContext {
   getPair?: (players: string[]) => PairState | undefined;
 }
 
+export interface SexOffsetSignal {
+  surprise: number;
+  countsA: Record<PlayerSex | 'U', number>;
+  countsB: Record<PlayerSex | 'U', number>;
+}
+
 export interface UpdateResult {
   perPlayer: Array<{
     playerId: string;
@@ -59,4 +69,5 @@ export interface UpdateResult {
   pairUpdates: PairUpdate[];
   teamDelta: number;
   winProbability: number;
+  sexOffset?: SexOffsetSignal;
 }

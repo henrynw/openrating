@@ -44,6 +44,7 @@ export interface RatingSnapshot {
   ladderId: string;
   asOf: string;
   mu: number;
+  muRaw?: number;
   sigma: number;
   ratingEvent?: RatingEventRecord | null;
 }
@@ -61,6 +62,7 @@ export interface LeaderboardPlayerInfo {
 export interface LeaderboardEntry extends LeaderboardPlayerInfo {
   rank: number;
   mu: number;
+  muRaw?: number;
   sigma: number;
   matches: number;
   delta?: number | null;
@@ -73,6 +75,8 @@ export interface LeaderboardQuery {
   discipline: LadderKey['discipline'];
   scope?: string | null;
   organizationId?: string | null;
+  segment?: string | null;
+  classCodes?: string[] | null;
   sex?: 'M' | 'F' | 'X' | null;
   countryCode?: string | null;
   regionId?: string | null;
@@ -93,6 +97,7 @@ export interface LeaderboardResult {
 
 export interface LeaderboardMoverEntry extends LeaderboardPlayerInfo {
   mu: number;
+  muRaw?: number;
   sigma: number;
   matches: number;
   change: number;

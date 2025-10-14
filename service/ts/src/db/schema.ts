@@ -350,6 +350,20 @@ export const ratingReplayQueue = pgTable('rating_replay_queue', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const ladderSexOffsets = pgTable('ladder_sex_offsets', {
+  ladderId: text('ladder_id')
+    .references(() => ratingLadders.ladderId, {
+      onDelete: 'cascade',
+    })
+    .notNull(),
+  sex: text('sex').notNull(),
+  bias: doublePrecision('bias').default(0).notNull(),
+  matches: integer('matches').default(0).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table: any) => ({
+  pk: primaryKey(table.ladderId, table.sex),
+}));
+
 export const playerInsights = pgTable('player_insights', {
   playerId: text('player_id').references(() => players.playerId, {
     onDelete: 'cascade',

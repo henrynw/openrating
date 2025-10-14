@@ -140,6 +140,7 @@ export interface PlayerInsightsJob {
 export interface PlayerInsightsJobClaimOptions {
   workerId: string;
   visibilityTimeoutSec?: number;
+  batchSize?: number;
 }
 
 export interface PlayerInsightsJobCompletion {

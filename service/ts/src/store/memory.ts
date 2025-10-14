@@ -6,6 +6,8 @@ import type {
   PairState,
   PairUpdate,
   PlayerState,
+  PlayerSex,
+  SexOffsetSignal,
   UpdateResult,
   Sport,
   Discipline,
@@ -200,6 +202,15 @@ interface MemoryPairSynergy {
   updatedAt: Date;
 }
 
+type SexKey = PlayerSex | 'U';
+
+interface MemorySexOffsetRecord {
+  sex: SexKey;
+  bias: number;
+  matches: number;
+  updatedAt: Date;
+}
+
 interface MemoryPairSynergyHistory {
   pairId: string;
   ladderId: string;
@@ -311,6 +322,8 @@ export class MemoryStore implements RatingStore {
   private playerInsightAiJobQueue: string[] = [];
   private pairSynergies = new Map<string, MemoryPairSynergy>();
   private pairSynergyHistory: MemoryPairSynergyHistory[] = [];
+  private sexOffsets = new Map<string, Map<SexKey, MemorySexOffsetRecord>>();
+  private sexOffsetEligibility = new Map<string, { expiresAt: number; allowed: boolean }>();
   private latestStartByLadder = new Map<string, Date>();
   private replayQueue = new Map<string, Date>();
 
@@ -436,17 +449,23 @@ export class MemoryStore implements RatingStore {
 
       let rating = player.ratings.get(ladderId);
       if (!rating) {
+        const sex = (player.sex ?? undefined) as PlayerSex | undefined;
         rating = {
           playerId: id,
           mu: P.baseMu,
           sigma: P.baseSigma,
           matchesCount: 0,
           updatedAt: new Date(0),
+          sex,
+          sexBias: this.getSexBias(ladderId, sex),
         };
         player.ratings.set(ladderId, rating);
       } else if (!rating.updatedAt) {
         rating.updatedAt = new Date(0);
       }
+      const sex = (player.sex ?? undefined) as PlayerSex | undefined;
+      rating.sex = sex;
+      rating.sexBias = this.getSexBias(ladderId, sex);
       playersMap.set(id, rating);
     }
 
@@ -643,6 +662,12 @@ export class MemoryStore implements RatingStore {
 
     const ratingEvents: Array<{ playerId: string; ratingEventId: string; appliedAt: string }> = [];
     if (result) {
+      if (result.sexOffset) {
+        this.applySexOffsetSignal(ladderId, result.sexOffset);
+        for (const state of params.playerStates.values()) {
+          state.sexBias = this.getSexBias(ladderId, state.sex);
+        }
+      }
       for (const entry of result.perPlayer) {
         const appliedAt = new Date(appliedAtBase);
         const event: MemoryRatingEvent = {
@@ -673,6 +698,7 @@ export class MemoryStore implements RatingStore {
         const ratingRecord = player?.ratings.get(ladderId);
         if (ratingRecord) {
           ratingRecord.updatedAt = appliedAt;
+          ratingRecord.sexBias = this.getSexBias(ladderId, ratingRecord.sex);
         }
       }
     }
@@ -995,7 +1021,9 @@ export class MemoryStore implements RatingStore {
       return null;
     }
 
-    const mu = event ? event.muAfter : rating?.mu ?? P.baseMu;
+    const muRaw = event ? event.muAfter : rating?.mu ?? P.baseMu;
+    const bias = rating?.sexBias ?? 0;
+    const mu = muRaw + bias;
     const sigma = event ? event.sigmaAfter : rating?.sigma ?? P.baseSigma;
     const asOf = validAsOf
       ? validAsOf.toISOString()
@@ -1012,6 +1040,7 @@ export class MemoryStore implements RatingStore {
       ladderId,
       asOf,
       mu,
+      muRaw,
       sigma,
       ratingEvent: event ? this.toRatingEventRecord(event) : null,
     } satisfies RatingSnapshot;
@@ -1019,7 +1048,16 @@ export class MemoryStore implements RatingStore {
 
   async listLeaderboard(params: LeaderboardQuery): Promise<LeaderboardResult> {
     const limit = clampLimit(params.limit);
-    const ladderKey = { sport: params.sport, discipline: params.discipline } as const;
+    const ladderKey: LadderKey = {
+      sport: params.sport,
+      discipline: params.discipline,
+    };
+    if (params.segment) {
+      ladderKey.segment = params.segment as LadderKey['segment'];
+    }
+    if (params.classCodes && params.classCodes.length) {
+      ladderKey.classCodes = params.classCodes;
+    }
     const ladderId = buildLadderId(ladderKey);
 
     const wantsAgeFilter =
@@ -1055,7 +1093,13 @@ export class MemoryStore implements RatingStore {
       return false;
     };
 
-    const candidates: Array<{ player: MemoryPlayerRecord; rating: MemoryRatingRecord; latest?: MemoryRatingEvent }> = [];
+    const candidates: Array<{
+      player: MemoryPlayerRecord;
+      rating: MemoryRatingRecord;
+      latest?: MemoryRatingEvent;
+      effectiveMu: number;
+      bias: number;
+    }> = [];
 
     for (const player of this.players.values()) {
       if (params.organizationId && player.organizationId !== params.organizationId) {
@@ -1075,7 +1119,8 @@ export class MemoryStore implements RatingStore {
         ? events.find((event) => event.organizationId === params.organizationId)
         : events[0];
 
-      candidates.push({ player, rating, latest });
+      const bias = this.getSexBias(ladderId, player.sex as PlayerSex | undefined);
+      candidates.push({ player, rating, latest, effectiveMu: rating.mu + bias, bias });
     }
 
     const totalCount = candidates.length;
@@ -1085,7 +1130,7 @@ export class MemoryStore implements RatingStore {
     }
 
     candidates.sort((a, b) => {
-      const diff = b.rating.mu - a.rating.mu;
+      const diff = b.effectiveMu - a.effectiveMu;
       if (diff !== 0) return diff;
       return a.player.playerId.localeCompare(b.player.playerId);
     });
@@ -1099,8 +1144,8 @@ export class MemoryStore implements RatingStore {
           startIndex = directIndex + 1;
         } else {
           const fallbackIndex = candidates.findIndex((entry) => {
-            if (entry.rating.mu < cursor.mu) return true;
-            if (entry.rating.mu > cursor.mu) return false;
+            if (entry.effectiveMu < cursor.mu) return true;
+            if (entry.effectiveMu > cursor.mu) return false;
             return entry.player.playerId > cursor.playerId;
           });
           if (fallbackIndex >= 0) {
@@ -1122,7 +1167,8 @@ export class MemoryStore implements RatingStore {
       familyName: entry.player.familyName ?? undefined,
       countryCode: entry.player.countryCode ?? undefined,
       regionId: entry.player.regionId ?? undefined,
-      mu: entry.rating.mu,
+      mu: entry.effectiveMu,
+      muRaw: entry.rating.mu,
       sigma: entry.rating.sigma,
       matches: entry.rating.matchesCount,
       delta: entry.latest?.delta ?? null,
@@ -1133,7 +1179,7 @@ export class MemoryStore implements RatingStore {
     const hasMore = candidates.length > startIndex + slice.length;
     const nextCursor = hasMore && slice.length
       ? encodeLeaderboardCursor({
-          mu: slice[slice.length - 1].rating.mu,
+          mu: slice[slice.length - 1].effectiveMu,
           playerId: slice[slice.length - 1].player.playerId,
           rank: startIndex + slice.length,
         })
@@ -1153,7 +1199,17 @@ export class MemoryStore implements RatingStore {
       throw new Error('Invalid since timestamp');
     }
     const limit = clampLimit(params.limit);
-    const ladderId = buildLadderId({ sport: params.sport, discipline: params.discipline });
+    const ladderKey: LadderKey = {
+      sport: params.sport,
+      discipline: params.discipline,
+    };
+    if (params.segment) {
+      ladderKey.segment = params.segment as LadderKey['segment'];
+    }
+    if (params.classCodes && params.classCodes.length) {
+      ladderKey.classCodes = params.classCodes;
+    }
+    const ladderId = buildLadderId(ladderKey);
 
     const movers: Array<{
       player: MemoryPlayerRecord;
@@ -1215,7 +1271,8 @@ export class MemoryStore implements RatingStore {
         familyName: entry.player.familyName ?? undefined,
         countryCode: entry.player.countryCode ?? undefined,
         regionId: entry.player.regionId ?? undefined,
-        mu: entry.rating.mu,
+        mu: entry.rating.mu + this.getSexBias(ladderId, entry.player.sex as PlayerSex | undefined),
+        muRaw: entry.rating.mu,
         sigma: entry.rating.sigma,
         matches: entry.rating.matchesCount,
         change: entry.change,
@@ -1353,17 +1410,22 @@ export class MemoryStore implements RatingStore {
       }
     }
 
+    this.resetSexOffsets(ladderId);
+
     const playerStates = new Map<string, PlayerState>();
     const ensurePlayerState = (playerId: string) => {
       let state = playerStates.get(playerId);
       if (!state) {
         const player = this.players.get(playerId) ?? null;
+        const sex = (player?.sex ?? undefined) as PlayerSex | undefined;
         state = {
           playerId,
           mu: P.baseMu,
           sigma: P.baseSigma,
           matchesCount: 0,
           regionId: player?.regionId ?? undefined,
+          sex,
+          sexBias: this.getSexBias(ladderId, sex),
         };
         playerStates.set(playerId, state);
       }
@@ -1425,6 +1487,13 @@ export class MemoryStore implements RatingStore {
             ? (players) => ensurePairState(players)
             : undefined,
       });
+
+      if (result.sexOffset) {
+        this.applySexOffsetSignal(ladderId, result.sexOffset);
+        for (const state of playerStates.values()) {
+          state.sexBias = this.getSexBias(ladderId, state.sex);
+        }
+      }
 
       const appliedAt = match.timing?.completedAt
         ? new Date(match.timing.completedAt)
@@ -1519,6 +1588,8 @@ export class MemoryStore implements RatingStore {
           sigma: state.sigma,
           matchesCount: state.matchesCount,
           updatedAt,
+          sex: state.sex,
+          sexBias: this.getSexBias(ladderId, state.sex),
         });
       }
 
@@ -1573,6 +1644,7 @@ export class MemoryStore implements RatingStore {
     this.applySynergyDecay(asOf);
     this.applyRegionBias(asOf);
     this.applyGraphSmoothing(asOf, horizonDays);
+    this.applySexOffsetMaintenance(asOf);
     this.applyDriftControl();
   }
 
@@ -2698,12 +2770,163 @@ export class MemoryStore implements RatingStore {
     } satisfies RatingEventRecord;
   }
 
+  private resetSexOffsets(ladderId: string) {
+    const now = new Date(0);
+    const entries: Array<[SexKey, MemorySexOffsetRecord]> = [
+      ['M', { sex: 'M', bias: 0, matches: 0, updatedAt: now }],
+      ['F', { sex: 'F', bias: 0, matches: 0, updatedAt: now }],
+      ['X', { sex: 'X', bias: 0, matches: 0, updatedAt: now }],
+      ['U', { sex: 'U', bias: 0, matches: 0, updatedAt: now }],
+    ];
+    this.sexOffsets.set(ladderId, new Map(entries));
+    this.sexOffsetEligibility.delete(ladderId);
+  }
+
+  private ensureSexOffsets(ladderId: string): Map<SexKey, MemorySexOffsetRecord> {
+    if (!this.sexOffsets.has(ladderId)) {
+      this.resetSexOffsets(ladderId);
+    }
+    return this.sexOffsets.get(ladderId)!;
+  }
+
+  private countRecentInterSexMatches(ladderId: string, asOf: Date, windowDays: number): number {
+    const cutoff = new Date(asOf.getTime() - windowDays * 24 * 60 * 60 * 1000);
+    let mixed = 0;
+    for (const match of this.matches) {
+      if (match.ladderId !== ladderId) continue;
+      if (!match.startTime || match.startTime < cutoff) continue;
+      const sexes = new Set<PlayerSex>();
+      const collect = (playerId: string) => {
+        const player = this.players.get(playerId);
+        const sex = (player?.sex ?? undefined) as PlayerSex | undefined;
+        if (sex) sexes.add(sex);
+      };
+      match.match.sides.A.players.forEach(collect);
+      match.match.sides.B.players.forEach(collect);
+      if (sexes.size > 1) mixed += 1;
+    }
+    return mixed;
+  }
+
+  private shouldApplySexOffsets(ladderId: string, asOf: Date): boolean {
+    if (!P.sexOffsets?.enabled) return false;
+    const cache = this.sexOffsetEligibility.get(ladderId);
+    const nowMs = asOf.getTime();
+    if (cache && cache.expiresAt > nowMs) {
+      return cache.allowed;
+    }
+
+    const params = P.sexOffsets;
+    const map = this.ensureSexOffsets(ladderId);
+    const keys: SexKey[] = ['M', 'F', 'X'];
+    const biases = keys.map((key) => map.get(key)?.bias ?? 0);
+    const width = biases.length ? Math.max(...biases) - Math.min(...biases) : 0;
+
+    let allow = true;
+    if (allow && params.minEdges90d && params.minEdges90d > 0) {
+      const mixed = this.countRecentInterSexMatches(ladderId, asOf, 90);
+      if (mixed < params.minEdges90d) {
+        allow = false;
+      }
+    }
+
+    if (allow && params.maxCiWidth !== undefined && params.maxCiWidth >= 0) {
+      if (width > params.maxCiWidth) {
+        allow = false;
+      }
+    }
+
+    this.sexOffsetEligibility.set(ladderId, {
+      allowed: allow,
+      expiresAt: nowMs + 6 * 60 * 60 * 1000,
+    });
+
+    return allow;
+  }
+
+  private getSexBias(ladderId: string, sex?: PlayerSex | null): number {
+    const map = this.ensureSexOffsets(ladderId);
+    const key: SexKey = sex ?? 'U';
+    return map.get(key)?.bias ?? 0;
+  }
+
+  private applySexOffsetSignal(ladderId: string, signal?: SexOffsetSignal | null) {
+    if (!signal || !P.sexOffsets?.enabled) return;
+    const now = new Date();
+    if (!this.shouldApplySexOffsets(ladderId, now)) return;
+    const map = this.ensureSexOffsets(ladderId);
+    const params = P.sexOffsets;
+    const baseline = params.baseline;
+
+    const collect = (counts: Record<SexKey, number>) => counts;
+    const countsA = collect(signal.countsA);
+    const countsB = collect(signal.countsB);
+
+    const keys: SexKey[] = ['M', 'F', 'X', 'U'];
+    for (const key of keys) {
+      if (key === 'U') continue; // never adjust unknowns
+      const diff = (countsA[key] ?? 0) - (countsB[key] ?? 0);
+      if (diff === 0) continue;
+      const record = map.get(key);
+      if (!record) continue;
+      const delta = clampValue(
+        params.kFactor * signal.surprise * diff,
+        -params.deltaMax,
+        params.deltaMax
+      );
+      const raw = record.bias + delta;
+      record.bias = clampValue(raw, -params.maxAbs, params.maxAbs);
+      record.matches += Math.abs(diff);
+      record.updatedAt = now;
+    }
+
+    const baselineRecord = map.get(baseline as SexKey);
+    const shift = baselineRecord?.bias ?? 0;
+    if (shift !== 0) {
+      for (const key of keys) {
+        const record = map.get(key);
+        if (!record) continue;
+        record.bias -= shift;
+      }
+    }
+
+    this.sexOffsetEligibility.delete(ladderId);
+  }
+
+  private applySexOffsetMaintenance(asOf: Date) {
+    if (!P.sexOffsets?.enabled) return;
+    const shrink = P.sexOffsets.regularization ?? 0;
+    if (shrink <= 0) return;
+
+    const params = P.sexOffsets;
+    const baseline = params.baseline as SexKey;
+    for (const [ladderId, map] of this.sexOffsets.entries()) {
+      for (const record of map.values()) {
+        record.bias = clampValue(record.bias * (1 - shrink), -params.maxAbs, params.maxAbs);
+        record.updatedAt = asOf;
+      }
+
+      const baselineBias = map.get(baseline)?.bias ?? 0;
+      if (baselineBias !== 0) {
+        for (const record of map.values()) {
+          record.bias = clampValue(record.bias - baselineBias, -params.maxAbs, params.maxAbs);
+        }
+      }
+
+      this.sexOffsetEligibility.delete(ladderId);
+    }
+  }
+
   private applyInactivity(asOf: Date) {
     for (const player of this.players.values()) {
       for (const rating of player.ratings.values()) {
         const weeks = Math.max(0, (asOf.getTime() - rating.updatedAt.getTime()) / MS_PER_WEEK);
         if (weeks <= 0) continue;
-        const factor = Math.pow(1 + P.idle.ratePerWeek, weeks);
+        const activationWeeks = P.idle.activationDays ? P.idle.activationDays / 7 : 0;
+        if (activationWeeks && weeks <= activationWeeks) continue;
+        const effectiveWeeks = activationWeeks ? weeks - activationWeeks : weeks;
+        if (effectiveWeeks <= 0) continue;
+        const factor = Math.pow(1 + P.idle.ratePerWeek, effectiveWeeks);
         let nextVar = rating.sigma * rating.sigma * factor;
         nextVar = Math.min(P.sigmaMax * P.sigmaMax, nextVar);
         rating.sigma = Math.max(P.sigmaMin, Math.sqrt(nextVar));
@@ -3001,9 +3224,18 @@ export class MemoryStore implements RatingStore {
 
   async claimPlayerInsightsJob(
     options: PlayerInsightsJobClaimOptions
-  ): Promise<PlayerInsightsJob | null> {
+  ): Promise<PlayerInsightsJob[]> {
     const now = new Date();
+    const requestedBatchSize = Number(options.batchSize ?? 1);
+    const batchSize = Number.isFinite(requestedBatchSize)
+      ? Math.max(1, Math.min(requestedBatchSize, 100))
+      : 1;
+    const claimed: PlayerInsightsJob[] = [];
+
     for (const jobId of this.playerInsightJobQueue) {
+      if (claimed.length >= batchSize) {
+        break;
+      }
       const job = this.playerInsightJobs.get(jobId);
       if (!job) continue;
       if (job.status !== 'PENDING') continue;
@@ -3013,9 +3245,10 @@ export class MemoryStore implements RatingStore {
       job.lockedAt = now.toISOString();
       job.attempts += 1;
       this.playerInsightJobs.set(jobId, job);
-      return JSON.parse(JSON.stringify(job)) as PlayerInsightsJob;
+      claimed.push(JSON.parse(JSON.stringify(job)) as PlayerInsightsJob);
     }
-    return null;
+
+    return claimed;
   }
 
   async completePlayerInsightsJob(result: PlayerInsightsJobCompletion): Promise<void> {

@@ -21,10 +21,18 @@ import type {
   MatchParticipant,
   MatchStatistics,
   CompetitionRecord,
+  EventClassification,
 } from '../store/index.js';
 import { MatchLookupError, OrganizationLookupError, PlayerLookupError } from '../store/index.js';
 import { normalizeMatchSubmission } from '../formats/index.js';
-import { normalizeRegion, normalizeTier, isDefaultRegion } from '../store/helpers.js';
+import {
+  normalizeRegion,
+  normalizeTier,
+  isDefaultRegion,
+  buildPairKey,
+  sortPairPlayers,
+  normalizeClassCodes,
+} from '../store/helpers.js';
 import type { OrganizationIdentifierInput } from './helpers/organization-resolver.js';
 import { toMatchSummaryResponse, toMatchSportTotals } from './helpers/responders.js';
 import {
@@ -32,8 +40,8 @@ import {
   normalizeMatchStatistics,
   type LooseMatchStatistics,
 } from './helpers/statistics.js';
-import { buildPairKey, sortPairPlayers } from '../store/helpers.js';
 import type { PairState } from '../engine/types.js';
+import { buildLadderKey as buildBaseLadderKey } from './helpers/ladder.js';
 
 const LooseRecordSchema = z.record(z.unknown());
 
@@ -340,17 +348,56 @@ interface MatchRouteDeps {
   resolveOrganization: (input: OrganizationIdentifierInput) => Promise<OrganizationRecord>;
 }
 
-const buildLadderKey = (
+const deriveCompetitionLadderTaxonomy = (classification?: EventClassification | null) => {
+  if (!classification) return { segment: null as EventClassification['segment'] | null, classCodes: undefined };
+
+  const segment = classification.segment ?? null;
+  const codes: string[] = [];
+
+  const addCode = (value?: string | null) => {
+    if (!value) return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const parts = trimmed.split(/[^A-Za-z0-9]+/u).map((part) => part.trim()).filter(Boolean);
+    if (parts.length) {
+      codes.push(...parts);
+    } else {
+      codes.push(trimmed);
+    }
+  };
+
+  classification.classCodes?.forEach(addCode);
+  addCode(classification.classCode ?? null);
+
+  const normalizedCodes = normalizeClassCodes(codes);
+
+  return {
+    segment,
+    classCodes: normalizedCodes.length ? normalizedCodes : undefined,
+  };
+};
+
+const createMatchLadderKey = (
   organizationId: string,
   match: MatchInput,
-  options: { tier?: string; regionId?: string | null }
-): LadderKey => ({
-  organizationId,
-  sport: match.sport,
-  discipline: match.discipline,
-  tier: normalizeTier(options.tier),
-  regionId: normalizeRegion(options.regionId ?? null),
-});
+  options: { tier?: string; regionId?: string | null; classification?: EventClassification | null }
+): LadderKey => {
+  const { classification = null, tier, regionId } = options;
+  const taxonomy = deriveCompetitionLadderTaxonomy(classification);
+  const baseKey = buildBaseLadderKey({
+    sport: match.sport,
+    discipline: match.discipline,
+    segment: taxonomy.segment ?? null,
+    classCodes: taxonomy.classCodes ?? null,
+  });
+
+  return {
+    ...baseKey,
+    organizationId,
+    tier: normalizeTier(tier),
+    regionId: normalizeRegion(regionId ?? null),
+  };
+};
 
 export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
   const { store, resolveOrganization } = deps;
@@ -460,9 +507,10 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
       const sideParticipants = mapSideParticipantsInput(parsed.data.sides);
       const gameDetails = mapGameDetailsInput(parsed.data.games);
 
-      const ladderKey = buildLadderKey(organization.organizationId, matchInput, {
+      const ladderKey = createMatchLadderKey(organization.organizationId, matchInput, {
         tier: parsed.data.tier,
         regionId: parsed.data.venue_region_id ?? null,
+        classification: competition?.classification ?? null,
       });
 
       const uniquePlayerIds = Array.from(

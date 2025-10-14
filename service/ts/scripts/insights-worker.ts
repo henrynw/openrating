@@ -5,6 +5,13 @@ import { getStore, type PlayerInsightsJobCompletion } from '../src/store/index.j
 
 const WORKER_ID = process.env.INSIGHTS_WORKER_ID ?? randomUUID();
 const POLL_INTERVAL_MS = Number(process.env.INSIGHTS_WORKER_POLL_MS ?? 1000);
+const RAW_BATCH_SIZE = Number(process.env.INSIGHTS_WORKER_BATCH_SIZE ?? 10);
+const RAW_LOOP_COOLDOWN_MS = Number(process.env.INSIGHTS_WORKER_LOOP_COOLDOWN_MS ?? 50);
+const RAW_LOG_EVERY = Number(process.env.INSIGHTS_WORKER_LOG_EVERY ?? 100);
+
+const BATCH_SIZE = Number.isFinite(RAW_BATCH_SIZE) && RAW_BATCH_SIZE > 0 ? Math.min(Math.floor(RAW_BATCH_SIZE), 100) : 1;
+const LOOP_COOLDOWN_MS = Number.isFinite(RAW_LOOP_COOLDOWN_MS) && RAW_LOOP_COOLDOWN_MS >= 0 ? RAW_LOOP_COOLDOWN_MS : 50;
+const LOG_EVERY = Number.isFinite(RAW_LOG_EVERY) && RAW_LOG_EVERY > 0 ? Math.floor(RAW_LOG_EVERY) : 0;
 
 const gracefulSleep = async (ms: number) => {
   try {
@@ -18,51 +25,61 @@ const gracefulSleep = async (ms: number) => {
 
 const main = async () => {
   const store = getStore();
+  let processed = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const job = await store.claimPlayerInsightsJob({ workerId: WORKER_ID });
-    if (!job) {
+    const jobs = await store.claimPlayerInsightsJob({ workerId: WORKER_ID, batchSize: BATCH_SIZE });
+    if (!jobs.length) {
       await gracefulSleep(POLL_INTERVAL_MS);
       continue;
     }
 
-    const completion: PlayerInsightsJobCompletion = {
-      jobId: job.jobId,
-      workerId: WORKER_ID,
-      success: false,
-    };
+    for (const job of jobs) {
+      const completion: PlayerInsightsJobCompletion = {
+        jobId: job.jobId,
+        workerId: WORKER_ID,
+        success: false,
+      };
 
-    try {
-      const snapshot = await store.buildPlayerInsightsSnapshot({
-        organizationId: job.organizationId,
-        playerId: job.playerId,
-        sport: job.sport ?? null,
-        discipline: job.discipline ?? null,
-      });
-
-      await store.upsertPlayerInsightsSnapshot(
-        {
+      try {
+        const snapshot = await store.buildPlayerInsightsSnapshot({
           organizationId: job.organizationId,
           playerId: job.playerId,
           sport: job.sport ?? null,
           discipline: job.discipline ?? null,
-        },
-        snapshot
-      );
+        });
 
-      completion.success = true;
-    } catch (err) {
-      console.error('player_insights_job_failed', {
-        jobId: job.jobId,
-        playerId: job.playerId,
-        organizationId: job.organizationId,
-        error: err,
-      });
-      completion.error = err instanceof Error ? err.message : 'unknown_error';
+        await store.upsertPlayerInsightsSnapshot(
+          {
+            organizationId: job.organizationId,
+            playerId: job.playerId,
+            sport: job.sport ?? null,
+            discipline: job.discipline ?? null,
+          },
+          snapshot
+        );
+
+        completion.success = true;
+      } catch (err) {
+        console.error('player_insights_job_failed', {
+          jobId: job.jobId,
+          playerId: job.playerId,
+          organizationId: job.organizationId,
+          error: err,
+        });
+        completion.error = err instanceof Error ? err.message : 'unknown_error';
+      }
+
+      await store.completePlayerInsightsJob(completion);
+      processed += 1;
+      if (LOG_EVERY && processed % LOG_EVERY === 0) {
+        console.log(`[insights-worker:${WORKER_ID}] processed ${processed} jobs`);
+      }
     }
 
-    await store.completePlayerInsightsJob(completion);
-    await gracefulSleep(100);
+    if (LOOP_COOLDOWN_MS > 0) {
+      await gracefulSleep(LOOP_COOLDOWN_MS);
+    }
   }
 };
 

@@ -1,7 +1,16 @@
 import { P } from './params.js';
 import { movWeight } from './mov.js';
 import { getSportProfile } from './profiles.js';
-import type { MatchInput, MatchUpdateContext, PairState, PairUpdate, PlayerState, UpdateResult } from './types.js';
+import type {
+  MatchInput,
+  MatchUpdateContext,
+  PairState,
+  PairUpdate,
+  PlayerState,
+  PlayerSex,
+  SexOffsetSignal,
+  UpdateResult,
+} from './types.js';
 
 // Numerical approximation (Abramowitz & Stegun 7.1.26) for environments lacking Math.erf.
 const erf = (x:number) => {
@@ -51,8 +60,10 @@ export function updateMatch(
   // Team ratings: sum of player mus plus any active pair synergy bonuses
   const gammaA = pairA?.gamma ?? 0;
   const gammaB = pairB?.gamma ?? 0;
-  const Ra = Aplayers.reduce((s,p)=>s+p.mu,0) + gammaA;
-  const Rb = Bplayers.reduce((s,p)=>s+p.mu,0) + gammaB;
+  const coreTeamRating = (players: PlayerState[]) =>
+    players.reduce((total, player) => total + player.mu, 0);
+  const Ra = coreTeamRating(Aplayers) + gammaA;
+  const Rb = coreTeamRating(Bplayers) + gammaB;
 
   const sportProfile = getSportProfile(match.sport);
   const pA = expectedWinProb(Ra, Rb, sportProfile.beta);
@@ -76,6 +87,32 @@ export function updateMatch(
   const mult = mismatchMultiplier(pA, y);
 
   const deltaTeam = mult * K * surprise * wt;
+
+  const countBySex = (players: PlayerState[]) => {
+    const counts = new Map<PlayerSex | 'U', number>();
+    for (const player of players) {
+      const key: PlayerSex | 'U' = player.sex ?? 'U';
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  };
+
+  const countsA = countBySex(Aplayers);
+  const countsB = countBySex(Bplayers);
+
+  const distinctSexes = new Set<PlayerSex>();
+  [...Aplayers, ...Bplayers].forEach((player) => {
+    if (player.sex) distinctSexes.add(player.sex);
+  });
+  const shouldEmitOffset = distinctSexes.size > 1;
+
+  const toRecord = (counts: Map<PlayerSex | 'U', number>) => {
+    const record: Record<PlayerSex | 'U', number> = { M: 0, F: 0, X: 0, U: 0 };
+    for (const [sex, value] of counts.entries()) {
+      record[sex] = value;
+    }
+    return record;
+  };
 
   // Remember before-values
   const before = [...Aplayers, ...Bplayers].map(p => ({ id: p.playerId, mu: p.mu, sigma: p.sigma }));
@@ -156,5 +193,12 @@ export function updateMatch(
     pairUpdates,
     teamDelta: deltaTeam,
     winProbability: pA,
+    sexOffset: shouldEmitOffset
+      ? ({
+          surprise,
+          countsA: toRecord(countsA),
+          countsB: toRecord(countsB),
+        } satisfies SexOffsetSignal)
+      : undefined,
   };
 }

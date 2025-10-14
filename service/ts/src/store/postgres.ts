@@ -1,6 +1,16 @@
 import { randomUUID } from 'crypto';
 import { and, eq, inArray, or, lt, lte, gt, gte, sql, desc } from 'drizzle-orm';
-import type { PlayerState, MatchInput, PairState, PairUpdate, Sport, Discipline, WinnerSide } from '../engine/types.js';
+import type {
+  PlayerState,
+  MatchInput,
+  PairState,
+  PairUpdate,
+  PlayerSex,
+  SexOffsetSignal,
+  Sport,
+  Discipline,
+  WinnerSide,
+} from '../engine/types.js';
 import { updateMatch as runMatchUpdate } from '../engine/rating.js';
 import { P } from '../engine/params.js';
 import { getDb } from '../db/client.js';
@@ -28,6 +38,7 @@ import {
   events,
   competitionParticipants,
   ratingReplayQueue,
+  ladderSexOffsets,
 } from '../db/schema.js';
 import {
   buildMatchCursor,
@@ -153,6 +164,15 @@ import {
 const now = () => new Date();
 
 const clampValue = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+type SexKey = PlayerSex | 'U';
+
+interface SexOffsetRecord {
+  sex: SexKey;
+  bias: number;
+  matches: number;
+  updatedAt: Date;
+}
 const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
 
 const MATCH_STAGE_TYPES: ReadonlySet<MatchStage['type']> = new Set([
@@ -326,6 +346,8 @@ type CompetitionParticipantRow = {
 export class PostgresStore implements RatingStore {
   private readonly ctx: PostgresStoreContext;
   private readonly organizations: OrganizationsModule;
+  private readonly sexOffsets = new Map<string, Map<SexKey, SexOffsetRecord>>();
+  private readonly sexOffsetEligibility = new Map<string, { expiresAt: number; allowed: boolean }>();
 
   constructor(private readonly db = getDb()) {
     this.ctx = createPostgresContext(this.db);
@@ -370,6 +392,277 @@ export class PostgresStore implements RatingStore {
       profilePhotoId: row.profilePhotoId ?? undefined,
       profilePhotoUploadedAt: row.profilePhotoUploadedAt?.toISOString(),
     };
+  }
+
+  private createDefaultSexOffset(sex: SexKey): SexOffsetRecord {
+    return { sex, bias: 0, matches: 0, updatedAt: new Date(0) };
+  }
+
+  private async ensureSexOffsetMap(
+    ladderId: string,
+    tx?: any
+  ): Promise<Map<SexKey, SexOffsetRecord>> {
+    let map = this.sexOffsets.get(ladderId);
+    if (map) return map;
+
+    const rows = (await (tx ?? this.db)
+      .select({
+        sex: ladderSexOffsets.sex,
+        bias: ladderSexOffsets.bias,
+        matches: ladderSexOffsets.matches,
+        updatedAt: ladderSexOffsets.updatedAt,
+      })
+      .from(ladderSexOffsets)
+      .where(eq(ladderSexOffsets.ladderId, ladderId))) as Array<{
+        sex: string;
+        bias: number;
+        matches: number;
+        updatedAt: Date;
+      }>;
+
+    map = new Map<SexKey, SexOffsetRecord>();
+    for (const row of rows) {
+      const sex = (row.sex as SexKey) ?? 'U';
+      map.set(sex, {
+        sex,
+        bias: row.bias,
+        matches: row.matches,
+        updatedAt: row.updatedAt,
+      });
+    }
+
+    const ensure = (sex: SexKey) => {
+      if (!map!.has(sex)) {
+        map!.set(sex, this.createDefaultSexOffset(sex));
+      }
+    };
+
+    ensure('M');
+    ensure('F');
+    ensure('X');
+    ensure('U');
+
+    this.sexOffsets.set(ladderId, map);
+    return map;
+  }
+
+  private async resetSexOffsets(tx: any, ladderId: string) {
+    await (tx ?? this.db)
+      .delete(ladderSexOffsets)
+      .where(eq(ladderSexOffsets.ladderId, ladderId));
+    this.sexOffsets.delete(ladderId);
+    this.sexOffsetEligibility.delete(ladderId);
+    await this.ensureSexOffsetMap(ladderId, tx);
+  }
+
+  private async getSexBias(
+    ladderId: string,
+    sex?: PlayerSex | null,
+    tx?: any
+  ): Promise<number> {
+    const map = await this.ensureSexOffsetMap(ladderId, tx);
+    const key: SexKey = sex ?? 'U';
+    return map.get(key)?.bias ?? 0;
+  }
+
+  private async countRecentInterSexMatches(
+    tx: any,
+    ladderId: string,
+    asOf: Date,
+    windowDays: number
+  ): Promise<number> {
+    const cutoff = new Date(asOf.getTime() - windowDays * 24 * 60 * 60 * 1000);
+    const rows = (await (tx ?? this.db)
+      .select({
+        matchId: matches.matchId,
+        sex: players.sex,
+      })
+      .from(matches)
+      .innerJoin(matchSides, eq(matchSides.matchId, matches.matchId))
+      .innerJoin(matchSidePlayers, eq(matchSidePlayers.matchSideId, matchSides.id))
+      .innerJoin(players, eq(matchSidePlayers.playerId, players.playerId))
+      .where(and(eq(matches.ladderId, ladderId), gte(matches.startTime, cutoff)))) as Array<{
+        matchId: string;
+        sex: string | null;
+      }>;
+
+    const perMatch = new Map<string, Set<string>>();
+    for (const row of rows) {
+      if (!row.sex) continue;
+      const set = perMatch.get(row.matchId) ?? new Set<string>();
+      set.add(row.sex);
+      perMatch.set(row.matchId, set);
+    }
+    let mixed = 0;
+    for (const set of perMatch.values()) {
+      if (set.size > 1) mixed += 1;
+    }
+    return mixed;
+  }
+
+  private async shouldAllowSexOffsetUpdate(
+    tx: any,
+    ladderId: string,
+    asOf: Date
+  ): Promise<boolean> {
+    if (!P.sexOffsets?.enabled) return false;
+
+    const params = P.sexOffsets;
+    const cache = this.sexOffsetEligibility.get(ladderId);
+    const nowMs = asOf.getTime();
+    if (cache && cache.expiresAt > nowMs) {
+      return cache.allowed;
+    }
+
+    const offsets = await this.ensureSexOffsetMap(ladderId, tx);
+    const relevantKeys: SexKey[] = ['M', 'F', 'X'];
+    const biases = relevantKeys.map((key) => offsets.get(key)?.bias ?? 0);
+    const width = biases.length ? Math.max(...biases) - Math.min(...biases) : 0;
+
+    let allow = true;
+    if (allow && params.minEdges90d && params.minEdges90d > 0) {
+      const mixed = await this.countRecentInterSexMatches(tx, ladderId, asOf, 90);
+      if (mixed < params.minEdges90d) {
+        allow = false;
+      }
+    }
+
+    if (allow && params.maxCiWidth !== undefined && params.maxCiWidth >= 0) {
+      if (width > params.maxCiWidth) {
+        allow = false;
+      }
+    }
+
+    this.sexOffsetEligibility.set(ladderId, {
+      allowed: allow,
+      expiresAt: nowMs + 6 * 60 * 60 * 1000,
+    });
+
+    return allow;
+  }
+
+  private async applySexOffsetSignal(
+    tx: any,
+    ladderId: string,
+    signal?: SexOffsetSignal | null
+  ): Promise<void> {
+    if (!signal || !P.sexOffsets?.enabled) return;
+    const nowTs = new Date();
+    if (!(await this.shouldAllowSexOffsetUpdate(tx, ladderId, nowTs))) {
+      return;
+    }
+    const map = await this.ensureSexOffsetMap(ladderId, tx);
+    const params = P.sexOffsets;
+    const baseline = params.baseline as SexKey;
+    const keys: SexKey[] = ['M', 'F', 'X', 'U'];
+
+    for (const key of keys) {
+      if (key === 'U') continue;
+      const diff = (signal.countsA[key] ?? 0) - (signal.countsB[key] ?? 0);
+      if (diff === 0) continue;
+      const record = map.get(key);
+      if (!record) continue;
+      const delta = clampValue(
+        params.kFactor * signal.surprise * diff,
+        -params.deltaMax,
+        params.deltaMax
+      );
+      const raw = record.bias + delta;
+      record.bias = clampValue(raw, -params.maxAbs, params.maxAbs);
+      record.matches += Math.abs(diff);
+      record.updatedAt = nowTs;
+    }
+
+    const baselineRecord = map.get(baseline);
+    const shift = baselineRecord?.bias ?? 0;
+    if (shift !== 0) {
+      for (const key of keys) {
+        const record = map.get(key);
+        if (!record) continue;
+        record.bias -= shift;
+      }
+    }
+    const persistKeys: SexKey[] = ['M', 'F', 'X'];
+    for (const key of persistKeys) {
+      const record = map.get(key) ?? this.createDefaultSexOffset(key);
+      record.updatedAt = nowTs;
+      await (tx ?? this.db)
+        .insert(ladderSexOffsets)
+        .values({
+          ladderId,
+          sex: key,
+          bias: record.bias,
+          matches: record.matches,
+          updatedAt: nowTs,
+        })
+        .onConflictDoUpdate({
+          target: [ladderSexOffsets.ladderId, ladderSexOffsets.sex],
+          set: {
+            bias: record.bias,
+            matches: record.matches,
+            updatedAt: nowTs,
+          },
+        });
+    }
+
+    this.sexOffsetEligibility.delete(ladderId);
+  }
+
+  private async applySexOffsetMaintenance(tx: any, asOf: Date) {
+    if (!P.sexOffsets?.enabled) return;
+    const shrink = P.sexOffsets.regularization ?? 0;
+    if (shrink <= 0) return;
+
+    const ladderRows = (await (tx ?? this.db)
+      .select({ ladderId: ladderSexOffsets.ladderId })
+      .from(ladderSexOffsets)) as Array<{ ladderId: string }>;
+
+    const ladderIds = new Set<string>(ladderRows.map((row) => row.ladderId));
+    for (const ladderId of this.sexOffsets.keys()) {
+      ladderIds.add(ladderId);
+    }
+
+    for (const ladderId of ladderIds) {
+      const map = await this.ensureSexOffsetMap(ladderId, tx);
+      const params = P.sexOffsets;
+      const baseline = params.baseline as SexKey;
+      const persistKeys: SexKey[] = ['M', 'F', 'X'];
+
+      for (const record of map.values()) {
+        record.bias = clampValue(record.bias * (1 - shrink), -params.maxAbs, params.maxAbs);
+        record.updatedAt = asOf;
+      }
+
+      const baselineBias = map.get(baseline)?.bias ?? 0;
+      if (baselineBias !== 0) {
+        for (const record of map.values()) {
+          record.bias = clampValue(record.bias - baselineBias, -params.maxAbs, params.maxAbs);
+        }
+      }
+
+      for (const key of persistKeys) {
+        const record = map.get(key) ?? this.createDefaultSexOffset(key);
+        await (tx ?? this.db)
+          .insert(ladderSexOffsets)
+          .values({
+            ladderId,
+            sex: key,
+            bias: record.bias,
+            matches: record.matches,
+            updatedAt: asOf,
+          })
+          .onConflictDoUpdate({
+            target: [ladderSexOffsets.ladderId, ladderSexOffsets.sex],
+            set: {
+              bias: record.bias,
+              matches: record.matches,
+              updatedAt: asOf,
+            },
+          });
+      }
+
+      this.sexOffsetEligibility.delete(ladderId);
+    }
   }
 
   private toEventRecord(row: EventRow): EventRecord {
@@ -969,7 +1262,11 @@ export class PostgresStore implements RatingStore {
       const updatedAt = row.updatedAt ?? asOf;
       const weeks = Math.max(0, (asOf.getTime() - updatedAt.getTime()) / MS_PER_WEEK);
       if (weeks <= 0) continue;
-      const factor = Math.pow(1 + P.idle.ratePerWeek, weeks);
+      const activationWeeks = P.idle.activationDays ? P.idle.activationDays / 7 : 0;
+      if (activationWeeks && weeks <= activationWeeks) continue;
+      const effectiveWeeks = activationWeeks ? weeks - activationWeeks : weeks;
+      if (effectiveWeeks <= 0) continue;
+      const factor = Math.pow(1 + P.idle.ratePerWeek, effectiveWeeks);
       let nextVar = row.sigma * row.sigma * factor;
       nextVar = Math.min(P.sigmaMax * P.sigmaMax, nextVar);
       const nextSigma = Math.max(P.sigmaMin, Math.sqrt(nextVar));
@@ -2339,6 +2636,7 @@ export class PostgresStore implements RatingStore {
         sigma: playerRatings.sigma,
         matchesCount: playerRatings.matchesCount,
         regionId: players.regionId,
+        sex: players.sex,
       })
       .from(playerRatings)
       .innerJoin(players, eq(playerRatings.playerId, players.playerId))
@@ -2351,12 +2649,16 @@ export class PostgresStore implements RatingStore {
 
     const map = new Map<string, PlayerState>();
     for (const row of rows) {
+      const sex = (row.sex ?? undefined) as PlayerSex | undefined;
+      const sexBias = await this.getSexBias(ladderId, sex);
       map.set(row.playerId, {
         playerId: row.playerId,
         mu: row.mu,
         sigma: row.sigma,
         matchesCount: row.matchesCount,
         regionId: row.regionId ?? undefined,
+        sex,
+        sexBias,
       });
     }
 
@@ -2626,11 +2928,19 @@ export class PostgresStore implements RatingStore {
       }
 
       if (result) {
+        if (result.sexOffset) {
+          await this.applySexOffsetSignal(tx, params.ladderId, result.sexOffset);
+          const offsets = await this.ensureSexOffsetMap(params.ladderId, tx);
+          for (const state of params.playerStates.values()) {
+            const key = (state.sex ?? 'U') as SexKey;
+            state.sexBias = offsets.get(key)?.bias ?? 0;
+          }
+        }
         for (const entry of result.perPlayer) {
           const playerState = params.playerStates.get(entry.playerId);
           await tx
             .update(playerRatings)
-          .set({
+            .set({
             mu: entry.muAfter,
             sigma: entry.sigmaAfter,
             matchesCount: playerState?.matchesCount ?? 0,
@@ -2924,6 +3234,7 @@ export class PostgresStore implements RatingStore {
         sigma: playerRatings.sigma,
         matchesCount: playerRatings.matchesCount,
         regionId: players.regionId,
+        sex: players.sex,
       })
       .from(playerRatings)
       .innerJoin(players, eq(playerRatings.playerId, players.playerId))
@@ -2936,12 +3247,16 @@ export class PostgresStore implements RatingStore {
 
     if (!rows.length) return null;
     const row = rows[0];
+    const sex = (row.sex ?? undefined) as PlayerSex | undefined;
+    const sexBias = await this.getSexBias(ladderId, sex);
     return {
       playerId: row.playerId,
       mu: row.mu,
       sigma: row.sigma,
       matchesCount: row.matchesCount,
       regionId: row.regionId ?? undefined,
+      sex,
+      sexBias,
     };
   }
 
@@ -3143,6 +3458,7 @@ export class PostgresStore implements RatingStore {
         mu: playerRatings.mu,
         sigma: playerRatings.sigma,
         updatedAt: playerRatings.updatedAt,
+        sex: players.sex,
       })
       .from(playerRatings)
       .innerJoin(players, eq(playerRatings.playerId, players.playerId))
@@ -3167,6 +3483,10 @@ export class PostgresStore implements RatingStore {
     const eventRecord = historyRow ? this.toRatingEventRecord(historyRow) : null;
 
     const effectiveMu = historyRow ? historyRow.muAfter : latestRating?.mu ?? P.baseMu;
+    const sex = (latestRating?.sex ?? null) as PlayerSex | null;
+    const bias = await this.getSexBias(ladderId, sex);
+    const muRaw = effectiveMu;
+    const muAdjusted = muRaw + bias;
     const effectiveSigma = historyRow ? historyRow.sigmaAfter : latestRating?.sigma ?? P.baseSigma;
 
     const asOf = asOfDate
@@ -3183,7 +3503,8 @@ export class PostgresStore implements RatingStore {
       playerId: params.playerId,
       ladderId,
       asOf,
-      mu: effectiveMu,
+      mu: muAdjusted,
+      muRaw,
       sigma: effectiveSigma,
       ratingEvent: eventRecord,
     } satisfies RatingSnapshot;
@@ -3194,6 +3515,12 @@ export class PostgresStore implements RatingStore {
       sport: params.sport,
       discipline: params.discipline,
     };
+    if (params.segment) {
+      ladderKey.segment = params.segment as LadderKey['segment'];
+    }
+    if (params.classCodes && params.classCodes.length) {
+      ladderKey.classCodes = params.classCodes;
+    }
     const ladderId = await this.ensureLadder(ladderKey);
     const limit = clampLimit(params.limit);
 
@@ -3280,42 +3607,7 @@ export class PostgresStore implements RatingStore {
       return { items: [], totalCount: 0, pageSize: limit } satisfies LeaderboardResult;
     }
 
-    const playerFilters: any[] = [...baseFilters];
-
-    const cursor = params.cursor ? decodeLeaderboardCursor(params.cursor) : null;
-    let startIndex = 0;
-
-    if (cursor) {
-      const precedingFilters = [...baseFilters];
-      precedingFilters.push(
-        or(
-          gt(playerRatings.mu, cursor.mu),
-          and(eq(playerRatings.mu, cursor.mu), lte(playerRatings.playerId, cursor.playerId))
-        )
-      );
-
-      const precedingCondition = combineFilters(precedingFilters);
-      if (precedingCondition) {
-        const countRows = (await this.db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(playerRatings)
-          .innerJoin(players, eq(playerRatings.playerId, players.playerId))
-          .where(precedingCondition)) as Array<{ count: number }>;
-        const counted = countRows.length ? countRows[0].count : cursor.rank;
-        startIndex = Math.max(counted, cursor.rank);
-      } else {
-        startIndex = cursor.rank;
-      }
-
-      playerFilters.push(
-        or(
-          lt(playerRatings.mu, cursor.mu),
-          and(eq(playerRatings.mu, cursor.mu), gt(playerRatings.playerId, cursor.playerId))
-        )
-      );
-    }
-
-    const playerCondition = combineFilters(playerFilters);
+    const condition = combineFilters(baseFilters);
 
     let playerQuery = this.db
       .select({
@@ -3329,34 +3621,66 @@ export class PostgresStore implements RatingStore {
         familyName: players.familyName,
         countryCode: players.countryCode,
         playerRegionId: players.regionId,
+        sex: players.sex,
       })
       .from(playerRatings)
-      .innerJoin(players, eq(playerRatings.playerId, players.playerId))
-      .orderBy(desc(playerRatings.mu), playerRatings.playerId)
-      .limit(limit + 1);
+      .innerJoin(players, eq(playerRatings.playerId, players.playerId));
 
-    if (playerCondition) {
-      playerQuery = playerQuery.where(playerCondition);
+    if (condition) {
+      playerQuery = playerQuery.where(condition);
     }
 
-    const rawRows = (await playerQuery) as PlayerLeaderboardRow[];
+    const rawRows = (await playerQuery) as Array<
+      PlayerLeaderboardRow & { sex: string | null }
+    >;
     if (!rawRows.length) {
       return { items: [], totalCount, pageSize: limit } satisfies LeaderboardResult;
     }
 
-    const hasMore = rawRows.length > limit;
-    const playerRows = rawRows.slice(0, limit);
-    if (!playerRows.length) {
+    const offsets = await this.ensureSexOffsetMap(ladderId);
+    const candidates = rawRows.map((row) => {
+      const sex = (row.sex ?? undefined) as PlayerSex | undefined;
+      const key = (sex ?? 'U') as SexKey;
+      const bias = offsets.get(key)?.bias ?? 0;
+      return {
+        row,
+        bias,
+        effectiveMu: row.mu + bias,
+      };
+    });
+
+    candidates.sort((a, b) => {
+      const diff = b.effectiveMu - a.effectiveMu;
+      if (diff !== 0) return diff;
+      return a.row.playerId.localeCompare(b.row.playerId);
+    });
+
+    let startIndex = 0;
+    const cursor = params.cursor ? decodeLeaderboardCursor(params.cursor) : null;
+    if (cursor) {
+      const directIndex = candidates.findIndex((entry) => entry.row.playerId === cursor.playerId);
+      if (directIndex >= 0) {
+        startIndex = directIndex + 1;
+      } else {
+        const fallbackIndex = candidates.findIndex((entry) => {
+          if (entry.effectiveMu < cursor.mu) return true;
+          if (entry.effectiveMu > cursor.mu) return false;
+          return entry.row.playerId > cursor.playerId;
+        });
+        if (fallbackIndex >= 0) {
+          startIndex = fallbackIndex;
+        } else {
+          startIndex = Math.min(cursor.rank, candidates.length);
+        }
+      }
+    }
+
+    const slice = candidates.slice(startIndex, startIndex + limit);
+    if (!slice.length) {
       return { items: [], totalCount, pageSize: limit } satisfies LeaderboardResult;
     }
 
-    if (!cursor) {
-      startIndex = 0;
-    } else {
-      startIndex = Math.max(startIndex, cursor.rank, 0);
-    }
-
-    const playerIds = playerRows.map((row) => row.playerId);
+    const playerIds = slice.map((entry) => entry.row.playerId);
 
     const historyFilters: any[] = [
       eq(playerRatingHistory.ladderId, ladderId),
@@ -3405,7 +3729,8 @@ export class PostgresStore implements RatingStore {
       }
     }
 
-    const items: LeaderboardEntry[] = playerRows.map((row, index) => {
+    const items: LeaderboardEntry[] = slice.map((entry, index) => {
+      const { row, effectiveMu } = entry;
       const latest = latestByPlayer.get(row.playerId);
       return {
         rank: startIndex + index + 1,
@@ -3416,7 +3741,8 @@ export class PostgresStore implements RatingStore {
         familyName: row.familyName ?? undefined,
         countryCode: row.countryCode ?? undefined,
         regionId: row.playerRegionId ?? undefined,
-        mu: row.mu,
+        mu: effectiveMu,
+        muRaw: row.mu,
         sigma: row.sigma,
         matches: row.matchesCount,
         delta: latest?.delta ?? null,
@@ -3425,11 +3751,12 @@ export class PostgresStore implements RatingStore {
       } satisfies LeaderboardEntry;
     });
 
+    const hasMore = candidates.length > startIndex + slice.length;
     const nextCursor = hasMore
       ? encodeLeaderboardCursor({
-          mu: playerRows[playerRows.length - 1].mu,
-          playerId: playerRows[playerRows.length - 1].playerId,
-          rank: startIndex + playerRows.length,
+          mu: slice[slice.length - 1].effectiveMu,
+          playerId: slice[slice.length - 1].row.playerId,
+          rank: startIndex + slice.length,
         })
       : undefined;
 
@@ -3441,6 +3768,12 @@ export class PostgresStore implements RatingStore {
       sport: params.sport,
       discipline: params.discipline,
     };
+    if (params.segment) {
+      ladderKey.segment = params.segment as LadderKey['segment'];
+    }
+    if (params.classCodes && params.classCodes.length) {
+      ladderKey.classCodes = params.classCodes;
+    }
     const ladderId = await this.ensureLadder(ladderKey);
     const limit = clampLimit(params.limit);
 
@@ -3512,6 +3845,7 @@ export class PostgresStore implements RatingStore {
         familyName: players.familyName,
         countryCode: players.countryCode,
         playerRegionId: players.regionId,
+        sex: players.sex,
       })
       .from(playerRatings)
       .innerJoin(players, eq(playerRatings.playerId, players.playerId));
@@ -3520,11 +3854,12 @@ export class PostgresStore implements RatingStore {
       ratingQuery = ratingQuery.where(ratingCondition);
     }
 
-    const ratingRows = (await ratingQuery) as PlayerLeaderboardRow[];
-    const ratingByPlayer = new Map<string, PlayerLeaderboardRow>(
+    const ratingRows = (await ratingQuery) as Array<PlayerLeaderboardRow & { sex: string | null }>;
+    const ratingByPlayer = new Map<string, PlayerLeaderboardRow & { sex: string | null }>(
       ratingRows.map((row) => [row.playerId, row])
     );
 
+    const offsets = await this.ensureSexOffsetMap(ladderId);
     const items: LeaderboardMoverEntry[] = [];
 
     for (const row of aggregateRows) {
@@ -3548,6 +3883,10 @@ export class PostgresStore implements RatingStore {
         }
       }
 
+      const sex = (rating.sex ?? undefined) as PlayerSex | undefined;
+      const key = (sex ?? 'U') as SexKey;
+      const bias = offsets.get(key)?.bias ?? 0;
+
       items.push({
         playerId: rating.playerId,
         displayName: rating.displayName,
@@ -3556,7 +3895,8 @@ export class PostgresStore implements RatingStore {
         familyName: rating.familyName ?? undefined,
         countryCode: rating.countryCode ?? undefined,
         regionId: rating.playerRegionId ?? undefined,
-        mu: rating.mu,
+        mu: rating.mu + bias,
+        muRaw: rating.mu,
         sigma: rating.sigma,
         matches: rating.matchesCount,
         change,
@@ -3582,6 +3922,7 @@ export class PostgresStore implements RatingStore {
       await this.applyRegionBias(tx, asOf);
       await this.applyGraphSmoothing(tx, asOf, horizonDays);
       await this.applyDriftControl(tx, asOf);
+      await this.applySexOffsetMaintenance(tx, asOf);
     });
   }
 
@@ -3685,6 +4026,10 @@ export class PostgresStore implements RatingStore {
       if (!ladder) {
         throw new Error(`Ladder not found: ${ladderId}`);
       }
+
+      await this.resetSexOffsets(tx, ladderId);
+
+      const offsets = await this.ensureSexOffsetMap(ladderId, tx);
 
       const matchRows = (await tx
         .select({
@@ -3836,12 +4181,14 @@ export class PostgresStore implements RatingStore {
               playerId: players.playerId,
               regionId: players.regionId,
               organizationId: players.organizationId,
+              sex: players.sex,
             })
             .from(players)
             .where(inArray(players.playerId, playerIdList))) as Array<{
             playerId: string;
             regionId: string | null;
             organizationId: string;
+            sex: string | null;
           }>)
         : [];
       const playerRegionMap = new Map<string, string | undefined>(
@@ -3850,18 +4197,31 @@ export class PostgresStore implements RatingStore {
       const playerOrganizationMap = new Map<string, string>(
         playerMetaRows.map((row) => [row.playerId, row.organizationId])
       );
+      const playerSexMap = new Map<string, PlayerSex | undefined>(
+        playerMetaRows.map((row) => [row.playerId, (row.sex ?? undefined) as PlayerSex | undefined])
+      );
 
       const ensurePlayerState = (map: Map<string, PlayerState>, playerId: string) => {
         let state = map.get(playerId);
         if (!state) {
+          const sex = playerSexMap.get(playerId);
+          const key = (sex ?? 'U') as SexKey;
+          const sexBias = offsets.get(key)?.bias ?? 0;
           state = {
             playerId,
             mu: P.baseMu,
             sigma: P.baseSigma,
             matchesCount: 0,
             regionId: playerRegionMap.get(playerId),
+            sex,
+            sexBias,
           };
           map.set(playerId, state);
+        } else {
+          const sex = playerSexMap.get(playerId) ?? state.sex;
+          state.sex = sex;
+          const key = (sex ?? 'U') as SexKey;
+          state.sexBias = offsets.get(key)?.bias ?? 0;
         }
         return state;
       };
@@ -3976,6 +4336,14 @@ export class PostgresStore implements RatingStore {
             ? (playersList) => ensurePairState(pairStates, playersList)
             : undefined,
         });
+
+        if (result.sexOffset) {
+          await this.applySexOffsetSignal(tx, ladderId, result.sexOffset);
+          for (const state of playerStates.values()) {
+            const key = (state.sex ?? 'U') as SexKey;
+            state.sexBias = offsets.get(key)?.bias ?? 0;
+          }
+        }
 
         const timing = (matchRow.timing as MatchTiming | null) ?? null;
         const completedAt = timing ? parseTimestamp(timing.completedAt ?? null) : null;
@@ -4300,7 +4668,12 @@ export class PostgresStore implements RatingStore {
 
   async claimPlayerInsightsJob(
     options: PlayerInsightsJobClaimOptions
-  ): Promise<PlayerInsightsJob | null> {
+  ): Promise<PlayerInsightsJob[]> {
+    const requestedBatchSize = Number(options.batchSize ?? 1);
+    const batchSize = Number.isFinite(requestedBatchSize)
+      ? Math.max(1, Math.min(requestedBatchSize, 100))
+      : 1;
+
     const result = await this.db.execute(sql`
       WITH claimed AS (
         SELECT job_id
@@ -4309,7 +4682,7 @@ export class PostgresStore implements RatingStore {
           AND run_at <= now()
         ORDER BY run_at ASC
         FOR UPDATE SKIP LOCKED
-        LIMIT 1
+        LIMIT ${batchSize}
       )
       UPDATE player_insight_jobs
       SET status = 'IN_PROGRESS',
@@ -4346,22 +4719,27 @@ export class PostgresStore implements RatingStore {
       payload: unknown;
       lastError: string | null;
     }>;
-    const row = rows?.[0];
-    if (!row) return null;
-    return {
+
+    if (!rows?.length) return [];
+
+    return rows.map((row) => ({
       jobId: row.jobId,
       playerId: row.playerId,
       organizationId: row.organizationId,
       sport: (row.sport ?? null) as Sport | null,
       discipline: (row.discipline ?? null) as Discipline | null,
-      runAt: row.runAt.toISOString(),
+      runAt: row.runAt instanceof Date
+        ? row.runAt.toISOString()
+        : new Date(row.runAt).toISOString(),
       status: row.status as PlayerInsightsJob['status'],
       attempts: row.attempts,
-      lockedAt: row.lockedAt ? row.lockedAt.toISOString() : null,
+      lockedAt: row.lockedAt
+        ? (row.lockedAt instanceof Date ? row.lockedAt.toISOString() : new Date(row.lockedAt).toISOString())
+        : null,
       lockedBy: row.lockedBy ?? null,
       payload: (row.payload ?? null) as Record<string, unknown> | null,
       lastError: row.lastError ?? null,
-    } satisfies PlayerInsightsJob;
+    } satisfies PlayerInsightsJob));
   }
 
   async completePlayerInsightsJob(result: PlayerInsightsJobCompletion): Promise<void> {

@@ -18,7 +18,7 @@
 
 ## 2. Notation
 - Player *i*: rating `(μ_i, σ_i)`.
-- Team rating:  
+- Team rating (core updates):  
   ```
   R_A = Σ μ_i + γ_A
   ```
@@ -27,6 +27,11 @@
   p_A = Φ((R_A - R_B) / (√2 * β))
   ```
 - Match outcome: `y ∈ {0,1}`, surprise `s = y - p_A`.
+- Adjusted display / prediction (optional):  
+  ```
+  R_A^{adj} = Σ (μ_i + θ_{sex(i)}) + γ_A
+  ```
+- Per-sex offset: `θ_g` for `g ∈ {M, F, X}` with baseline `θ_baseline = 0`. Stored ratings (`μ_raw`) exclude this term; public displays use `μ_display = μ_raw + θ_{sex}`.
 
 ---
 
@@ -46,7 +51,8 @@ K = clip(
 )
 ```
 
-- **RookieMultiplier** = 1.4 for first N=10 matches.
+- **RookieMultiplier** = 1.8 for first N=20 matches.
+- `K_max = 60` (and `K_min = 8`).
 - **σ_ref** = steady-state median σ.
 
 ### 3.3 Distribution
@@ -71,13 +77,13 @@ if |s| > τ:
 
 ### 4.3 Inactivity creep (nightly)
 ```
-σ² = min(σ_idle², σ² * (1 + ρ_idle)^Δt)
+σ² = min(σ_max², σ² * (1 + ρ_idle)^Δt)
 ```
 
 **Defaults:**
-- `η_down=0.05`, `η_up=0.15`, `τ=0.25`
-- `ρ_idle=0.02/week`
-- Bounds: `[σ_min, σ_max] = [70, 400]`
+- `η_down = 0.10`, `η_up = 0.09`, `τ = 0.30`
+- Inactivity creep: `ρ_idle = 0.0075 / week` applied only after 28 idle days
+- Bounds: `[σ_min, σ_max] = [70, 350]`
 
 ---
 
@@ -116,15 +122,33 @@ if |s| > τ:
 
 ---
 
-## 8. Initialization
-- New player: `μ=1500`, `σ=350`.
-- Rookie multiplier applied for first 10 matches.
-- Provisional until `σ ≤ 120`.
+## 8. Sex Offset Calibration
+- **Scope:** `θ` is never used inside the core update loop. It is applied only when producing adjusted leaderboards or when an API caller explicitly asks for adjusted predictions.
+- Combined ladders maintain per-sex offsets `θ_g` (g ∈ {M, F, X}) that shift each player's display mean when needed.
+- Stored ratings remain neutral (`μ_raw`); public APIs expose both `μ_raw` and `μ_display = μ_raw + θ_{sex}` so consumers can audit the adjustment.
+- Offset learning is triggered only by inter-sex matches. The update leverages surprise and the difference in headcounts:  
+  ```
+  θ_g ← clip(θ_g + κ * s * Δcount_g, -θ_max, θ_max)
+  ```
+  where `Δcount_g = (#g on side A) - (#g on side B)` and `s` is the match surprise.
+- Offset updates run independently of the μ/σ updates; they never mutate the stored ratings.
+- During nightly stabilization the offsets are re-centered to zero mean and a mild regularization (`λ_θ`) decays them toward `0`.
+- Unknown sex (`U`) stays neutral (0) until the player is tagged.
+- Defaults: `κ=12`, per-update cap `θ_step=6`, absolute clamp `θ_max=120`, nightly shrink `λ_θ=0.01`.
+- Updates pause when the past 90 days contain fewer than θ_min_edges mixed matches or when the current spread exceeds θ_max_ci_width.
+- Offsets persist per ladder (keyed by `(ladder_id, sex)`) so backfills and service restarts retain calibration.
+
+---
+
+## 9. Initialization
+- New player: `μ=1500`, `σ=300` (pros may initialize at `σ=260`).
+- Rookie multiplier applied for first 20 matches.
+- Provisional until `σ ≤ 130` or matches played ≥ 20.
 - New pair synergy: `γ=0`.
 
 ---
 
-## 9. Stabilization (Nightly Batch)
+## 10. Stabilization (Nightly Batch)
 1. **Region bias correction:**  
    - Fit cross-region residuals only.  
    - Apply bounded affine shifts: `|Δ| ≤ 8 pts/day`.
@@ -139,9 +163,14 @@ if |s| > τ:
 3. **Drift control:**  
    - Re-center global mean/variance with affine transform.
 
+4. **Sex offset maintenance:**  
+   - For each `g ∈ {M, F, X}`, apply nightly shrink `θ_g ← (1 - λ_θ) · θ_g`.  
+   - Recenter offsets to zero mean.
+   - If inter-sex edges in the past 90 days fall below 200 or the current spread exceeds 40 points, freeze θ updates and skip further adjustments until confidence is restored.
+
 ---
 
-## 10. Back-Dated Results
+## 11. Back-Dated Results
 - Immutable event log with `start_time`, `ingest_time`.
 - Daily snapshots (`snapshot_id = UTC date + param hash`).
 - On insert at `t*`:
@@ -152,18 +181,21 @@ if |s| > τ:
 
 ---
 
-## 11. Parameters (v1.1 Defaults)
-- `μ0=1500`, `σ0=350`, `σ_min=70`, `σ_max=400`, `σ_prov=120`
-- Badminton: `β=200`, `K0=32`
-- Tennis: `β=230`, `K0=28`
+## 12. Parameters (v1.1b Defaults)
+- `μ0=1500`, `σ0=300` (pros 260), `σ_min=70`, `σ_max=350`, `σ_prov=130`
+- Badminton: `β=185`, `K0=44`, `K_max=60`
+- Learning rate bounds: `K_min=8`, `K_max=60`
 - MOV: rally [0.7,1.3], set [0.85,1.15]
 - Tier multipliers: 1.15 / 1.05 / 1.0 / 0.9
-- Rookie: N=10, multiplier=1.4
+- Rookie: N=20, multiplier=1.8
+- Uncertainty: `η_down=0.10`, `η_up=0.09`, `τ=0.30`
+- Inactivity: `ρ_idle=0.0075` per week after 28 idle days
 - Synergy: as above
+- Sex offsets: baseline `θ_M=0`, per-update cap `±6`, clamp `±120`, nightly shrink `λ_θ=0.01`, gating thresholds `θ_min_edges=200`, `θ_max_ci_width=40`.
 
 ---
 
-## 12. Pseudocode
+## 13. Pseudocode
 
 ```pseudo
 function PROCESS_MATCH(match):
@@ -196,12 +228,23 @@ function PROCESS_MATCH(match):
       γ[sideA_pair] = clip(γ[sideA_pair] + Δγ, γ_min, γ_max)
       γ[sideB_pair] = clip(γ[sideB_pair] - Δγ, γ_min, γ_max)
 
+  if match includes multiple sexes:
+      for g in {M, F, X}:
+          Δcount = count_players(match.sideA, g) - count_players(match.sideB, g)
+          if Δcount ≠ 0:
+              θ[g] = clip(θ[g] + κ * s * Δcount, -θ_max, θ_max)
+
   append_history(match_id, scalars, pre/post ratings)
+
+function ADJUSTED_PREDICTION(sideA, sideB):
+  Aμ_adj = sum(μ[p] + θ[sex(p)] for p in sideA) + synergy(sideA)
+  Bμ_adj = sum(μ[p] + θ[sex(p)] for p in sideB) + synergy(sideB)
+  return normal_cdf((Aμ_adj - Bμ_adj) / (sqrt(2) * β))
 ```
 
 ---
 
-## 13. Monitoring
+## 14. Monitoring
 - **Accuracy:** Brier, log-loss, AUC.
 - **Calibration:** reliability curves by p-bucket.
 - **Stability:** mean |Δμ| per player-week, σ distribution, rank churn.

@@ -8,7 +8,34 @@ export const normalizeRegion = (region?: string | null) => (region && region.tri
 
 export const isDefaultRegion = (regionId: string) => regionId === NULL_REGION;
 
-export const buildLadderId = (key: LadderKey) => [key.sport, key.discipline].join(':');
+export const normalizeClassCodes = (codes?: string[] | null): string[] => {
+  if (!codes) return [];
+  const unique = new Set<string>();
+  for (const raw of codes) {
+    if (!raw) continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    unique.add(trimmed.toUpperCase());
+  }
+  return [...unique].sort((a, b) => a.localeCompare(b));
+};
+
+export const buildLadderId = (key: LadderKey) => {
+  const parts: string[] = [key.sport, key.discipline];
+
+  const classCodes = normalizeClassCodes(key.classCodes ?? null);
+  const segment = key.segment ?? null;
+
+  if (segment && (segment === 'PARA' || classCodes.length > 0)) {
+    parts.push(`segment=${segment}`);
+  }
+
+  if (classCodes.length > 0) {
+    parts.push(`class=${classCodes.join('+')}`);
+  }
+
+  return parts.join(':');
+};
 
 const sortPair = (players: string[]) => [...players].sort((a, b) => a.localeCompare(b));
 
