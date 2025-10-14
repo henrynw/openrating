@@ -17,13 +17,15 @@
     "replay": "tsx scripts/replay.ts",
     "insights:worker": "NODE_ENV=production tsx scripts/insights-worker.ts",
     "ai-insights:worker": "NODE_ENV=production tsx scripts/ai-insights-worker.ts",
-    "leaderboard:backfill": "tsx scripts/backfill-leaderboard.ts"
+    "leaderboard:backfill": "tsx scripts/backfill-leaderboard.ts",
+    "token:mint:dev": "tsx scripts/mint-dev-token.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.30.5",
     "express": "^4.19.2",
     "express-oauth2-jwt-bearer": "^1.7.0",
+    "jsonwebtoken": "^9.0.2",
     "openai": "^4.58.0",
     "pg": "^8.11.5",
     "yargs": "^17.7.2",

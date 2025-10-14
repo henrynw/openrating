@@ -87,6 +87,11 @@ You control the variants (resize, format, etc.) inside Cloudflare Images—defin
 - Seed `subjects` and `subject_grants` tables with the org/sport permissions your callers need.  The API auto-creates a `subjects` row the first time a new Auth0 `sub` appears.
 - Using the hosted OpenRating API? Request client credentials via the [contact form](https://www.openrating.app/contact) and we’ll provision access for you.
 
+### Dev token minting (skip Auth0)
+- For local/dev environments you can swap to a shared-secret signer by setting `AUTH_PROVIDER=DEV` and supplying `AUTH_DEV_SHARED_SECRET` (optionally `AUTH_DEV_AUDIENCE`/`AUTH_DEV_ISSUER`). The API will validate HS256 bearer tokens using those values.
+- Generate compatible tokens with `npm run token:mint:dev -- --subject dev-client --scope "matches:write ratings:read"`. The script prints the token plus its claims so you can copy it into tooling or an `Authorization: Bearer` header.
+- The CLI uses the same environment variables, so keep `AUTH_DEV_SHARED_SECRET` consistent wherever you mint tokens. Rotate the secret when you need to invalidate previously issued dev tokens.
+
 ### Grant management CLI
 ```bash
 cd service/ts

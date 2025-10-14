@@ -1,20 +1,62 @@
 import type { Request, RequestHandler } from 'express';
 import { auth } from 'express-oauth2-jwt-bearer';
+import jwt from 'jsonwebtoken';
 import { ensureSubject, hasOrgPermission, loadGrants } from './store/grants.js';
 
 const audience = process.env.AUTH0_AUDIENCE;
 const domain = process.env.AUTH0_DOMAIN;
-const configured = Boolean(audience && domain);
+const authProvider = (process.env.AUTH_PROVIDER ?? 'AUTH0').toUpperCase();
 
-const AUTH_DISABLED = process.env.AUTH_DISABLE === '1' || !configured;
+const devSharedSecret = process.env.AUTH_DEV_SHARED_SECRET;
+const devAudience = process.env.AUTH_DEV_AUDIENCE ?? audience;
+const devIssuer = process.env.AUTH_DEV_ISSUER;
+
+const configuredAuth0 = Boolean(audience && domain);
+const configuredDev = authProvider === 'DEV' && Boolean(devSharedSecret);
+
+const AUTH_DISABLED = process.env.AUTH_DISABLE === '1' || (!configuredAuth0 && !configuredDev);
+
+const createDevJwtMiddleware = (): RequestHandler => {
+  const secret = devSharedSecret;
+  if (!secret) {
+    // Should not happen when CONFIGURED_DEV is true, fallback to no-auth passthrough.
+    return (_req, _res, next) => next();
+  }
+
+  return (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).send({ error: 'missing_token', message: 'Authorization header missing bearer token.' });
+    }
+
+    const token = authHeader.slice('Bearer '.length);
+
+    try {
+      const verifyOptions: jwt.VerifyOptions = {
+        algorithms: ['HS256'],
+      };
+      if (devAudience) verifyOptions.audience = devAudience;
+      if (devIssuer) verifyOptions.issuer = devIssuer;
+
+      const payload = jwt.verify(token, secret, verifyOptions);
+      (req as any).auth = { payload };
+      return next();
+    } catch (err) {
+      console.error('dev_auth_invalid_token', err instanceof Error ? err.message : err);
+      return res.status(401).send({ error: 'invalid_token', message: 'Invalid or expired token.' });
+    }
+  };
+};
 
 const jwtMiddleware: RequestHandler = AUTH_DISABLED
   ? (_req, _res, next) => next()
-  : auth({
-      audience,
-      issuerBaseURL: `https://${domain}`,
-      algorithms: ['RS256'],
-    });
+  : configuredDev
+    ? createDevJwtMiddleware()
+    : auth({
+        audience,
+        issuerBaseURL: `https://${domain}`,
+        algorithms: ['RS256'],
+      });
 
 export const requireAuth = jwtMiddleware;
 
