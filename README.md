@@ -87,6 +87,12 @@ You control the variants (resize, format, etc.) inside Cloudflare Images—defin
 - Seed `subjects` and `subject_grants` tables with the org/sport permissions your callers need.  The API auto-creates a `subjects` row the first time a new Auth0 `sub` appears.
 - Using the hosted OpenRating API? Request client credentials via the [contact form](https://www.openrating.app/contact) and we’ll provision access for you.
 
+### AWS Cognito integration
+- Set `AUTH_PROVIDER=COGNITO` and point the API at your user pool by defining `COGNITO_REGION` (e.g. `us-east-1`) and `COGNITO_USER_POOL_ID` (e.g. `us-east-1_123abcXYZ`).
+- Optionally configure `COGNITO_AUDIENCE` if you need to pin access tokens to a specific app client ID; otherwise the audience check is skipped.
+- The middleware (`service/ts/src/auth.ts`) fetches keys from Cognito’s JWKS endpoint (`https://cognito-idp.<region>.amazonaws.com/<pool>/.well-known/jwks.json`) and validates HS/RS256 access tokens issued via client credentials or hosted login.
+- Scopes and grant enforcement behave exactly like the Auth0 path—ensure your Cognito access tokens include a `scope` claim aligned with the grants stored in `subjects` / `subject_grants`.
+
 ### Dev token minting (skip Auth0)
 - For local/dev environments you can swap to a shared-secret signer by setting `AUTH_PROVIDER=DEV` and supplying `AUTH_DEV_SHARED_SECRET` (optionally `AUTH_DEV_AUDIENCE`/`AUTH_DEV_ISSUER`). The API will validate HS256 bearer tokens using those values.
 - Generate compatible tokens with `npm run token:mint:dev -- --subject dev-client --scope "matches:write ratings:read"`. The script prints the token plus its claims so you can copy it into tooling or an `Authorization: Bearer` header.

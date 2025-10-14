@@ -1,6 +1,7 @@
 import type { Request, RequestHandler } from 'express';
 import { auth } from 'express-oauth2-jwt-bearer';
 import jwt from 'jsonwebtoken';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { ensureSubject, hasOrgPermission, loadGrants } from './store/grants.js';
 
 const audience = process.env.AUTH0_AUDIENCE;
@@ -11,10 +12,16 @@ const devSharedSecret = process.env.AUTH_DEV_SHARED_SECRET;
 const devAudience = process.env.AUTH_DEV_AUDIENCE ?? audience;
 const devIssuer = process.env.AUTH_DEV_ISSUER;
 
-const configuredAuth0 = Boolean(audience && domain);
-const configuredDev = authProvider === 'DEV' && Boolean(devSharedSecret);
+const cognitoRegion = process.env.COGNITO_REGION;
+const cognitoUserPoolId = process.env.COGNITO_USER_POOL_ID;
+const cognitoAudience = process.env.COGNITO_AUDIENCE ?? audience;
+const cognitoIssuer = cognitoRegion && cognitoUserPoolId ? `https://cognito-idp.${cognitoRegion}.amazonaws.com/${cognitoUserPoolId}` : undefined;
 
-const AUTH_DISABLED = process.env.AUTH_DISABLE === '1' || (!configuredAuth0 && !configuredDev);
+const configuredAuth0 = authProvider === 'AUTH0' && Boolean(audience && domain);
+const configuredDev = authProvider === 'DEV' && Boolean(devSharedSecret);
+const configuredCognito = authProvider === 'COGNITO' && Boolean(cognitoIssuer);
+
+const AUTH_DISABLED = process.env.AUTH_DISABLE === '1' || (!configuredAuth0 && !configuredDev && !configuredCognito);
 
 const createDevJwtMiddleware = (): RequestHandler => {
   const secret = devSharedSecret;
@@ -48,15 +55,56 @@ const createDevJwtMiddleware = (): RequestHandler => {
   };
 };
 
+let cognitoJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+
+const createCognitoJwtMiddleware = (): RequestHandler => {
+  if (!cognitoIssuer) {
+    return (_req, _res, next) => next();
+  }
+
+  if (!cognitoJwks) {
+    const jwksUrl = new URL(`${cognitoIssuer}/.well-known/jwks.json`);
+    cognitoJwks = createRemoteJWKSet(jwksUrl);
+  }
+
+  const audienceConstraint = cognitoAudience ? [cognitoAudience] : undefined;
+
+  return (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).send({ error: 'missing_token', message: 'Authorization header missing bearer token.' });
+    }
+
+    const token = authHeader.slice('Bearer '.length);
+
+    (async () => {
+      if (!cognitoJwks) {
+        throw new Error('Cognito JWKS not initialized');
+      }
+      const { payload } = await jwtVerify(token, cognitoJwks, {
+        issuer: cognitoIssuer,
+        audience: audienceConstraint,
+      });
+      (req as any).auth = { payload };
+      next();
+    })().catch((err) => {
+      console.error('cognito_auth_invalid_token', err instanceof Error ? err.message : err);
+      res.status(401).send({ error: 'invalid_token', message: 'Invalid or expired token.' });
+    });
+  };
+};
+
 const jwtMiddleware: RequestHandler = AUTH_DISABLED
   ? (_req, _res, next) => next()
   : configuredDev
     ? createDevJwtMiddleware()
-    : auth({
-        audience,
-        issuerBaseURL: `https://${domain}`,
-        algorithms: ['RS256'],
-      });
+    : configuredCognito
+      ? createCognitoJwtMiddleware()
+      : auth({
+          audience,
+          issuerBaseURL: `https://${domain}`,
+          algorithms: ['RS256'],
+        });
 
 export const requireAuth = jwtMiddleware;
 
