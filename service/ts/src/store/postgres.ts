@@ -81,6 +81,8 @@ import type {
   MatchStatistics,
   MatchParticipant,
   MatchSideSummary,
+  MatchPlayerSummaryEmbed,
+  MatchEventSummaryEmbed,
   MatchStage,
   OrganizationCreateInput,
   OrganizationListQuery,
@@ -103,6 +105,9 @@ import type {
   LeaderboardMoversQuery,
   LeaderboardMoversResult,
   LeaderboardMoverEntry,
+  PlayerRatingsSummaryQuery,
+  PlayerRatingsSummaryResult,
+  PlayerRatingsSummaryItem,
   EventCreateInput,
   EventUpdateInput,
   EventRecord,
@@ -3903,6 +3908,196 @@ export class PostgresStore implements RatingStore {
     return { items } satisfies LeaderboardMoversResult;
   }
 
+  async getPlayerRatingsSummary(params: PlayerRatingsSummaryQuery): Promise<PlayerRatingsSummaryResult> {
+    const uniqueIds = Array.from(new Set(params.playerIds));
+    if (!uniqueIds.length) {
+      return { items: [] } satisfies PlayerRatingsSummaryResult;
+    }
+
+    const ladderKey: LadderKey = {
+      sport: params.sport,
+      discipline: params.discipline,
+    };
+    if (params.segment) {
+      ladderKey.segment = params.segment as LadderKey['segment'];
+    }
+    if (params.classCodes && params.classCodes.length) {
+      ladderKey.classCodes = params.classCodes;
+    }
+    const ladderId = await this.ensureLadder(ladderKey);
+
+    if (params.organizationId) {
+      await this.ctx.assertOrganizationExists(params.organizationId);
+    }
+
+    const baseFilters: SqlFilter[] = [
+      eq(playerRatings.ladderId, ladderId),
+      inArray(playerRatings.playerId, uniqueIds),
+      gt(playerRatings.matchesCount, 0),
+    ];
+    if (params.organizationId) {
+      baseFilters.push(eq(players.organizationId, params.organizationId));
+    }
+
+    const condition = combineFilters(baseFilters);
+    if (!condition) {
+      return { items: [] } satisfies PlayerRatingsSummaryResult;
+    }
+
+    const biasExpr = sql<number>`COALESCE(${ladderSexOffsets.bias}, 0)`;
+    const effectiveMuExpr = sql<number>`(${playerRatings.mu} + ${biasExpr})`;
+
+    const playerRows = (await this.db
+      .select({
+        playerId: playerRatings.playerId,
+        mu: playerRatings.mu,
+        sigma: playerRatings.sigma,
+        matchesCount: playerRatings.matchesCount,
+        displayName: players.displayName,
+        shortName: players.shortName,
+        givenName: players.givenName,
+        familyName: players.familyName,
+        countryCode: players.countryCode,
+        playerRegionId: players.regionId,
+        sex: players.sex,
+        effectiveMu: effectiveMuExpr,
+      })
+      .from(playerRatings)
+      .innerJoin(players, eq(playerRatings.playerId, players.playerId))
+      .leftJoin(
+        ladderSexOffsets,
+        and(
+          eq(ladderSexOffsets.ladderId, playerRatings.ladderId),
+          sql`${ladderSexOffsets.sex} = COALESCE(${players.sex}, 'U')`
+        )
+      )
+      .where(condition)
+      .orderBy(desc(effectiveMuExpr), playerRatings.playerId)) as Array<
+        PlayerLeaderboardRow & { sex: string | null; effectiveMu: number }
+      >;
+
+    if (!playerRows.length) {
+      return { items: [] } satisfies PlayerRatingsSummaryResult;
+    }
+
+    const historyFilters: SqlFilter[] = [
+      eq(playerRatingHistory.ladderId, ladderId),
+      inArray(playerRatingHistory.playerId, playerRows.map((row) => row.playerId)),
+    ];
+    if (params.organizationId) {
+      historyFilters.push(eq(matches.organizationId, params.organizationId));
+    }
+
+    const historyCondition = combineFilters(historyFilters);
+
+    let historyQuery = this.db
+      .select({
+        playerId: playerRatingHistory.playerId,
+        delta: playerRatingHistory.delta,
+        matchId: playerRatingHistory.matchId,
+        createdAt: playerRatingHistory.createdAt,
+        id: playerRatingHistory.id,
+      })
+      .from(playerRatingHistory)
+      .innerJoin(matches, eq(matches.matchId, playerRatingHistory.matchId))
+      .orderBy(desc(playerRatingHistory.createdAt), desc(playerRatingHistory.id));
+
+    if (historyCondition) {
+      historyQuery = historyQuery.where(historyCondition);
+    }
+
+    const historyRows = (await historyQuery) as Array<{
+      playerId: string;
+      delta: number;
+      matchId: string | null;
+      createdAt: Date;
+      id: number;
+    }>;
+
+    const latestByPlayer = new Map<string, { delta: number; matchId: string | null; createdAt: Date }>();
+    for (const row of historyRows) {
+      if (latestByPlayer.has(row.playerId)) continue;
+      latestByPlayer.set(row.playerId, {
+        delta: row.delta,
+        matchId: row.matchId,
+        createdAt: row.createdAt,
+      });
+      if (latestByPlayer.size === playerRows.length) {
+        break;
+      }
+    }
+
+    const items: PlayerRatingsSummaryItem[] = [];
+    for (const row of playerRows) {
+      const latest = latestByPlayer.get(row.playerId);
+      const rank = await this.computeLeaderboardRank(
+        ladderId,
+        row.effectiveMu,
+        row.playerId,
+        params.organizationId ?? null
+      );
+
+      items.push({
+        playerId: row.playerId,
+        displayName: row.displayName,
+        shortName: row.shortName ?? undefined,
+        givenName: row.givenName ?? undefined,
+        familyName: row.familyName ?? undefined,
+        countryCode: row.countryCode ?? undefined,
+        regionId: row.playerRegionId ?? undefined,
+        mu: row.effectiveMu,
+        muRaw: row.mu,
+        sigma: row.sigma,
+        matches: row.matchesCount,
+        delta: latest?.delta ?? null,
+        lastEventAt: latest?.createdAt ? latest.createdAt.toISOString() : null,
+        lastMatchId: latest?.matchId ?? null,
+        rank,
+      });
+    }
+
+    return { items } satisfies PlayerRatingsSummaryResult;
+  }
+
+  private async computeLeaderboardRank(
+    ladderId: string,
+    effectiveMu: number,
+    playerId: string,
+    organizationId: string | null
+  ): Promise<number> {
+    const biasExpr = sql<number>`COALESCE(${ladderSexOffsets.bias}, 0)`;
+    const comparisonClause = sql`(${playerRatings.mu} + ${biasExpr} > ${effectiveMu}) OR ((
+      ${playerRatings.mu} + ${biasExpr} = ${effectiveMu}
+    ) AND ${playerRatings.playerId} < ${playerId})`;
+
+    const filters: SqlFilter[] = [
+      eq(playerRatings.ladderId, ladderId),
+      gt(playerRatings.matchesCount, 0),
+    ];
+    if (organizationId) {
+      filters.push(eq(players.organizationId, organizationId));
+    }
+
+    const baseCondition = combineFilters(filters);
+    const whereCondition = baseCondition ? and(baseCondition, comparisonClause) : comparisonClause;
+
+    const rows = (await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(playerRatings)
+      .innerJoin(players, eq(playerRatings.playerId, players.playerId))
+      .leftJoin(
+        ladderSexOffsets,
+        and(
+          eq(ladderSexOffsets.ladderId, playerRatings.ladderId),
+          sql`${ladderSexOffsets.sex} = COALESCE(${players.sex}, 'U')`
+        )
+      )
+      .where(whereCondition)) as Array<{ count: number }>;
+
+    const count = rows[0]?.count ?? 0;
+    return count + 1;
+  }
+
   async runNightlyStabilization(options: NightlyStabilizationOptions = {}): Promise<void> {
     const asOf = options.asOf ?? now();
     const horizonDays = options.horizonDays ?? P.graph.horizonDays;
@@ -5703,7 +5898,98 @@ export class PostgresStore implements RatingStore {
       }
     }
 
-    return { items, nextCursor };
+    let includedPlayers: MatchPlayerSummaryEmbed[] | undefined;
+    if (query.includePlayers) {
+      const playerIds = new Set<string>();
+      for (const match of items) {
+        for (const side of match.sides) {
+          side.players.forEach((id) => playerIds.add(id));
+        }
+      }
+      if (playerIds.size) {
+        const playerRows = (await this.db
+          .select({
+            playerId: players.playerId,
+            displayName: players.displayName,
+            shortName: players.shortName,
+            givenName: players.givenName,
+            familyName: players.familyName,
+            countryCode: players.countryCode,
+            regionId: players.regionId,
+          })
+          .from(players)
+          .where(inArray(players.playerId, Array.from(playerIds)))) as Array<{
+            playerId: string;
+            displayName: string;
+            shortName: string | null;
+            givenName: string | null;
+            familyName: string | null;
+            countryCode: string | null;
+            regionId: string | null;
+          }>;
+
+        includedPlayers = playerRows.map((row) => ({
+          playerId: row.playerId,
+          displayName: row.displayName,
+          shortName: row.shortName ?? undefined,
+          givenName: row.givenName ?? undefined,
+          familyName: row.familyName ?? undefined,
+          countryCode: row.countryCode ?? undefined,
+          regionId: row.regionId ?? undefined,
+        } satisfies MatchPlayerSummaryEmbed));
+      }
+    }
+
+    let includedEvents: MatchEventSummaryEmbed[] | undefined;
+    if (query.includeEvents) {
+      const eventIds = new Set<string>();
+      for (const match of items) {
+        if (match.eventId) eventIds.add(match.eventId);
+      }
+      if (eventIds.size) {
+        const eventRows = (await this.db
+          .select({
+            eventId: events.eventId,
+            name: events.name,
+            slug: events.slug,
+            startDate: events.startDate,
+            endDate: events.endDate,
+            classification: events.classification,
+            season: events.season,
+          })
+          .from(events)
+          .where(inArray(events.eventId, Array.from(eventIds)))) as Array<{
+            eventId: string;
+            name: string | null;
+            slug: string | null;
+            startDate: Date | null;
+            endDate: Date | null;
+            classification: string | null;
+            season: string | null;
+          }>;
+
+        includedEvents = eventRows.map((row) => ({
+          eventId: row.eventId,
+          name: row.name ?? null,
+          slug: row.slug ?? null,
+          startDate: row.startDate ? row.startDate.toISOString() : null,
+          endDate: row.endDate ? row.endDate.toISOString() : null,
+          classification: row.classification ?? null,
+          season: row.season ?? null,
+        } satisfies MatchEventSummaryEmbed));
+      }
+    }
+
+    const included = {
+      ...(includedPlayers && includedPlayers.length ? { players: includedPlayers } : {}),
+      ...(includedEvents && includedEvents.length ? { events: includedEvents } : {}),
+    };
+
+    return {
+      items,
+      nextCursor,
+      ...(Object.keys(included).length ? { included } : {}),
+    } satisfies MatchListResult;
   }
 
   async countMatchesBySport(query: MatchSportTotalsQuery): Promise<MatchSportTotalsResult> {

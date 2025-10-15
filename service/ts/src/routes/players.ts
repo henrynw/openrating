@@ -546,6 +546,7 @@ export const registerPlayerRoutes = (app: Express, deps: PlayerRouteDeps) => {
       if (etag) {
         res.setHeader('ETag', etag);
       }
+      res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
 
       return res.send(
         toPlayerInsightsResponse(snapshot, {

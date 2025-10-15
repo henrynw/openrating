@@ -164,7 +164,7 @@ const MatchListQuerySchema = z
     path: ['organization_id'],
   });
 
-const MatchIncludeEnum = z.enum(['rating_events']);
+const MatchIncludeEnum = z.enum(['rating_events', 'players', 'events']);
 const MatchIncludeParamSchema = z
   .union([MatchIncludeEnum, z.array(MatchIncludeEnum)])
   .optional()
@@ -702,6 +702,8 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
 
     const includeValues = includeParsed.data;
     const includeRatingEvents = includeValues.includes('rating_events');
+    const includePlayers = includeValues.includes('players');
+    const includeEvents = includeValues.includes('events');
 
     const queryWithoutInclude = { ...req.query } as Record<string, unknown>;
     delete queryWithoutInclude.include;
@@ -753,12 +755,45 @@ export const registerMatchRoutes = (app: Express, deps: MatchRouteDeps) => {
         startAfter: start_after ?? undefined,
         startBefore: start_before ?? undefined,
         includeRatingEvents,
+        includePlayers,
+        includeEvents,
       });
 
-      return res.send({
+      const payload: Record<string, unknown> = {
         matches: result.items.map((match) => toMatchSummaryResponse(match, organization.slug)),
         next_cursor: result.nextCursor ?? null,
-      });
+      };
+
+      if (result.included) {
+        const included: Record<string, unknown> = {};
+        if (result.included.players?.length) {
+          included.players = result.included.players.map((player) => ({
+            player_id: player.playerId,
+            display_name: player.displayName,
+            short_name: player.shortName ?? null,
+            given_name: player.givenName ?? null,
+            family_name: player.familyName ?? null,
+            country_code: player.countryCode ?? null,
+            region_id: player.regionId ?? null,
+          }));
+        }
+        if (result.included.events?.length) {
+          included.events = result.included.events.map((event) => ({
+            event_id: event.eventId,
+            name: event.name ?? null,
+            slug: event.slug ?? null,
+            start_date: event.startDate ?? null,
+            end_date: event.endDate ?? null,
+            classification: event.classification ?? null,
+            season: event.season ?? null,
+          }));
+        }
+        if (Object.keys(included).length) {
+          payload.included = included;
+        }
+      }
+
+      return res.send(payload);
     } catch (err) {
       if (err instanceof OrganizationLookupError) {
         return res.status(400).send({ error: 'invalid_organization', message: err.message });

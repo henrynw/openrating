@@ -36,6 +36,8 @@ import type {
   MatchStatistics,
   MatchParticipant,
   MatchStage,
+  MatchPlayerSummaryEmbed,
+  MatchEventSummaryEmbed,
   MatchUpdateInput,
   MatchSportTotalsQuery,
   MatchSportTotalsResult,
@@ -69,6 +71,9 @@ import type {
   LeaderboardMoversQuery,
   LeaderboardMoversResult,
   LeaderboardMoverEntry,
+  PlayerRatingsSummaryQuery,
+  PlayerRatingsSummaryResult,
+  PlayerRatingsSummaryItem,
   CompetitionCreateInput,
   CompetitionUpdateInput,
   CompetitionRecord,
@@ -1282,6 +1287,96 @@ export class MemoryStore implements RatingStore {
     } satisfies LeaderboardMoversResult;
   }
 
+  async getPlayerRatingsSummary(params: PlayerRatingsSummaryQuery): Promise<PlayerRatingsSummaryResult> {
+    const uniqueIds = Array.from(new Set(params.playerIds));
+    if (!uniqueIds.length) {
+      return { items: [] } satisfies PlayerRatingsSummaryResult;
+    }
+
+    const ladderKey: LadderKey = {
+      sport: params.sport,
+      discipline: params.discipline,
+    };
+    if (params.segment) {
+      ladderKey.segment = params.segment as LadderKey['segment'];
+    }
+    if (params.classCodes && params.classCodes.length) {
+      ladderKey.classCodes = params.classCodes;
+    }
+    const ladderId = buildLadderId(ladderKey);
+
+    if (params.organizationId) {
+      this.assertOrganizationExists(params.organizationId);
+    }
+
+    const rankingCandidates: Array<{ playerId: string; effectiveMu: number }> = [];
+    for (const player of this.players.values()) {
+      if (params.organizationId && player.organizationId !== params.organizationId) continue;
+      const rating = player.ratings.get(ladderId);
+      if (!rating || (rating.matchesCount ?? 0) <= 0) continue;
+      const bias = this.getSexBias(ladderId, player.sex as PlayerSex | undefined);
+      rankingCandidates.push({
+        playerId: player.playerId,
+        effectiveMu: rating.mu + bias,
+      });
+    }
+
+    rankingCandidates.sort((a, b) => {
+      const diff = b.effectiveMu - a.effectiveMu;
+      if (diff !== 0) return diff;
+      return a.playerId.localeCompare(b.playerId);
+    });
+
+    const rankByPlayer = new Map<string, number>();
+    let lastEffective: number | null = null;
+    let lastRank = 0;
+    rankingCandidates.forEach((entry, index) => {
+      if (lastEffective === null || entry.effectiveMu < lastEffective) {
+        lastRank = index + 1;
+        lastEffective = entry.effectiveMu;
+      }
+      rankByPlayer.set(entry.playerId, lastRank);
+    });
+
+    const summaries: PlayerRatingsSummaryItem[] = [];
+    for (const playerId of uniqueIds) {
+      const player = this.players.get(playerId);
+      if (!player) continue;
+      if (params.organizationId && player.organizationId !== params.organizationId) continue;
+
+      const rating = player.ratings.get(ladderId);
+      if (!rating || (rating.matchesCount ?? 0) <= 0) continue;
+
+      const bias = this.getSexBias(ladderId, player.sex as PlayerSex | undefined);
+      const effectiveMu = rating.mu + bias;
+
+      const events = this.getRatingEventBucket(ladderId, playerId) ?? [];
+      const latestEvent = params.organizationId
+        ? events.find((event) => event.organizationId === params.organizationId)
+        : events[0];
+
+      summaries.push({
+        playerId,
+        displayName: player.displayName,
+        shortName: player.shortName ?? undefined,
+        givenName: player.givenName ?? undefined,
+        familyName: player.familyName ?? undefined,
+        countryCode: player.countryCode ?? undefined,
+        regionId: player.regionId ?? undefined,
+        mu: effectiveMu,
+        muRaw: rating.mu,
+        sigma: rating.sigma,
+        matches: rating.matchesCount ?? 0,
+        delta: latestEvent?.delta ?? null,
+        lastEventAt: latestEvent ? latestEvent.appliedAt.toISOString() : null,
+        lastMatchId: latestEvent?.matchId ?? null,
+        rank: rankByPlayer.get(playerId) ?? null,
+      });
+    }
+
+    return { items: summaries } satisfies PlayerRatingsSummaryResult;
+  }
+
   async processRatingReplayQueue(options: RatingReplayQueueOptions = {}): Promise<RatingReplayReport> {
     const dryRun = options.dryRun ?? false;
     const ordered = Array.from(this.replayQueue.entries()).sort(
@@ -1819,7 +1914,61 @@ export class MemoryStore implements RatingStore {
       return summary;
     });
 
-    return { items, nextCursor };
+    let includedPlayers: MatchPlayerSummaryEmbed[] | undefined;
+    if (query.includePlayers) {
+      const playerIds = new Set<string>();
+      for (const match of slice) {
+        match.match.sides.A.players.forEach((id) => playerIds.add(id));
+        match.match.sides.B.players.forEach((id) => playerIds.add(id));
+      }
+      if (playerIds.size) {
+        includedPlayers = Array.from(playerIds)
+          .map((playerId) => this.players.get(playerId))
+          .filter((player): player is MemoryPlayerRecord => Boolean(player))
+          .map((player) => ({
+            playerId: player.playerId,
+            displayName: player.displayName,
+            shortName: player.shortName ?? undefined,
+            givenName: player.givenName ?? undefined,
+            familyName: player.familyName ?? undefined,
+            countryCode: player.countryCode ?? undefined,
+            regionId: player.regionId ?? undefined,
+          } satisfies MatchPlayerSummaryEmbed));
+      }
+    }
+
+    let includedEvents: MatchEventSummaryEmbed[] | undefined;
+    if (query.includeEvents) {
+      const eventIds = new Set<string>();
+      for (const match of slice) {
+        if (match.eventId) eventIds.add(match.eventId);
+      }
+      if (eventIds.size) {
+        includedEvents = Array.from(eventIds)
+          .map((eventId) => this.events.get(eventId))
+          .filter((event): event is MemoryEventRecord => Boolean(event))
+          .map((event) => ({
+            eventId: event.eventId,
+            name: event.name ?? null,
+            slug: event.slug ?? null,
+            startDate: event.startDate ? event.startDate.toISOString() : null,
+            endDate: event.endDate ? event.endDate.toISOString() : null,
+            classification: null,
+            season: event.season ?? null,
+          } satisfies MatchEventSummaryEmbed));
+      }
+    }
+
+    const included = {
+      ...(includedPlayers && includedPlayers.length ? { players: includedPlayers } : {}),
+      ...(includedEvents && includedEvents.length ? { events: includedEvents } : {}),
+    };
+
+    return {
+      items,
+      nextCursor,
+      ...(Object.keys(included).length ? { included } : {}),
+    } satisfies MatchListResult;
   }
 
   async countMatchesBySport(query: MatchSportTotalsQuery): Promise<MatchSportTotalsResult> {

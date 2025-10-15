@@ -127,11 +127,37 @@ export interface MatchListQuery {
   startAfter?: string;
   startBefore?: string;
   includeRatingEvents?: boolean;
+  includePlayers?: boolean;
+  includeEvents?: boolean;
 }
 
 export interface MatchListResult {
   items: MatchSummary[];
   nextCursor?: string;
+  included?: {
+    players?: MatchPlayerSummaryEmbed[];
+    events?: MatchEventSummaryEmbed[];
+  };
+}
+
+export interface MatchPlayerSummaryEmbed {
+  playerId: string;
+  displayName: string;
+  shortName?: string;
+  givenName?: string;
+  familyName?: string;
+  countryCode?: string;
+  regionId?: string;
+}
+
+export interface MatchEventSummaryEmbed {
+  eventId: string;
+  name?: string | null;
+  slug?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  classification?: string | null;
+  season?: string | null;
 }
 
 export interface MatchSportTotal {

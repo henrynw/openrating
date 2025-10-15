@@ -112,3 +112,28 @@ export interface LeaderboardMoversQuery extends LeaderboardQuery {
 export interface LeaderboardMoversResult {
   items: LeaderboardMoverEntry[];
 }
+
+export interface PlayerRatingsSummaryQuery {
+  sport: LadderKey['sport'];
+  discipline: LadderKey['discipline'];
+  scope?: string | null;
+  organizationId?: string | null;
+  segment?: string | null;
+  classCodes?: string[] | null;
+  playerIds: string[];
+}
+
+export interface PlayerRatingsSummaryItem extends LeaderboardPlayerInfo {
+  mu: number;
+  muRaw?: number;
+  sigma: number;
+  matches: number;
+  delta?: number | null;
+  lastEventAt?: string | null;
+  lastMatchId?: string | null;
+  rank?: number | null;
+}
+
+export interface PlayerRatingsSummaryResult {
+  items: PlayerRatingsSummaryItem[];
+}

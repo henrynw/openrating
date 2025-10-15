@@ -43,6 +43,8 @@ import type {
   LeaderboardResult,
   LeaderboardMoversQuery,
   LeaderboardMoversResult,
+  PlayerRatingsSummaryQuery,
+  PlayerRatingsSummaryResult,
 } from './ratings.js';
 import type { PlayerState } from '../../engine/types.js';
 import type {
@@ -109,6 +111,9 @@ export interface RatingStore {
   ): Promise<RatingSnapshot | null>;
   listLeaderboard(params: LeaderboardQuery): Promise<LeaderboardResult>;
   listLeaderboardMovers(params: LeaderboardMoversQuery): Promise<LeaderboardMoversResult>;
+  getPlayerRatingsSummary(
+    query: PlayerRatingsSummaryQuery
+  ): Promise<PlayerRatingsSummaryResult>;
   createOrganization(input: OrganizationCreateInput): Promise<OrganizationRecord>;
   updateOrganization(organizationId: string, input: OrganizationUpdateInput): Promise<OrganizationRecord>;
   listOrganizations(query: OrganizationListQuery): Promise<OrganizationListResult>;

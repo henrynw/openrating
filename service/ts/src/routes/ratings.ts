@@ -78,6 +78,22 @@ const RatingSnapshotQuerySchema = BaseFilterSchema.extend({
 
 const PlayerSummaryQuerySchema = BaseFilterSchema;
 
+const PlayerIdsParamSchema = z.preprocess((value) => {
+  if (value == null) return [];
+  const list = Array.isArray(value) ? value : [value];
+  const ids = list
+    .flatMap((entry) => String(entry).split(','))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return ids;
+}, z.array(z.string().min(1).max(128)));
+
+const PlayerRatingsSummaryQuerySchema = BaseFilterSchema.extend({
+  player_ids: PlayerIdsParamSchema.transform((ids) => ids.slice(0, 100)).refine((ids) => ids.length > 0, {
+    message: 'player_ids is required',
+  }),
+});
+
 interface RatingRouteDeps {
   store: RatingStore;
   resolveOrganization: (input: OrganizationIdentifierInput) => Promise<OrganizationRecord>;
@@ -282,6 +298,81 @@ export const registerRatingRoutes = (app: Express, deps: RatingRouteDeps) => {
         return res.status(err.status).send({ error: err.code, message: err.message });
       }
       console.error('leaderboard_movers_error', err);
+      return res.status(500).send({ error: 'internal_error' });
+    }
+  });
+
+  app.get('/v1/ratings/:sport/:discipline/players', requireAuth, async (req, res) => {
+    const params = parsePathParams(req.params);
+    if (!params.success) {
+      return res.status(400).send({ error: 'validation_error', details: params.error });
+    }
+
+    const parsed = PlayerRatingsSummaryQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).send({ error: 'validation_error', details: parsed.error.flatten() });
+    }
+
+    try {
+      let organization: OrganizationRecord | null = null;
+      if (parsed.data.organization_id) {
+        organization = await resolveOrganization({ organization_id: parsed.data.organization_id });
+        await ensureScopedAccess(req, organization, params.data.sport);
+      }
+
+      const ladderKey = withScopeOnKey(
+        buildLadderKey({
+          sport: params.data.sport,
+          discipline: params.data.discipline,
+          segment: parsed.data.segment ?? null,
+          classCodes: parsed.data.class_codes ?? null,
+        }),
+        parsed.data.scope
+      );
+
+      const summary = await store.getPlayerRatingsSummary({
+        sport: params.data.sport,
+        discipline: params.data.discipline,
+        scope: parsed.data.scope ?? null,
+        organizationId: organization?.organizationId ?? null,
+        segment: ladderKey.segment ?? null,
+        classCodes: ladderKey.classCodes ?? null,
+        playerIds: parsed.data.player_ids,
+      });
+
+      return res.send({
+        sport: params.data.sport,
+        discipline: params.data.discipline,
+        scope: parsed.data.scope ?? null,
+        segment: ladderKey.segment ?? null,
+        class_codes: ladderKey.classCodes ?? null,
+        organization_id: organization ? organization.organizationId : null,
+        players: summary.items.map((player) => ({
+          player_id: player.playerId,
+          display_name: player.displayName,
+          short_name: player.shortName ?? null,
+          given_name: player.givenName ?? null,
+          family_name: player.familyName ?? null,
+          country_code: player.countryCode ?? null,
+          region_id: player.regionId ?? null,
+          mu: player.mu,
+          mu_raw: player.muRaw ?? null,
+          sigma: player.sigma,
+          matches: player.matches,
+          delta: player.delta ?? null,
+          last_event_at: player.lastEventAt ?? null,
+          last_match_id: player.lastMatchId ?? null,
+          rank: player.rank ?? null,
+        })),
+      });
+    } catch (err) {
+      if (err instanceof OrganizationLookupError) {
+        return res.status(404).send({ error: 'organization_not_found', message: err.message });
+      }
+      if (err instanceof AuthorizationError) {
+        return res.status(err.status).send({ error: err.code, message: err.message });
+      }
+      console.error('player_ratings_summary_error', err);
       return res.status(500).send({ error: 'internal_error' });
     }
   });
