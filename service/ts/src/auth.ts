@@ -195,9 +195,22 @@ const SUBJECT_CONTEXT_KEY = Symbol('subjectContext');
 
 const getPayload = (req: Request) => (req as any).auth?.payload as Record<string, any> | undefined;
 
+const normalizeScope = (scope: string) => {
+  const slashIndex = scope.lastIndexOf('/');
+  if (slashIndex >= 0 && slashIndex < scope.length - 1) {
+    return scope.slice(slashIndex + 1);
+  }
+  return scope;
+};
+
 const getScopes = (req: Request) => {
   const payload = getPayload(req);
-  return (payload?.scope ?? '').toString().split(' ').filter(Boolean);
+  return (payload?.scope ?? '')
+    .toString()
+    .split(' ')
+    .map((value: string) => value.trim())
+    .filter(Boolean)
+    .map(normalizeScope);
 };
 
 const getSubjectContext = async (req: Request): Promise<SubjectContext> => {
