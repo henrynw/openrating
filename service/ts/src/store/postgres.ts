@@ -3511,6 +3511,8 @@ export class PostgresStore implements RatingStore {
   }
 
   async listLeaderboard(params: LeaderboardQuery): Promise<LeaderboardResult> {
+    const timingStart = Date.now();
+
     const ladderKey: LadderKey = {
       sport: params.sport,
       discipline: params.discipline,
@@ -3607,9 +3609,21 @@ export class PostgresStore implements RatingStore {
       return { items: [], totalCount: 0, pageSize: limit } satisfies LeaderboardResult;
     }
 
-    const condition = combineFilters(baseFilters);
+    const cursor = params.cursor ? decodeLeaderboardCursor(params.cursor) : null;
 
-    let playerQuery = this.db
+    const biasExpr = sql<number>`COALESCE(${ladderSexOffsets.bias}, 0)`;
+    const effectiveMuExpr = sql<number>`(${playerRatings.mu} + ${biasExpr})`;
+
+    const dataFilters = [...baseFilters];
+    if (cursor) {
+      dataFilters.push(
+        sql`(${effectiveMuExpr} < ${cursor.mu}) OR (${effectiveMuExpr} = ${cursor.mu} AND ${playerRatings.playerId} > ${cursor.playerId})`
+      );
+    }
+
+    const effectiveCondition = combineFilters(dataFilters);
+
+    const playerRowsQuery = this.db
       .select({
         playerId: playerRatings.playerId,
         mu: playerRatings.mu,
@@ -3622,65 +3636,32 @@ export class PostgresStore implements RatingStore {
         countryCode: players.countryCode,
         playerRegionId: players.regionId,
         sex: players.sex,
+        effectiveMu: effectiveMuExpr,
       })
       .from(playerRatings)
-      .innerJoin(players, eq(playerRatings.playerId, players.playerId));
+      .innerJoin(players, eq(playerRatings.playerId, players.playerId))
+      .leftJoin(
+        ladderSexOffsets,
+        and(
+          eq(ladderSexOffsets.ladderId, playerRatings.ladderId),
+          sql`${ladderSexOffsets.sex} = COALESCE(${players.sex}, 'U')`
+        )
+      )
+      .orderBy(desc(effectiveMuExpr), playerRatings.playerId)
+      .limit(limit + 1);
 
-    if (condition) {
-      playerQuery = playerQuery.where(condition);
-    }
-
-    const rawRows = (await playerQuery) as Array<
-      PlayerLeaderboardRow & { sex: string | null }
+    const conditionedPlayerQuery = effectiveCondition ? playerRowsQuery.where(effectiveCondition) : playerRowsQuery;
+    const playerRows = (await conditionedPlayerQuery) as Array<
+      PlayerLeaderboardRow & { sex: string | null; effectiveMu: number }
     >;
-    if (!rawRows.length) {
+
+    if (!playerRows.length) {
       return { items: [], totalCount, pageSize: limit } satisfies LeaderboardResult;
     }
 
-    const offsets = await this.ensureSexOffsetMap(ladderId);
-    const candidates = rawRows.map((row) => {
-      const sex = (row.sex ?? undefined) as PlayerSex | undefined;
-      const key = (sex ?? 'U') as SexKey;
-      const bias = offsets.get(key)?.bias ?? 0;
-      return {
-        row,
-        bias,
-        effectiveMu: row.mu + bias,
-      };
-    });
-
-    candidates.sort((a, b) => {
-      const diff = b.effectiveMu - a.effectiveMu;
-      if (diff !== 0) return diff;
-      return a.row.playerId.localeCompare(b.row.playerId);
-    });
-
-    let startIndex = 0;
-    const cursor = params.cursor ? decodeLeaderboardCursor(params.cursor) : null;
-    if (cursor) {
-      const directIndex = candidates.findIndex((entry) => entry.row.playerId === cursor.playerId);
-      if (directIndex >= 0) {
-        startIndex = directIndex + 1;
-      } else {
-        const fallbackIndex = candidates.findIndex((entry) => {
-          if (entry.effectiveMu < cursor.mu) return true;
-          if (entry.effectiveMu > cursor.mu) return false;
-          return entry.row.playerId > cursor.playerId;
-        });
-        if (fallbackIndex >= 0) {
-          startIndex = fallbackIndex;
-        } else {
-          startIndex = Math.min(cursor.rank, candidates.length);
-        }
-      }
-    }
-
-    const slice = candidates.slice(startIndex, startIndex + limit);
-    if (!slice.length) {
-      return { items: [], totalCount, pageSize: limit } satisfies LeaderboardResult;
-    }
-
-    const playerIds = slice.map((entry) => entry.row.playerId);
+    const hasMore = playerRows.length > limit;
+    const limitedRows = hasMore ? playerRows.slice(0, limit) : playerRows;
+    const playerIds = limitedRows.map((row) => row.playerId);
 
     const historyFilters: any[] = [
       eq(playerRatingHistory.ladderId, ladderId),
@@ -3729,11 +3710,12 @@ export class PostgresStore implements RatingStore {
       }
     }
 
-    const items: LeaderboardEntry[] = slice.map((entry, index) => {
-      const { row, effectiveMu } = entry;
+    const rankOffset = cursor ? cursor.rank : 0;
+
+    const items: LeaderboardEntry[] = limitedRows.map((row, index) => {
       const latest = latestByPlayer.get(row.playerId);
       return {
-        rank: startIndex + index + 1,
+        rank: rankOffset + index + 1,
         playerId: row.playerId,
         displayName: row.displayName,
         shortName: row.shortName ?? undefined,
@@ -3741,7 +3723,7 @@ export class PostgresStore implements RatingStore {
         familyName: row.familyName ?? undefined,
         countryCode: row.countryCode ?? undefined,
         regionId: row.playerRegionId ?? undefined,
-        mu: effectiveMu,
+        mu: row.effectiveMu,
         muRaw: row.mu,
         sigma: row.sigma,
         matches: row.matchesCount,
@@ -3751,16 +3733,25 @@ export class PostgresStore implements RatingStore {
       } satisfies LeaderboardEntry;
     });
 
-    const hasMore = candidates.length > startIndex + slice.length;
-    const nextCursor = hasMore
+    const nextCursor = hasMore && limitedRows.length
       ? encodeLeaderboardCursor({
-          mu: slice[slice.length - 1].effectiveMu,
-          playerId: slice[slice.length - 1].row.playerId,
-          rank: startIndex + slice.length,
+          mu: limitedRows[limitedRows.length - 1].effectiveMu,
+          playerId: limitedRows[limitedRows.length - 1].playerId,
+          rank: rankOffset + limitedRows.length,
         })
       : undefined;
 
-    return { items, nextCursor, totalCount, pageSize: limit } satisfies LeaderboardResult;
+    const response = { items, nextCursor, totalCount, pageSize: limit } satisfies LeaderboardResult;
+    const durationMs = Date.now() - timingStart;
+    console.debug('leaderboard_query_timing', {
+      ladderId,
+      totalCount,
+      fetched: items.length,
+      hasMore,
+      durationMs,
+    });
+
+    return response;
   }
 
   async listLeaderboardMovers(params: LeaderboardMoversQuery): Promise<LeaderboardMoversResult> {
@@ -4544,13 +4535,15 @@ export class PostgresStore implements RatingStore {
     query: PlayerInsightsQuery,
     options?: PlayerInsightsBuildOptions
   ): Promise<PlayerInsightsSnapshot> {
+    const timingStart = Date.now();
+
     await this.assertPlayerInOrganization(query.playerId, query.organizationId);
     const [events, ratings] = await Promise.all([
       this.fetchPlayerInsightEvents(query),
       this.fetchPlayerInsightRatings(query),
     ]);
 
-    return buildInsightsSnapshot({
+    const snapshot = buildInsightsSnapshot({
       playerId: query.playerId,
       sport: query.sport ?? null,
       discipline: query.discipline ?? null,
@@ -4558,6 +4551,19 @@ export class PostgresStore implements RatingStore {
       ratings,
       options,
     });
+
+    const durationMs = Date.now() - timingStart;
+    console.debug('player_insights_build_timing', {
+      playerId: query.playerId,
+      organizationId: query.organizationId,
+      sport: query.sport ?? null,
+      discipline: query.discipline ?? null,
+      events: events.length,
+      ratings: ratings.length,
+      durationMs,
+    });
+
+    return snapshot;
   }
 
   async upsertPlayerInsightsSnapshot(
