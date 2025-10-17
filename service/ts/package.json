@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "serve": "node dist/index.js",
+    "start": "npm run serve",
+    "start:render": "npm run db:migrate && npm run serve",
     "lint": "eslint .",
     "test": "NODE_ENV=test AUTH_DISABLE=1 node --test --loader tsx $(find ./test -name '*.test.ts' -o -name '*.test.js')",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
