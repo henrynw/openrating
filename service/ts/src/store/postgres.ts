@@ -4725,6 +4725,17 @@ export class PostgresStore implements RatingStore {
 
         const lastMatch = matchRows[matchRows.length - 1];
         cursor = { startTime: lastMatch.startTime, matchId: lastMatch.matchId };
+
+        if (matchesProcessed - lastProgressLogged >= chunkSize * 4 || matchesProcessed === totalMatches) {
+          lastProgressLogged = matchesProcessed;
+          console.log('replay_progress', {
+            ladderId,
+            dryRun,
+            processed: matchesProcessed,
+            totalMatches,
+            elapsedMs: Date.now() - startedAt,
+          });
+        }
       }
 
       for (const playerId of playerIds) {
@@ -4779,6 +4790,17 @@ export class PostgresStore implements RatingStore {
           });
         }
       }
+
+      const elapsedMs = Date.now() - startedAt;
+      console.log('replay_finished', {
+        ladderId,
+        dryRun,
+        matchesProcessed,
+        totalMatches,
+        elapsedMs,
+        playersTouched: uniquePlayers.size,
+        pairUpdates: pairUpdatesCount,
+      });
 
       return {
         report: {

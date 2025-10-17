@@ -8,6 +8,7 @@ import {
   primaryKey,
   serial,
   uniqueIndex,
+  index,
 } from 'drizzle-orm/pg-core';
 import { date as pgDate } from 'drizzle-orm/pg-core/columns/date';
 import { sql } from 'drizzle-orm';
@@ -224,6 +225,7 @@ export const matches = pgTable('matches', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table: any) => ({
   providerRefIdx: uniqueIndex('matches_provider_ref_idx').on(table.providerId, table.externalRef).where(sql`${table.externalRef} IS NOT NULL`),
+  ladderStartIdx: index('matches_ladder_start_idx').on(table.ladderId, table.startTime, table.matchId),
 }));
 
 export const matchSides = pgTable('match_sides', {
@@ -233,7 +235,9 @@ export const matchSides = pgTable('match_sides', {
   }).notNull(),
   side: text('side').notNull(),
   playersCount: integer('players_count').notNull(),
-});
+}, (table: any) => ({
+  matchIdx: index('match_sides_match_id_idx').on(table.matchId),
+}));
 
 export const matchSidePlayers = pgTable('match_side_players', {
   id: serial('id').primaryKey(),
@@ -244,7 +248,9 @@ export const matchSidePlayers = pgTable('match_side_players', {
     onDelete: 'restrict',
   }).notNull(),
   position: integer('position').notNull(),
-});
+}, (table: any) => ({
+  matchSideIdx: index('match_side_players_match_side_idx').on(table.matchSideId),
+}));
 
 export const matchGames = pgTable('match_games', {
   id: serial('id').primaryKey(),
@@ -256,7 +262,9 @@ export const matchGames = pgTable('match_games', {
   scoreB: integer('score_b').notNull(),
   statistics: jsonb('statistics'),
   segments: jsonb('segments'),
-});
+}, (table: any) => ({
+  matchIdx: index('match_games_match_id_idx').on(table.matchId, table.gameNo),
+}));
 
 export const playerRatings = pgTable('player_ratings', {
   playerId: text('player_id').references(() => players.playerId, {
@@ -271,6 +279,7 @@ export const playerRatings = pgTable('player_ratings', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table: any) => ({
   pk: primaryKey(table.playerId, table.ladderId),
+  ladderIdx: index('player_ratings_ladder_idx').on(table.ladderId),
 }));
 
 export const playerRatingHistory = pgTable('player_rating_history', {
@@ -292,7 +301,9 @@ export const playerRatingHistory = pgTable('player_rating_history', {
   winProbPre: doublePrecision('win_prob_pre'),
   movWeight: doublePrecision('mov_weight'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table: any) => ({
+  ladderIdx: index('player_rating_history_ladder_match_idx').on(table.ladderId, table.matchId),
+}));
 
 export const competitionParticipants = pgTable('competition_participants', {
   competitionId: text('competition_id').references(() => competitions.competitionId, {
@@ -337,7 +348,9 @@ export const pairSynergyHistory = pgTable('pair_synergy_history', {
   gammaAfter: doublePrecision('gamma_after').notNull(),
   delta: doublePrecision('delta').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table: any) => ({
+  ladderIdx: index('pair_synergy_history_ladder_idx').on(table.ladderId, table.pairKey),
+}));
 
 export const ratingReplayQueue = pgTable('rating_replay_queue', {
   ladderId: text('ladder_id')
