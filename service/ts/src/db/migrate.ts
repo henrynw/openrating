@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getPool } from './client.js';
+import type { Pool, PoolClient } from 'pg';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'drizzle');
 const MIGRATIONS_TABLE = '__openrating_migrations';
@@ -14,9 +15,40 @@ CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (
 );
 `;
 
+const parsePositiveInteger = (value: string | undefined, fallback: number) => {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const RETRY_ATTEMPTS = parsePositiveInteger(process.env.DB_MIGRATE_RETRIES, 10);
+const RETRY_DELAY_MS = parsePositiveInteger(process.env.DB_MIGRATE_RETRY_DELAY_MS, 5_000);
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const connectWithRetry = async (pool: Pool): Promise<PoolClient> => {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await pool.connect();
+    } catch (err) {
+      lastError = err;
+      if (attempt === RETRY_ATTEMPTS) break;
+      const delay = RETRY_DELAY_MS * attempt;
+      console.warn('db_connect_retry', {
+        attempt,
+        attempts: RETRY_ATTEMPTS,
+        delayMs: delay,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      await sleep(delay);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Failed to acquire database connection');
+};
+
 async function main() {
   const pool = getPool();
-  const client = await pool.connect();
+  const client = await connectWithRetry(pool);
   try {
     await client.query(ensureTableSQL);
 
