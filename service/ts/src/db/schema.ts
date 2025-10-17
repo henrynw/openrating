@@ -8,8 +8,8 @@ import {
   primaryKey,
   serial,
   uniqueIndex,
-  index,
 } from 'drizzle-orm/pg-core';
+import { index } from 'drizzle-orm/pg-core/indexes';
 import { date as pgDate } from 'drizzle-orm/pg-core/columns/date';
 import { sql } from 'drizzle-orm';
 
