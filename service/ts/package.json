@@ -18,7 +18,8 @@
     "insights:worker": "NODE_ENV=production tsx scripts/insights-worker.ts",
     "ai-insights:worker": "NODE_ENV=production tsx scripts/ai-insights-worker.ts",
     "leaderboard:backfill": "tsx scripts/backfill-leaderboard.ts",
-    "token:mint:dev": "tsx scripts/mint-dev-token.ts"
+    "token:mint:dev": "tsx scripts/mint-dev-token.ts",
+    "photos:relink": "tsx scripts/relink-profile-photos.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
