@@ -4,8 +4,7 @@ services:
     env: node
     rootDir: service/ts
     buildCommand: npm install --include=dev && npm run build
-    postDeployCommand: npm run db:migrate
-    startCommand: npm run start
+    startCommand: npm run start:render
     autoDeploy: true
     envVars:
       - key: PORT
