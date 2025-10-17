@@ -4341,10 +4341,30 @@ export class PostgresStore implements RatingStore {
       }
       const baseCondition = combineFilters(baseFilters);
 
-      const chunkSize = 500;
+      const rawChunkSize = Number.parseInt(process.env.RATING_REPLAY_CHUNK_SIZE ?? '500', 10);
+      const chunkSize = Number.isFinite(rawChunkSize) && rawChunkSize > 0 ? Math.min(Math.max(rawChunkSize, 100), 2000) : 500;
       let cursor: { startTime: Date; matchId: string } | null = null;
       let processedAny = false;
       let clearedExisting = false;
+      const startedAt = Date.now();
+      let lastProgressLogged = 0;
+      let totalCountQuery = tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(matches);
+      if (baseCondition) {
+        totalCountQuery = totalCountQuery.where(baseCondition);
+      }
+      const totalRows = (await totalCountQuery) as Array<{ count: number }>;
+      const totalMatches = totalRows[0]?.count ?? 0;
+
+      console.log('replay_started', {
+        ladderId,
+        dryRun,
+        from: from ? from.toISOString() : null,
+        totalMatches,
+        chunkSize,
+      });
+
       const historyBatchInsert = async (
         historyRows: Array<{
           playerId: string;

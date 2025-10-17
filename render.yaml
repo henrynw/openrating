@@ -3,7 +3,8 @@ services:
     name: openrating-api
     env: node
     rootDir: service/ts
-    buildCommand: npm install --include=dev && npm run build && npm run db:migrate
+    buildCommand: npm install --include=dev && npm run build
+    postDeployCommand: npm run db:migrate
     startCommand: npm run start
     autoDeploy: true
     envVars:
